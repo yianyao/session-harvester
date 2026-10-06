@@ -1,0 +1,36 @@
+# 敏感与登录态文件——严禁提交
+weblogin_profile/
+webchat.accounts.json
+*.accounts.json
+
+# 运行产物（本机相关，换设备需重新生成）
+sources.json
+outline/
+exports/
+corpus*.md
+demo/
+tests/_tmp/
+harvester.db
+demo/harvester.db
+demo/context_pack.md
+
+# 本机真实会话数据（隐私，绝不入库）
+corpus/
+inbox/
+*.db
+
+# 生成的报告与建议池（含真实会话片段）
+docs/reports/
+agents_suggestions.md
+
+# 采集器验证产物（截图含账号信息，日志含真实页面数据）
+verify/*.png
+verify/*.txt
+verify/*.json
+verify/corpus/
+verify/outline/
+
+# 杂项
+__pycache__/
+*.pyc
+.zwork/
