@@ -30,6 +30,76 @@ REQUIRED_TYPES = {"insight", "pitfall", "workflow"}
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
+def _split_top(s: str, sep: str = ",") -> list[str]:
+    """按顶层分隔符切分（忽略引号内与 {}/[] 嵌套内的 sep）。"""
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif ch in "{[":
+            depth += 1
+            buf.append(ch)
+        elif ch in "}]":
+            depth -= 1
+            buf.append(ch)
+        elif ch == sep and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    tail = "".join(buf)
+    if tail.strip():
+        parts.append(tail)
+    return parts
+
+
+def _coerce_scalar(v: str):
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        return v[1:-1]
+    try:
+        return int(v)
+    except ValueError:
+        try:
+            return float(v)
+        except ValueError:
+            return v
+
+
+def _parse_flow_seq(s: str) -> list | None:
+    """解析 YAML 行内流式序列 [{k: v, ...}, ...] / [a, b]。
+
+    只覆盖卡片 frontmatter 实际出现的形态（session_id 值内含冒号，
+    取第一个冒号为键分隔）；解析失败返回 None，调用方保留原字符串。
+    存在意义：PyYAML 缺席时锚点校验仍必须可执行——降级不等于放弃校验。
+    """
+    inner = s.strip()[1:-1].strip()
+    if not inner:
+        return []
+    items: list = []
+    for part in _split_top(inner):
+        part = part.strip()
+        if part.startswith("{") and part.endswith("}"):
+            d: dict = {}
+            for kv in _split_top(part[1:-1]):
+                if ":" not in kv:
+                    return None
+                k, _, v = kv.partition(":")
+                d[k.strip()] = _coerce_scalar(v)
+            items.append(d)
+        else:
+            items.append(_coerce_scalar(part))
+    return items
+
+
 def _parse_frontmatter(text: str) -> tuple[dict | None, str]:
     """返回 (frontmatter dict 或 None, 正文)。无 frontmatter 返回 (None, 全文)。"""
     m = _FM_RE.match(text)
@@ -42,12 +112,19 @@ def _parse_frontmatter(text: str) -> tuple[dict | None, str]:
             return (data if isinstance(data, dict) else None), text[m.end():]
         except yaml.YAMLError:
             return None, text[m.end():]
-    # 降级：只提取顶层 "key: value" 标量（anchors/evidence 等复杂字段判存在）
+    # 降级：顶层 "key: value" 标量；行内 [..] 流式序列做最小解析
+    # （anchors: [{session_id: "...", turn: N}, ...]），保证无 PyYAML
+    # 时锚点校验照常执行。
     data: dict = {}
     for line in raw.splitlines():
         km = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
         if km and not line.startswith((" ", "-", "\t")):
-            data[km.group(1)] = km.group(2).strip()
+            value = km.group(2).strip()
+            if value.startswith("[") and value.endswith("]"):
+                parsed = _parse_flow_seq(value)
+                data[km.group(1)] = parsed if parsed is not None else value
+            else:
+                data[km.group(1)] = value
     return data, text[m.end():]
 
 
@@ -169,6 +246,9 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
     if summary["error"]:
         lines.append("结论：存在错误卡片（不满足 §8 冻结规范），"
                      "修复前不得并入主库。")
+    elif summary["warn"]:
+        lines.append(f"结论：无错误，但 {summary['warn']} 张卡片带警告"
+                     "——复核警告项后再并入主库。")
     else:
         lines.append("结论：全部卡片满足 §8 规范，可并入主库。")
     return "\n".join(lines).rstrip() + "\n"

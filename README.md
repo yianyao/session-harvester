@@ -4,8 +4,9 @@
 建成**可全文检索的本地库**，并支撑后续蒸馏（思路过程 / 工具改进 / Harness
 踩坑 / 用户画像）。
 
-当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1949 会话 /
-54838 消息（FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
+当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1946 会话 /
+55203 消息 / 30956 工具步（截至 2026-10-07，随 sync 持续增长；
+FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
 留接口。
 
 依赖边界（诚实声明）：
@@ -243,6 +244,8 @@ python -m harvester kb-stats  --root ~/.workbuddy/knowledge   # 盘点
 python -m harvester report-tools --db harvester.db --out tools_report.md
 # 口径二：无索引时实时扫描（note 标记汇总，无重试/放弃统计）
 python -m harvester report-tools --sources sources.json --out tools_report.md
+# ⚠️ 两口径结论必须一致；若有出入，以口径一（--db，结构化 steps 表）为准，
+#    口径二仅作无索引时的应急参考。
 # 两口径均支持 --since 7（只看最近 N 天，按 steps.ts 近似截断）
 
 # 错误三分类（G2）：env（环境）/ tool_interface（用法）/ context（目标状态）
