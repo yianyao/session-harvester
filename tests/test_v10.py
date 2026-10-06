@@ -35,25 +35,30 @@ def _make_db(tmp: Path) -> Path:
                 "VALUES ('s1', 's1', '甲', 't')")
     con.execute("INSERT INTO sessions (sid, session_id, title, category) "
                 "VALUES ('s2', 's2', '乙', 't')")
+    # 时间戳相对 now 生成（防时间炸弹：绝不硬编码日期）。
+    # s1 = 5 天前（旧），s2 = 1 天前（新），供 since_days 窗口测试切分。
+    from datetime import datetime, timedelta
+    d_old = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+    d_new = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     steps = [
         # s1: 9 步（seq 0..8），错误在 1（开场）与 7（收尾）
-        ("s1", 0, "2026-10-01 10:00:00", "read", "call", None, None, None),
-        ("s1", 1, "2026-10-01 10:00:01", "ls", "result", "error",
+        ("s1", 0, f"{d_old} 10:00:00", "read", "call", None, None, None),
+        ("s1", 1, f"{d_old} 10:00:01", "ls", "result", "error",
          "tool_permission_revoked", None),
-        ("s1", 2, "2026-10-01 10:00:02", "ls", "result", "success", None, None),
-        ("s1", 3, "2026-10-01 10:00:03", "edit", "result", "error",
+        ("s1", 2, f"{d_old} 10:00:02", "ls", "result", "success", None, None),
+        ("s1", 3, f"{d_old} 10:00:03", "edit", "result", "error",
          'Error: String to replace not found in file. old_string 不一致', None),
-        ("s1", 4, "2026-10-01 10:00:04", "edit", "result", "success", None, None),
-        ("s1", 5, "2026-10-01 10:00:05", "write", "result", "error",
+        ("s1", 4, f"{d_old} 10:00:04", "edit", "result", "success", None, None),
+        ("s1", 5, f"{d_old} 10:00:05", "write", "result", "error",
          'Error: cannot write "D:\\x\\a.md": file no longer exists', None),
-        ("s1", 6, "2026-10-01 10:00:06", "Bash", "result", "success", None, None),
-        ("s1", 7, "2026-10-01 10:00:07", "web_fetch", "result", "error",
+        ("s1", 6, f"{d_old} 10:00:06", "Bash", "result", "success", None, None),
+        ("s1", 7, f"{d_old} 10:00:07", "web_fetch", "result", "error",
          "Error: web fetch failed: TypeError: fetch failed", None),
-        ("s1", 8, "2026-10-01 10:00:08", "Bash", "result", "success", None, None),
+        ("s1", 8, f"{d_old} 10:00:08", "Bash", "result", "success", None, None),
         # s2: 完全未知的错误（unclassified）
-        ("s2", 0, "2026-10-02 10:00:00", "foo", "result", "error",
+        ("s2", 0, f"{d_new} 10:00:00", "foo", "result", "error",
          "zzz_mystery_failure_zzz", None),
-        ("s2", 1, "2026-10-02 10:00:01", "foo", "result", "success", None, None),
+        ("s2", 1, f"{d_new} 10:00:01", "foo", "result", "success", None, None),
     ]
     con.executemany("INSERT INTO steps VALUES (?,?,?,?,?,?,?,?)", steps)
     con.commit()
@@ -124,10 +129,14 @@ class TestCollectAndRender(unittest.TestCase):
         self.assertEqual(by_sid[5]["class"], "context")
 
     def test_since_filters(self):
-        # 今天是 2026-10-06：4.5 天前 ≈ 10-01 深夜，只应纳入 10-02 的错误
+        # fixture：s1 错误在 5 天前，s2 在 1 天前（相对 now 生成）。
+        # 4.5 天窗口只应纳入 s2 的错误（1 个自然日）。
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=4.5)).strftime("%Y-%m-%d")
         errors, _ = collect_errors_from_db(self.db, since_days=4.5)
         self.assertEqual(meta_days(errors), 1)
-        self.assertTrue(all(e["ts"] >= "2026-10-02" for e in errors))
+        self.assertTrue(errors, "窗口内应有错误")
+        self.assertTrue(all(e["ts"] >= cutoff for e in errors))
 
     def test_report_sections(self):
         errors, meta = collect_errors_from_db(self.db)
@@ -230,19 +239,17 @@ class TestCards(unittest.TestCase):
         self.assertTrue(errs)
         self.assertIsNone(fm)
 
-    @unittest.skipUnless(_HAS_YAML,
-                         "无 yaml 时降级解析器不识别 anchors，锚点断言空转")
     def test_validate_cards_with_anchor_check(self):
+        # 降级解析器（无 PyYAML）也必须解析 anchors 并查库——
+        # 不再 skipUnless：有无 yaml 两解释器下行为必须一致。
         results, summary = validate_cards(self.root, self.db)
         self.assertEqual(summary["cards"], 3)
         self.assertEqual(summary["error"], 2)  # bad.md + nofm.md
+        self.assertEqual(summary["anchor_checked"], 1)
         self.assertEqual(summary["anchor_misses"], 0)  # s1 在库里
         ok = next(r for r in results if r["path"] == "ok.md")
         self.assertEqual(ok["errors"], [])
 
-    @unittest.skipUnless(_HAS_YAML,
-                         "锚点校验依赖 PyYAML 解析 flow 列表；无 yaml 时"
-                         "降级解析器跳过锚点（设计行为），断言无意义")
     def test_anchor_unknown_reported(self):
         tmp2 = tempfile.TemporaryDirectory()
         root = Path(tmp2.name)

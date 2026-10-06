@@ -53,6 +53,9 @@ def collect_stats(session_records) -> dict[str, ToolStats]:
     每个工具的 calls 计 tool_call 数，success/error 计 tool_result 数；
     不做严格 toolCallId 配对（note 文本未含 id；需要严格配对时从
     Message.raw 的 payload 回溯）。
+
+    成败判定与 steps 口径共用 _OK_STATUS（对账约束：两口径结论必须一致，
+    见 tests 对账测试）。
     """
     stats: dict[str, ToolStats] = defaultdict(ToolStats)
     for rec in session_records:
@@ -68,7 +71,7 @@ def collect_stats(session_records) -> dict[str, ToolStats]:
             if mr:
                 tool, status = mr.group(1), mr.group(2)
                 st = stats[tool]
-                if status == "success":
+                if status in _OK_STATUS:
                     st.success += 1
                 else:
                     st.error += 1
@@ -79,8 +82,13 @@ def collect_stats(session_records) -> dict[str, ToolStats]:
 
 # ---- 结构化统计（steps 表，v0.6） ----
 
+#: 成功状态的单一真值源：note 文本口径与 steps 表口径共用，
+#: 真实数据里 WorkBuddy/DSH 用 completed、AutoClaw 用 success（同义不同词）。
+_OK_STATUS = ("success", "completed", "ok")
+
+
 def _is_error_status(status: str) -> bool:
-    return status not in ("success", "completed", "ok")
+    return status not in _OK_STATUS
 
 
 def collect_stats_from_db(db: Path, since_days: float | None = None

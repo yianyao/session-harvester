@@ -11,6 +11,11 @@ from harvester.triage import collect_triage, render_triage
 
 
 def _make_db(path: Path) -> None:
+    # 时间戳相对 now 生成（防时间炸弹）：old = 30 天前（7 天窗口外），
+    # new = 1 天前（窗口内）。语义不变：旧 pattern 窗口前 1 次 + 窗口内 2 次。
+    from datetime import datetime, timedelta
+    d_old = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    d_new = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     con = sqlite3.connect(str(path))
     con.executescript("""
     CREATE TABLE sessions (sid TEXT PRIMARY KEY, source TEXT, session_id TEXT,
@@ -25,40 +30,40 @@ def _make_db(path: Path) -> None:
     # 三个会话：old（窗口前+窗口内都有错）、new（仅窗口内有新 pattern）、
     # skill（一次成功 skill 调用 + 行为链）
     sessions = [
-        ("a:1", "a", "1", "旧坑会话", "", "", "2026-09-01T08:00:00", None),
-        ("a:2", "a", "2", "新坑会话", "", "", "2026-10-06T08:00:00", None),
-        ("a:3", "a", "3", "skill 会话", "", "", "2026-10-06T09:00:00", None),
+        ("a:1", "a", "1", "旧坑会话", "", "", f"{d_old}T08:00:00", None),
+        ("a:2", "a", "2", "新坑会话", "", "", f"{d_new}T08:00:00", None),
+        ("a:3", "a", "3", "skill 会话", "", "", f"{d_new}T09:00:00", None),
     ]
     con.executemany("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?)", sessions)
     msgs = [
-        ("a:1", "user", "2026-09-01 08:00:00", "你好", "你好"),
-        ("a:1", "assistant", "2026-09-01 08:01:00", "回复", "回复"),
-        ("a:2", "user", "2026-10-06 08:00:00", "问题", "问题"),
-        ("a:3", "user", "2026-10-06 09:00:00", "做卡", "做卡"),
-        ("a:3", "note", "2026-10-06 09:01:00", "思考", "思考"),
+        ("a:1", "user", f"{d_old} 08:00:00", "你好", "你好"),
+        ("a:1", "assistant", f"{d_old} 08:01:00", "回复", "回复"),
+        ("a:2", "user", f"{d_new} 08:00:00", "问题", "问题"),
+        ("a:3", "user", f"{d_new} 09:00:00", "做卡", "做卡"),
+        ("a:3", "note", f"{d_new} 09:01:00", "思考", "思考"),
     ]
     con.executemany("INSERT INTO messages VALUES (?,?,?,?,?)", msgs)
     steps = [
         # 旧 pattern "old_string was not found in file"：窗口前后都有
-        # （三条归一化后同键，窗口内 2 次 → 旧坑重现）
-        ("a:1", 0, "2026-09-01 08:00:30", "edit", "result", "error",
+        # （窗口内 2 次 → 旧坑重现）
+        ("a:1", 0, f"{d_old} 08:00:30", "edit", "result", "error",
          "Error: old_string was not found in file", None),
-        ("a:1", 1, "2026-10-06 08:00:30", "edit", "result", "error",
+        ("a:1", 1, f"{d_new} 08:00:30", "edit", "result", "error",
          "Error: old_string was not found in file", None),
-        ("a:2", 0, "2026-10-06 08:01:30", "edit", "result", "error",
+        ("a:2", 0, f"{d_new} 08:01:30", "edit", "result", "error",
          "Error: old_string was not found in file", None),
         # 新 pattern：仅窗口内 2 次
-        ("a:1", 2, "2026-10-06 08:02:30", "web_fetch", "result", "error",
+        ("a:1", 2, f"{d_new} 08:02:30", "web_fetch", "result", "error",
          "Error: web fetch failed: TypeError: fetch failed", None),
-        ("a:2", 1, "2026-10-06 08:03:30", "web_fetch", "result", "error",
+        ("a:2", 1, f"{d_new} 08:03:30", "web_fetch", "result", "error",
          "Error: web fetch failed: TypeError: fetch failed", None),
         # 无错误 call 步骤：垫高 a:1 的高信号分数（避免与 a:3 平分）
-        ("a:1", 3, "2026-10-06 08:04:00", "Bash", "call", "", "", None),
+        ("a:1", 3, f"{d_new} 08:04:00", "Bash", "call", "", "", None),
         # skill 成功调用 + 行为链
-        ("a:3", 0, "2026-10-06 09:00:30", "Skill", "call", "", "",
+        ("a:3", 0, f"{d_new} 09:00:30", "Skill", "call", "", "",
          '{"skill": "wechat-article-search", "args": "x"}'),
-        ("a:3", 1, "2026-10-06 09:00:40", "Skill", "result", "ok", "", ""),
-        ("a:3", 2, "2026-10-06 09:00:50", "WebFetch", "call", "", "", None),
+        ("a:3", 1, f"{d_new} 09:00:40", "Skill", "result", "ok", "", ""),
+        ("a:3", 2, f"{d_new} 09:00:50", "WebFetch", "call", "", "", None),
     ]
     con.executemany("INSERT INTO steps VALUES (?,?,?,?,?,?,?,?)", steps)
     con.commit()

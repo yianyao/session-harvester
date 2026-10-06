@@ -71,8 +71,8 @@
 | report-errors（三分类+轨迹位置分桶） | `errstats.py`：env/tool_interface/context 正则映射（规则序=优先级）+ 开场/中途/收尾分桶 + 归一模式聚类（路径/引号/数字→占位符）带锚点；真实库 243 错误 100% 归类（118 用法/102 环境/23 目标态） | ✅ |
 | query --fts | search（bigram、高亮摘要、raw 展示） | ✅（更名） |
 | behavior --skill（G4 motif 频率） | `behstats.py` report-skill：每 skill 的调用数/成功率/触发任务(args)/调用后工具链 top5/锚点清单；深挖模式输出全部调用点供 Agent 蒸馏 | 🔶 主干完成（motif 矩阵未做） |
-| cards extract / cards validate | `cards.py` validate：frontmatter 必填字段/枚举/confidence 校验 + 锚点查索引库（PyYAML 可选依赖，无则降级逐行提取）；extract 仍人工 | 🔶 validate ✅、extract 留白（LLM 层按需） |
-| regress 回归语料跑批 | 不存在（等价物=132 个单测，但非全流程回归语料） | 🔶 替代物不等价 |
+| cards extract / cards validate | `cards.py` validate：frontmatter 必填字段/枚举/confidence 校验 + 锚点查索引库；PyYAML 可选——降级解析器已支持 anchors 流式序列，无 PyYAML 锚点校验照常执行（v0.16）；extract 仍人工 | 🔶 validate ✅、extract 留白（LLM 层按需） |
+| regress 回归语料跑批 | 不存在（等价物=188 个单测（截至 2026-10-07），但非全流程回归语料） | 🔶 替代物不等价 |
 
 ### §7 提炼层
 
@@ -125,16 +125,19 @@ frontmatter 字段（id/title/type/tags/anchors/evidence/confidence/created）�
 - **网页 Chat 三平台直采管线**（元宝 1223 / 千问 117 / 豆包 3 会话）+ app-driven capture 方法学 + `schema_canary` 指纹探针 + RECON 侦察报告与备用通道
 - **三家官方导出 adapter**（DeepSeek 真机核验 316 会话 mapping DAG / ChatGPT / Claude）
 - **MCP server**（4 工具，任意 agent 运行时直查）与 **pack 上下文交接**
-- **weblogin 登录态三级流程**、**report-traces**、**132 个单测**
+- **weblogin 登录态三级流程**、**report-traces**、**188 个单测（截至 2026-10-07）**
 
 ## 3. 未完成清单（按设计原文，建议优先级）
 
-v0.11 又完成原 #2：`report-skill`（30 skill/94 调用，行为链+锚点；157 测试全绿）。v0.10 已完成原 #1/2/3(validate+归一)/5(--since)：`report-errors`、`suggest-agents`、`cards validate`、`report-tools --since`（148 测试全绿；真实库 243 错误 100% 归类；首份建议池 9 条；首张已验证卡片）。
+v0.11 完成原 #2：`report-skill`；v0.10 完成原 #1/2/3/5：`report-errors`、
+`suggest-agents`、`cards validate`、`report-tools --since`（测试数演进：
+v0.10=148 → v0.11=157 → v0.15=179 → v0.16=188；真实库 261 错误 100% 归类；
+建议池 9 条；已验证卡片 4 张）。
 
 | # | 缺口 | 设计出处 | 建议优先级 | 理由 |
 |---|---|---|---|---|
 | 1 | report-tools 绕行检测（连续相同工具调用）、放弃口径对齐设计定义 | §6 | 中 | 小改动；放弃口径需先决策（现口径更简单但偏保守） |
-| 3 | regress 全流程回归语料（分层抽样） | §6/§11-5 | 中低 | 148 单测是零件级回归，非端到端 |
+| 3 | regress 全流程回归语料（分层抽样） | §6/§11-5 | 中低 | 188 单测是零件级回归，非端到端 |
 | 4 | cards extract（LLM 卡片生成）+ 交叉验证 | §7/§9-M3 | 低（按需） | validate 已就位，extract 等候选池人工维护成本真的大了再建 |
 | 5 | LLM 错误归因组件 | §7 | 低（按需） | 确定性三分类已 100% 覆盖真实库，LLM 归因暂无增量价值 |
 | 6 | schema 指纹入 sources 表 | §3/§4.2/§11-1 | 低 | canary+守卫已覆盖直采与 AutoClaw；DSH 漂移目前靠测试兜底 |
@@ -142,4 +145,4 @@ v0.11 又完成原 #2：`report-skill`（30 skill/94 调用，行为链+锚点�
 
 ## 4. 一句话总结
 
-设计方案 M0–M1 **超额**完成并大幅扩源（9 源直采/导出全部打通，含设计中不存在的三平台自建管线）；v0.10 补齐 G2 全链路与 G3 确定性一半，**"诊断→修改闭环"已通**：report-errors（243 错误 100% 归类）→ suggest-agents（建议池 9 条）→ 人工并入 AGENTS.md / 扩写卡片 → cards validate（锚点查库）→ 并入主库。v0.11 补齐 G4 确定性主干（report-skill）与卡片脚手架（cards new，三通道全链路验证：DSH 坑卡/元宝知识卡/WorkBuddy 工作流卡均 validate 通过）。剩余缺口（绕行检测/motif 矩阵/regress/LLM 组件）均为"等需要再建"。另记录已知小缺口：模型级归属未入库（transcript 原始文件含 providerData.model，index 未存，需要时改管线重索引）。
+设计方案 M0–M1 **超额**完成并大幅扩源（9 源直采/导出全部打通，含设计中不存在的三平台自建管线）；v0.10 补齐 G2 全链路与 G3 确定性一半，**"诊断→修改闭环"已通**：report-errors（261 错误 100% 归类，截至 2026-10-07）→ suggest-agents（建议池 9 条）→ 人工并入 AGENTS.md / 扩写卡片 → cards validate（锚点查库）→ 并入主库。v0.11 补齐 G4 确定性主干（report-skill）与卡片脚手架（cards new，三通道全链路验证：DSH 坑卡/元宝知识卡/WorkBuddy 工作流卡均 validate 通过）。v0.12–v0.15 补齐 sync/收件箱/契约文档/triage/draft/模型归属入库。剩余缺口（绕行检测/motif 矩阵/regress/LLM 组件）均为"等需要再建"。~~已知小缺口：模型级归属未入库~~ → **已入库**（v0.15：sessions.model 列，transcript 逐行统计 providerData.model 众数，report-tools 含按模型分布）。
