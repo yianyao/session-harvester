@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from harvester import apiserve
-from harvester.indexing import SCHEMA, index_session
+from harvester.indexing import SCHEMA, index_session, search
 from harvester.models import Message, SessionRecord
 
 _TMP = Path(__file__).parent / "_tmp"
@@ -186,6 +186,51 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(out["total"], 1)
         self.assertEqual(out["items"][0]["sid"], "src:aaa")
 
+    def test_q_and_skill_paths_use_caller_con_only(self):
+        """P2 守卫：q（FTS）与 skill 扫描必须复用调用方的 ro 连接，
+        不得自开普通读写连接——authorizer 全路径覆盖的结构性保证。"""
+        real_connect = sqlite3.connect
+
+        def _guard(*args, **kwargs):
+            raise AssertionError("api 查询路径自开了新连接，"
+                                 "authorizer 覆盖出现缺口")
+
+        sqlite3.connect = _guard
+        try:
+            out = apiserve.api_sessions(self.con, self.db, {"q": "饼干"})
+            self.assertEqual(out["total"], 2)
+            facets = apiserve.api_facets(self.con, self.db)
+            self.assertTrue(facets["skills"])
+        finally:
+            sqlite3.connect = real_connect
+
+    def test_search_external_con_semantics(self):
+        """search() 传外部连接：结果与自开连接一致，且不关闭外部连接。"""
+        hits_ro = search(self.db, "饼干", con=self.con)
+        hits_own = search(self.db, "饼干")
+        self.assertEqual({h["sid"] for h in hits_ro},
+                         {h["sid"] for h in hits_own})
+        # 外部连接仍可用（未被 search 误关）
+        n = self.con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        self.assertEqual(n, 3)
+
+    def test_meta_schema_fingerprint(self):
+        """meta 带 schema_fingerprint（设计稿 §3 承诺字段），schema 变
+        则指纹变。"""
+        meta = apiserve.api_meta(self.con)
+        fp = meta["schema_fingerprint"]
+        self.assertEqual(len(fp), 12)
+        self.assertEqual(
+            apiserve.api_meta(self.con)["schema_fingerprint"], fp)
+        saved = dict(apiserve.EXPECTED_SCHEMA)
+        try:
+            apiserve.EXPECTED_SCHEMA = {
+                **saved, "sessions": saved["sessions"] + ["newcol"]}
+            self.assertNotEqual(
+                apiserve.api_meta(self.con)["schema_fingerprint"], fp)
+        finally:
+            apiserve.EXPECTED_SCHEMA = saved
+
     def test_limit_clamp_and_pagination(self):
         out = apiserve.api_sessions(self.con, self.db,
                                     {"limit": "99999", "offset": "1"})
@@ -234,6 +279,7 @@ class TestHttp(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.httpd.shutdown()
+        cls.httpd.server_close()  # 收干净 listening socket，防 ResourceWarning
         cls.tmp.cleanup()
 
     def _get(self, path: str, token: str | None = None):

@@ -5,7 +5,9 @@
 安全设计（本命令的生命线）：
 
 1. **只读**：连接以 ``file:...?mode=ro`` 打开 + SQLite authorizer 白名单
-   （只放行 SELECT/READ，其余内核级 deny）——双保险，进程内想写也写不进；
+   （SELECT/READ/聚合函数放行，其余内核级 deny）——双保险，进程内想写
+   也写不进；FTS 检索与 skill 扫描复用同一连接，**全部查询路径**均处于
+   authorizer 之下；
 2. **自检 fail loud**：启动时逐列比对冻结 schema、FTS 冒烟，任何缺失拒绝
    启动（绝不让客户端拿到静默错的数据）；
 3. **不裸奔**：默认绑 127.0.0.1；``--host`` 给非回环地址时必须配
@@ -18,6 +20,8 @@ major 变更须消费方同步升级。
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import sqlite3
@@ -131,12 +135,22 @@ def _norm_date(val: str | None, end: bool = False) -> str | None:
 
 # ---------- 查询逻辑（纯函数，可测，连接由调用方给） ----------
 
+def _schema_fingerprint() -> str:
+    """冻结 schema 指纹（设计稿 §3 承诺的 meta 字段）：EXPECTED_SCHEMA
+    规范序列化的 sha256 前 12 位。主项目改表 → 指纹变化 → 消费方可
+    感知（api_version 之外的第二根漂移探针）。"""
+    canon = json.dumps(EXPECTED_SCHEMA, ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
+
+
 def api_meta(con: sqlite3.Connection) -> dict:
     n = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     row = con.execute("SELECT MIN(updated_at), MAX(updated_at) "
                       "FROM sessions").fetchone()
     return {"api_version": API_VERSION, "server": "session-harvester",
             "package_version": __version__, "readonly": True,
+            "schema_fingerprint": _schema_fingerprint(),
             "sessions": n,
             "time_min": row[0], "time_max": row[1]}
 
@@ -148,7 +162,7 @@ def api_facets(con: sqlite3.Connection, db: Path) -> dict:
     models = [{"name": r[0] or UNKNOWN_MODEL, "count": r[1]} for r in
               con.execute("SELECT model, COUNT(*) FROM sessions "
                           "GROUP BY model ORDER BY 2 DESC")]
-    invocations = collect_skill_invocations(db)
+    invocations = collect_skill_invocations(db, con=con)
     by_skill = Counter(i["skill"] for i in invocations)
     skills = [{"name": k, "count": v}
               for k, v in by_skill.most_common()]
@@ -186,11 +200,11 @@ def api_sessions(con: sqlite3.Connection, db: Path, params: dict) -> dict:
     items = [dict(r) for r in rows]
 
     if params.get("q"):
-        hits = search(db, params["q"], limit=2000)
+        hits = search(db, params["q"], limit=2000, con=con)
         sids = {h["sid"] for h in hits}
         items = [r for r in items if r["sid"] in sids]
     if params.get("skill"):
-        want = {i["sid"] for i in collect_skill_invocations(db)
+        want = {i["sid"] for i in collect_skill_invocations(db, con=con)
                 if i["skill"] == params["skill"]}
         items = [r for r in items if r["sid"] in want]
 
@@ -269,7 +283,7 @@ def make_handler(db: Path, token: str | None):
         server_version = f"harvester/{__version__}"
 
         def log_message(self, fmt, *args):  # 日志走 stderr，一行一条
-            print(f"[napi-serve] {self.address_string()} {fmt % args}",
+            print(f"[api-serve] {self.address_string()} {fmt % args}",
                   file=sys.stderr)
 
         # -- 响应工具 --
@@ -286,7 +300,9 @@ def make_handler(db: Path, token: str | None):
         def _authorized(self) -> bool:
             if not token:
                 return True
-            return self.headers.get("X-Token") == token
+            # 常数时间比较：启用 token 的场景恰是跨机器暴露之时
+            return hmac.compare_digest(
+                self.headers.get("X-Token") or "", token)
 
         def do_GET(self) -> None:  # noqa: N802 (http.server 命名约定)
             if not self._authorized():
@@ -343,28 +359,28 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
-        print(f"[napi-serve] 拒绝启动: {err}", file=sys.stderr)
+        print(f"[api-serve] 拒绝启动: {err}", file=sys.stderr)
         return 1
     if not db.exists():
-        print(f"[napi-serve] DB 不存在: {db}（先在主项目跑 index/sync）",
+        print(f"[api-serve] DB 不存在: {db}（先在主项目跑 index/sync）",
               file=sys.stderr)
         return 1
     problems = self_check(db)
     if problems:
-        print("[napi-serve] 启动自检未通过：", file=sys.stderr)
+        print("[api-serve] 启动自检未通过：", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
     srv = ThreadingHTTPServer((host, port), make_handler(db, token))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
-    print(f"[napi-serve] api_version={API_VERSION} schema 自检通过 | "
+    print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "
           f"只读服务 http://{host}:{real} {tok}", file=sys.stderr)
-    print("[napi-serve] Ctrl+C 停止", file=sys.stderr)
+    print("[api-serve] Ctrl+C 停止", file=sys.stderr)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\n[napi-serve] 已停止", file=sys.stderr)
+        print("\n[api-serve] 已停止", file=sys.stderr)
     finally:
         srv.server_close()
     return 0

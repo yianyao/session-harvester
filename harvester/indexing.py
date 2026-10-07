@@ -370,10 +370,18 @@ def _snippet(raw: str, query: str, width: int = 60) -> str:
 
 
 def search(db: Path, query: str, limit: int = 20,
-           source: str | None = None) -> list[dict]:
-    """全文检索。返回 [{sid, source, title, role, snippet, rank}]。"""
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+           source: str | None = None,
+           con: sqlite3.Connection | None = None) -> list[dict]:
+    """全文检索。返回 [{sid, source, title, role, snippet, rank}]。
+
+    con：外部连接（api-serve 传入 mode=ro + authorizer 连接，使 FTS
+    查询同样处于内核级只读之下——api 的只读声明必须全路径成立）；
+    缺省自开普通连接，CLI 等既有调用方不受影响。
+    """
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
         sql = """
             SELECT ms.sid, se.source, se.title, ms.role, ms.ts, ms.raw
@@ -393,7 +401,8 @@ def search(db: Path, query: str, limit: int = 20,
                  "rank": i}
                 for i, r in enumerate(rows)]
     finally:
-        con.close()
+        if own:
+            con.close()
 
 
 def sessions_in_db(db: Path) -> int:
