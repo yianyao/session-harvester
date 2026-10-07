@@ -194,7 +194,8 @@ def collect_triage(db: Path, since_days: float | None = None,
         "skills": skill_items,
         "hot_sessions": hot,
         "n_sessions": n_sessions,
-        "cards_scanned": len(card_texts),
+        # None=未配置 --cards-root；0=已配置但目录为空（二者 UI 表现不同）
+        "cards_scanned": len(card_texts) if cards_root is not None else None,
     }
 
 
@@ -204,7 +205,7 @@ def render_triage(r: dict) -> str:
     scope = "全库" if r["cutoff"] is None else f"窗口 ≥ {r['cutoff']}"
     lines.append(f"- 索引库: `{r['db']}`（{r['n_sessions']} 会话）")
     lines.append(f"- 口径: {scope}；已有卡片比对: "
-                 f"{r['cards_scanned'] or '未启用'} 个文件")
+                 f"{'未启用' if r['cards_scanned'] is None else str(r['cards_scanned']) + ' 个文件'}")
     lines.append("")
 
     lines.append("## A. 新错误 pattern（优先做 pitfall 卡）")
