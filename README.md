@@ -219,6 +219,11 @@ python -m harvester pack --select "3,5-9" --tokens 2000 \
 
 # MCP server（stdio，newline-delimited JSON-RPC，零依赖）
 python -m harvester mcp-serve --sources sources.json --db harvester.db
+
+# 只读 HTTP JSON API（v0.17）：schema 自检 fail loud + 内核级只读
+# （mode=ro + authorizer 白名单）；默认 127.0.0.1，非回环 host 必须 --token
+python -m harvester api-serve --db harvester.db [--port 8765] [--token <密钥>]
+# 端点：/api/meta /api/facets /api/sessions /api/session/<sid> /api/session/<sid>/turn/<no>
 ```
 
 MCP 暴露 4 个工具：`list_sessions` / `search_history` / `read_session` /

@@ -63,6 +63,10 @@
 一套成功值，导致同一库上失败率 88.1% vs 1.7% 的虚报。改动口径只改常量，
 并跑 `tests/test_v16.py` 的对账测试（两口径对同一 fixture 必须同值）。
 
+**只读 HTTP API（api-serve，v0.17 起）**：`apiserve.EXPECTED_SCHEMA`
+是本文件 DB schema 的消费方冻结清单。改表时必须同步该清单，否则
+api-serve 启动自检会 fail loud（设计如此，防静默 schema 漂移）。
+
 ## 2. 适配器契约（采集器必须遵守）
 
 新增/重写一个采集器，必须：
