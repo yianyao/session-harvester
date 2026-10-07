@@ -215,6 +215,32 @@ class TestNewEndpoints(unittest.TestCase):
         self.assertEqual(d2["entries"], [])
         self.assertEqual(d2["leftover"], [])
 
+    # ---- sessions error_count（v2.1 additive） ----
+
+    def test_sessions_error_count(self):
+        """error_count 与 steps.status='error' 的 GROUP BY 对账；
+        只加字段不改既有字段（v1 兼容）。"""
+        d = apiserve.api_sessions(self.con, self.db,
+                                  {"limit": "10", "offset": "0"})
+        self.assertEqual(d["total"], 3)
+        base = {"sid", "source", "title", "category", "model",
+                "created_at", "updated_at"}
+        for it in d["items"]:  # 既有字段一个不少
+            self.assertTrue(base <= set(it))
+            self.assertIn("error_count", it)
+        cnt = {it["sid"]: it["error_count"] for it in d["items"]}
+        self.assertEqual(cnt["src:aaa"], 1)
+        self.assertEqual(cnt["src:bbb"], 1)
+        self.assertEqual(cnt["other-src:ccc"], 0)
+        # q 过滤后仍带 error_count（附加发生在分页切片之后）
+        d3 = apiserve.api_sessions(self.con, self.db,
+                                   {"q": "改一下文件", "limit": "10"})
+        self.assertEqual(d3["items"][0]["error_count"], 1)
+        # 越界分页：空切片不报错
+        d4 = apiserve.api_sessions(self.con, self.db,
+                                   {"limit": "2", "offset": "5"})
+        self.assertEqual(d4["items"], [])
+
     # ---- cards ----
 
     def test_cards_shape(self):
@@ -263,6 +289,9 @@ class TestNewEndpoints(unittest.TestCase):
             self.assertEqual(len(agents["entries"]), 1)
             cards = apiserve.api_cards(self.con, self.db, self.cards, {})
             self.assertEqual(cards["summary"]["anchor_checked"], 1)
+            # v2.1：sessions 分页切片的 error_count IN 查询同受守卫约束
+            sess = apiserve.api_sessions(self.con, self.db, {})
+            self.assertEqual(sess["items"][0]["error_count"], 1)
         finally:
             sqlite3.connect = real_connect
 

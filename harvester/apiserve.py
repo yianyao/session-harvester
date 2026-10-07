@@ -258,9 +258,20 @@ def api_sessions(con: sqlite3.Connection, db: Path, params: dict) -> dict:
     total = len(items)
     limit = _int_param(params, "limit", 50, 1, 200)
     offset = _int_param(params, "offset", 0, 0, 10 ** 9)
+    page_items = items[offset:offset + limit]
+    # 附加 error_count（additive，v1 兼容）：仅对分页切片按 steps.status=
+    # 'error' 预聚合，≤200 行 IN 查询，避免全表 JOIN。
+    if page_items:
+        sids = [r["sid"] for r in page_items]
+        marks = ",".join("?" * len(sids))
+        cnt = {r[0]: r[1] for r in con.execute(
+            f"SELECT sid, COUNT(*) FROM steps WHERE status='error' "
+            f"AND sid IN ({marks}) GROUP BY sid", sids)}
+        for it in page_items:
+            it["error_count"] = cnt.get(it["sid"], 0)
     return {"api_version": API_VERSION, "total": total,
             "offset": offset, "limit": limit,
-            "items": items[offset:offset + limit]}
+            "items": page_items}
 
 
 def _session_messages(con: sqlite3.Connection, sid: str):
