@@ -21,6 +21,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import __version__
 from .adapters import load_sources
 from .exporter import parse_selection
 from .indexing import fts5_available, search, sessions_in_db
@@ -29,7 +30,7 @@ from .pack import build_pack
 from .reader import render_read
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "session-harvester", "version": "0.3.0"}
+SERVER_INFO = {"name": "session-harvester", "version": __version__}
 
 
 class HarvesterMcpServer:
@@ -40,6 +41,8 @@ class HarvesterMcpServer:
 
     # ---- 数据后端 ----
     def _backend(self) -> tuple[dict, list[dict]]:
+        # 数据快照语义：缓存建于首次调用并长驻——server 运行期间新入库的
+        # 会话不可见（索引库本身是整库重建口径，重跑 sync 后重启 server 即可）。
         if self._cache is None:
             adapters_list, items, _rep = scan_all(sources=self._sources)
             self._cache = ({ad.id: ad for ad in adapters_list}, items)
@@ -92,14 +95,14 @@ class HarvesterMcpServer:
         _, items = self._backend()
         nos, dropped = parse_selection(str(spec), len(items))
         if dropped:
-            nos_txt = f"（越界忽略: {dropped}）"
+            nos_txt = f"\n\n（注意：序号 {dropped} 越界，已忽略。当前共 {len(items)} 个会话。）"
         else:
             nos_txt = ""
         # build_pack 期望 (record, 纲要序号)；_load_by_no 返回 (rec, item)
         recs = [(self._load_by_no(n)[0], n) for n in nos]
         return build_pack(recs,
                           total_budget=int(arguments.get("tokens", 2000)),
-                          question=arguments.get("question"))
+                          question=arguments.get("question")) + nos_txt
 
     # ---- MCP 协议 ----
     def _tools_manifest(self) -> list[dict]:

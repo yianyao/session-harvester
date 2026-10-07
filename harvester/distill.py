@@ -16,7 +16,6 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .adapters import load_sources
 from .models import normalize_text
 from .outline import scan_all
 

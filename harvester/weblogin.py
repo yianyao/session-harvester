@@ -266,7 +266,7 @@ def prepare(product_id: str) -> int:
         print("提示（第 3 级）：未安装 playwright，无法打开自动化浏览器。")
         print("  方案 A：pip install playwright && playwright install chromium，然后重跑本命令")
         print("  方案 B：在你的系统浏览器（Edge/Chrome）中手动登录该产品，然后重跑:")
-        print(f"          python -m harvester weblogin check   （工具会读取系统浏览器档案）")
+        print("          python -m harvester weblogin check   （工具会读取系统浏览器档案）")
         return 1
     TOOL_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:

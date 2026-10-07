@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harvester.adapters.deepseek_export import (DeepSeekExportAdapter,
                                                 _content_text, _norm_time)
-from harvester.indexing import index_session, search
+from harvester.indexing import index_session
 from harvester.mcpserver import HarvesterMcpServer
 from harvester.models import Message, SessionRecord
 from harvester.pack import build_pack, est_tokens
@@ -175,7 +175,6 @@ class TestPack(unittest.TestCase):
 class TestIndexing(unittest.TestCase):
     def test_index_and_search_roundtrip(self):
         import sqlite3
-        import tempfile
         con = sqlite3.connect(":memory:")
         from harvester.indexing import SCHEMA
         con.executescript(SCHEMA)

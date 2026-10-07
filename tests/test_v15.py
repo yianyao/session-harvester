@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harvester.adapters.vscode_copilot import _ws_extract
-from harvester.toolstats import (ToolStats, collect_model_stats,
+from harvester.toolstats import (collect_model_stats,
                                  render_model_table)
 
 _DB_SCHEMA = """

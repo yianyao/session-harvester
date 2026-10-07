@@ -8,7 +8,6 @@ which writes detail_<id>.json. Resumable: skips existing files.
 import json
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
