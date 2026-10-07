@@ -359,7 +359,8 @@ def cmd_api_serve(args) -> int:
     """只读 HTTP JSON API（apiserve.run 自带自检与安全守卫）。"""
     from .apiserve import run
     return run(Path(args.db), port=args.port, host=args.host,
-               token=args.token)
+               token=args.token,
+               cards_root=Path(args.cards_root) if args.cards_root else None)
 
 
 def cmd_report_tools(args) -> int:
@@ -801,6 +802,9 @@ def main(argv=None) -> int:
     pap.add_argument("--host", default="127.0.0.1",
                      help="默认 127.0.0.1；跨机器暴露须配 --token")
     pap.add_argument("--token", help="启用 X-Token 头鉴权（非回环 host 必配）")
+    pap.add_argument("--cards-root", dest="cards_root", default=None,
+                     help="知识卡片目录（可选；启用 /api/cards 校验端点，"
+                          "访问面启动时钉死，不接受 URL 指定目录）")
     pap.set_defaults(func=cmd_api_serve)
 
     args = p.parse_args(argv)

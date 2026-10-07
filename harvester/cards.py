@@ -163,11 +163,20 @@ def validate_card(path: Path) -> tuple[list[str], list[str], dict | None]:
     return errors, warns, fm
 
 
-def _anchor_known(sid: str, db: Path | None) -> bool | None:
-    """锚点 session_id 是否在索引库中。无库时返回 None（跳过校验）。"""
-    if db is None or not db.is_file():
-        return None
-    con = sqlite3.connect(str(db))
+def _anchor_known(sid: str, db: Path | None,
+                  con: sqlite3.Connection | None = None) -> bool | None:
+    """锚点 session_id 是否在索引库中。无库时返回 None（跳过校验）。
+
+    con：外部连接（api-serve 传入 mode=ro + authorizer 连接）；缺省
+    自开普通连接（CLI 兼容）。传入时 db 参数被忽略。
+    """
+    if con is None:
+        if db is None or not db.is_file():
+            return None
+        con = sqlite3.connect(str(db))
+        own = True
+    else:
+        own = False
     try:
         row = con.execute("SELECT 1 FROM sessions WHERE session_id=? OR sid=?",
                           (sid, sid)).fetchone()
@@ -175,15 +184,18 @@ def _anchor_known(sid: str, db: Path | None) -> bool | None:
     except sqlite3.OperationalError:
         return None
     finally:
-        con.close()
+        if own:
+            con.close()
 
 
-def validate_cards(root: Path, db: Path | None = None
+def validate_cards(root: Path, db: Path | None = None,
+                   con: sqlite3.Connection | None = None
                    ) -> tuple[list[dict], dict]:
     """校验目录下全部卡片。返回 (results, summary)。
 
     results 每项 {path, errors, warnings}；summary 含 ok/warn/error 计数与
     anchor_misses（锚点不在索引库的卡片数）。
+    con：外部连接（同 _anchor_known 口径），锚点校验复用调用方连接。
     """
     results: list[dict] = []
     n_ok = n_warn = n_err = 0
@@ -194,14 +206,14 @@ def validate_cards(root: Path, db: Path | None = None
             continue
         errors, warns, fm = validate_card(p)
         # 锚点校验：fm 里有 anchors 且形态可读时逐个查库
-        if fm and db is not None:
+        if fm and (db is not None or con is not None):
             anchors = fm.get("anchors")
             if isinstance(anchors, list):
                 for a in anchors:
                     sid = a.get("session_id") if isinstance(a, dict) else None
                     if sid:
                         anchor_checked += 1
-                        known = _anchor_known(str(sid), db)
+                        known = _anchor_known(str(sid), db, con=con)
                         if known is False:
                             anchor_miss += 1
                             errors.append(f"锚点 session_id={sid} 不在索引库")
