@@ -55,14 +55,21 @@ def _skill_name_from_detail(tool: str, detail: str | None) -> tuple[str, str]:
     return str(name), str(d.get("args") or "")
 
 
-def collect_skill_invocations(db: Path) -> list[dict]:
+def collect_skill_invocations(db: Path,
+                              con: sqlite3.Connection | None = None
+                              ) -> list[dict]:
     """扫描 steps 表，产出全部 skill 调用点（含配对状态与行为链）。
 
     返回列表每项：{sid, seq, ts, source, skill, args, status, error,
     after_tools}；按 (sid, seq) 有序。
+
+    con：外部连接（api-serve 传入 mode=ro + authorizer 连接，使 steps
+    全表扫描同样处于内核级只读之下）；缺省自开普通连接（CLI 兼容）。
     """
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
         rows = con.execute(
             "SELECT st.sid, st.seq, st.ts, st.tool, st.phase, st.status, "
@@ -70,7 +77,8 @@ def collect_skill_invocations(db: Path) -> list[dict]:
             "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid "
             "ORDER BY st.sid, st.seq").fetchall()
     finally:
-        con.close()
+        if own:
+            con.close()
     invocations: list[dict] = []
     by_sid: dict[str, list] = defaultdict(list)
     for r in rows:

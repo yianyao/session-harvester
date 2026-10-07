@@ -13,6 +13,9 @@ agent（Claude Code / Cursor / AutoClaw / VS Code 等）可在运行时直查
 
 实现说明：MCP stdio 传输 = 每行一个 JSON-RPC 消息。只实现本套件需要的
 最小方法集：initialize / notifications/* / tools/list / tools/call / ping。
+
+已知限制：数据快照语义——缓存建于首次调用并长驻，server 运行期间
+新入库的会话不可见（整库重建口径：重跑 sync 后重启 server 即可）。
 """
 
 from __future__ import annotations
