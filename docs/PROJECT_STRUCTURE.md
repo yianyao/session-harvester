@@ -1,6 +1,6 @@
 # 项目目录结构图（各文件及其作用）
 
-> 更新于 2026-10-06（v0.9 收口后）。配套阅读：`README.md`（功能总览）、
+> 更新于 2026-10-07（v0.16 收口后全文档重检）。配套阅读：`README.md`（功能总览）、
 > `docs/USER_MANUAL.md`（小白操作手册）。
 
 ```text
@@ -18,7 +18,7 @@ session-harvester/
 │
 ├── harvester/                    ══ 核心包（纯 Python 标准库，零第三方依赖）══
 │   ├── __main__.py               ← python -m harvester 的入口
-│   ├── cli.py                    ← 命令行分发：18 个子命令（probe/scan/export/sync/index/search/…）
+│   ├── cli.py                    ← 命令行分发：22 个子命令（probe/scan/export/adapters/weblogin/sync/index/search/read/pack/mcp-serve/aggregate/kb-*/report-*/suggest-agents/cards/triage/draft）
 │   ├── models.py                 ← 统一数据模型 SessionRecord / Message（所有 adapter 的输出契约）
 │   │
 │   ├── discovery.py              ← 【发现】扫描文件系统签名，找出本机 AI 会话数据源 → sources.json
@@ -57,6 +57,8 @@ session-harvester/
 │   ├── yuanbao_receiver.py       ← 元宝/千问通用本地接收器（v2.1，永久保留）：POST /list/<n>、
 │   │                                /detail/<cid> → 落盘 JSON；python yuanbao_receiver.py [port] [outdir]
 │   ├── yuanbao_detail_harvest.py ← 元宝采集器：agent-browser 页内 fetch 官方 API → POST 给接收器
+│   ├── yuanbao_list_harvest.js   ← 元宝侦察期页内脚本（列表分页探查，保留作改版侦察参照）
+│   ├── yuanbao_probe_pagination.js ← 元宝分页参数探针（嵌套 pagination 被静默忽略的实证）
 │   ├── qianwen_detail_harvest.py ← 千问采集器：CDP 页内 fetch（next_token/pos 游标分页）→ 接收器
 │   ├── doubao_capture.py         ← 豆包侦察期抓包器（Network 域截响应体 → doubao_capture.json）
 │   ├── doubao_harvest.py         ← 豆包采集器（v2）：app-driven capture，单读线程设计，
@@ -75,8 +77,14 @@ session-harvester/
 │   ├── test_v06.py               ← v0.6 transcript/DSH/steps/traces
 │   ├── test_v07.py               ← v0.7 DeepSeek 官方导出（真实 ZIP 样本）
 │   ├── test_v08.py               ← v0.8 yuanbao_raw adapter（12 用例）
-│   └── test_v09.py               ← v0.9 qianwen_raw + doubao_raw adapter（17 用例）
-│       # 全套：python -m unittest discover tests（当前 132 个，全绿）
+│   ├── test_v09.py               ← v0.9 qianwen_raw + doubao_raw adapter（17 用例）
+│   ├── test_v10.py ~ test_v11.py ← v0.10 report-errors/suggest-agents 对账、v0.11 report-skill/cards new
+│   ├── test_v12.py               ← v0.12 sync 收件箱收割/竞标认领/claims_files
+│   ├── test_v13.py               ← v0.13 triage 蒸馏队列（新 pattern/旧坑重现/高信号）
+│   ├── test_v14.py               ← v0.14 draft 蒸馏包（自包含、锚点可查）
+│   ├── test_v15.py               ← v0.15 sessions.model 列与按模型分布
+│   └── test_v16.py               ← v0.16 口径对账（_OK_STATUS）/降级解析锚点/结论三分支（9 用例）
+│       # 全套：python -m unittest discover tests（当前 188 个，全绿）
 │
 ├── docs/                         ══ 文档 ══
 │   ├── USER_MANUAL.md            ← 小白操作手册（本套件怎么用，一步步）
@@ -89,6 +97,7 @@ session-harvester/
 │   ├── COMPARISON.md             ← 与同类工具（ai-hist 等）的对比
 │   ├── PLAN_DIFF_v1.0.md         ← 计划差异记录
 │   ├── AUDIT-2026-10-05.md       ← 早期审计报告
+│   ├── AUDIT-2026-10-08-design-conformance.md ← 第三方设计符合性审计（缺陷已由 v0.16 全部修复，留档）
 │   └── reports/                  ← 可复跑报告产物（G1/G2/G3 证据、cards 校验、蒸馏队列等）
 │
 ├── demo/                         ← 演示样例
@@ -118,6 +127,9 @@ session-harvester/
       ▼              ▼              ▼
    search/read    pack/MCP      aggregate/kb-*
    （人查/agent 查）（跨 agent 交接）（蒸馏语料与知识库）
+
+  蒸馏支线（T0→T3）：sync 入库 → triage（T1 排队）→ draft（T2 蒸馏包喂 Agent）
+   → cards_pending/ → cards validate → 人工终审（T3）→ 主库 ~/.workbuddy/knowledge/cards/
 ```
 
 ## 关键约定

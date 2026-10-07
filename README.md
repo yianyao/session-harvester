@@ -241,6 +241,7 @@ python -m harvester kb-stats  --root ~/.workbuddy/knowledge   # 盘点
 
 # 工具调用/失败率统计（服务「工具改进」与「Harness 踩坑」）
 # 口径一（推荐）：先 index 再用 --db，读结构化 steps 表，含重试/放弃率
+# 与按模型分布表（v0.15 起，sessions.model 列；仅 workbuddy-transcript 源有值）
 python -m harvester report-tools --db harvester.db --out tools_report.md
 # 口径二：无索引时实时扫描（note 标记汇总，无重试/放弃统计）
 python -m harvester report-tools --sources sources.json --out tools_report.md
@@ -262,6 +263,8 @@ python -m harvester suggest-agents --db harvester.db --min-count 3 \
 python -m harvester cards new --sid <search输出的sid> --turn N \
     --root ~/.workbuddy/knowledge/cards --type insight
 # 校验：§8 frontmatter 规范 + 锚点查索引库；通过后人工并入 kb 主库
+# 结论三分支（v0.16）：error=有问题不并入；warn=有警告先检查再定；
+# 其余=可并入主库。PyYAML 可选——无它时降级解析器照常校验锚点
 python -m harvester cards validate --root ~/.workbuddy/knowledge/cards \
     --db harvester.db
 

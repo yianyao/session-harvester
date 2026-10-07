@@ -57,6 +57,12 @@
 `raw.tool` 或 `raw.data.toolName`。chat 平台（无工具遥测）不产生 steps 行——
 这是记录在案的口径边界，不是缺陷。
 
+**成功判定口径单一真值源**（v0.16 起）：`toolstats._OK_STATUS =
+("success", "completed", "ok")`。steps 口径（report-tools）与 note 口径
+（实时扫描）**必须共用此常量**，禁止各写各的字面量——历史上两口径各认
+一套成功值，导致同一库上失败率 88.1% vs 1.7% 的虚报。改动口径只改常量，
+并跑 `tests/test_v16.py` 的对账测试（两口径对同一 fixture 必须同值）。
+
 ## 2. 适配器契约（采集器必须遵守）
 
 新增/重写一个采集器，必须：

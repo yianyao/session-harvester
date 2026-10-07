@@ -13,6 +13,10 @@
 
 - 卡片先进**候选池**，`cards validate` 通过（§8 规范 + 锚点真实命中索引库）
   后由人工并入主库——一池一库，不再双轨。
+- validate 结论三分支（v0.16）：**error**=违反 §8 规范（缺字段/锚点 sid
+  不在索引库等），修复前不得并入；**warn**=不致命但需复核（anchors 非列表
+  形态、正文为空、无索引库致锚点未能校验）；两者皆无=可并入主库。
+  PyYAML 可选——无它时降级解析器照常解析 anchors 并校验锚点。
 - 锚点 = `[{session_id: "<adapter 级 id>", turn: N}]`，validate 会查
   `harvester.db` 确认会话真实存在，杜绝"编造来源"。
 
@@ -38,9 +42,10 @@ python -m harvester draft --sid <队列锚点里的 sid> --type pitfall --out do
 - Agent 草稿卡落 `cards_pending/`（confidence 固定 0.3）；
 - `cards validate --root cards_pending --db harvester.db` 照跑
   （锚点查库一样生效），通过后**仍由人工终审**才并入主库；
-- 已验证实例：`cards_pending/kc-20261006-0004-file-changed-since-read.md`
+- 已验证实例：`~/.workbuddy/knowledge/cards/kc-20261006-0004-file-changed-since-read.md`
   （pitfall，源自队列榜首"file changed since it was read"26 次的
-  dsh 会话，validate 通过、锚点命中）。
+  dsh 会话，validate 通过、锚点命中，**已终审并入主库**——cards_pending/
+  清空属正常，草稿并入后即移走）。
 
 ### 通道 1：Harness 踩坑 → 建议池（全自动）
 

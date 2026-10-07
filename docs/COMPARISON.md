@@ -3,7 +3,10 @@
 > 实施状态（2026-10-05 更新）：P1-1 ✅（deepseek_export.py，含 ai-hist 式源插件声明）、
 > P1-2 ✅（indexing.py，FTS5）、P2-3 ✅（reader.py）、P2-4 ✅（mcpserver.py）。
 > ai-hist 额外借鉴：pack 交接包 ✅（pack.py）、resume 命令不适用（本套件面向
-> Chat 产品与本地日志，无原生 resume CLI）。未实装：P3-5、P3-6。
+> Chat 产品与本地日志，无原生 resume CLI）。
+> P3-5 部分实装（v0.10–v0.13：report-errors / report-skill / triage，确定性
+> 摩擦信号的统计主干已通，LLM 归因层按 DISTILL_PLAYBOOK 由 agent 执行）；
+> P3-6 未实装（无 coding-agent JSONL 需求）。
 >
 > v0.4（2026-10-05 二次核验后）：官方导出通道扩展至 ChatGPT/Claude
 > （official_export.py，格式多源交叉核验；weblogin 降为兜底）；
@@ -38,14 +41,17 @@
 
 ## 2. 能力差距分析（session-harvester 视角）
 
+> 下表"本套件现状"列更新于 2026-10-07（v0.16 后）——初版差距表中"检索无/
+> 缺 turn 读取/缺 MCP"三条已在 v0.3 消除，此处为防误读重写。
+
 | 能力 | 本套件现状 | 外部标杆 | 差距 |
 |---|---|---|---|
-| 数据源覆盖 | WorkBuddy 日志 / VS Code Copilot / AutoClaw + 6 桩位 | Callimachus 覆盖 11 种 coding agent | 缺 Claude Code/Cursor/Codex 等 JSONL 生态 |
-| 检索 | 无（只有 scan 纲要顺序号） | ai-hist / Callimachus：SQLite FTS5+BM25，文件提及索引 | **最大差距** |
-| 分层读取 | export 一把梭全量 | RetroLens：overview→turn→tool call 逐级下钻 | 缺 turn 级读取接口 |
-| Agent 接入 | 仅 WorkBuddy skill 薄绑定 | ai-hist/agent-history：MCP server，任意 agent 可查 | 缺 MCP 暴露 |
-| 云端源 | 桩位（不硬猜） | ai-hist 插件式云源；DeepSeek2md token 方案 | DeepSeek 已被证明可走官方导出文件 |
-| 确定性信号 | 无 | AgentPulse 6 状态 / retro 8 类摩擦信号 | 进阶项，非核心 |
+| 数据源覆盖 | 9 源实装：4 本地轨迹（WorkBuddy 日志+transcript / VS Code Copilot / AutoClaw / DSH）+ 3 官方导出（DeepSeek/ChatGPT/Claude）+ 3 平台登录态直采（元宝/千问/豆包），另有 6 桩位 | Callimachus 覆盖 11 种 coding agent | 仍缺 Claude Code/Cursor/Codex 等 JSONL 生态（P3-6，等需要再接） |
+| 检索 | ✅ FTS5 全文 + CJK bigram 中文 100% 命中（v0.3 起） | ai-hist / Callimachus：BM25+语义向量、文件提及索引 | 无语义向量与文件提及索引（个人库暂不需要） |
+| 分层读取 | ✅ read → --turn 逐回合下钻（v0.3 起） | RetroLens：overview→turn→tool call | 已消除；--tool 单列工具条目未做（note 里有） |
+| Agent 接入 | ✅ mcp-serve（4 工具，任意宿主）+ pack 跨 agent 交接包（v0.3 起） | ai-hist/agent-history：MCP server | 已消除 |
+| 云端源 | 三平台直采实装（服务端原始 JSON 落 corpus/）+ 3 家官方导出；weblogin 三级流程兜底 | ai-hist 插件式云源；DeepSeek2md token 方案 | token 方案刻意不做（脆弱+风控） |
+| 确定性信号 | 部分实装：report-errors 三分类+重试/放弃率（v0.10）、report-skill 行为链（v0.11）、triage 蒸馏队列（v0.13） | AgentPulse 6 状态 / retro 8 类摩擦信号 | 实时监控不采纳（定位是历史归档）；motif 矩阵/绕行检测等 LLM 层留白 |
 | 零依赖/可移植 | ✅ 纯标准库单目录 | 竞品多为 npm/Node 桌面应用 | **本套件优势，须保持** |
 
 ## 3. 可借鉴项（按优先级）
