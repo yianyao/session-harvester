@@ -44,7 +44,7 @@ def main() -> None:
                 if "/im/" in url or "/alice/" in url:
                     req_ids[p["requestId"]] = {"url": url, "method": r.get("method"),
                                                "postData": r.get("postData", ""),
-                                               "headers": r.get("headers") or {}})
+                                               "headers": r.get("headers") or {}}
                     events.append(req_ids[p["requestId"]])
             elif m == "Network.responseReceived":
                 rid = p.get("requestId")

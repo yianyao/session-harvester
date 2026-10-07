@@ -9,7 +9,6 @@ msg/list: GET /api/v1/session/msg/list?page_size=100&session_id=...
 分页: have_next_page=true 时以 pos=<最后一条的 pos> 续拉（实测参数）。
 """
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path

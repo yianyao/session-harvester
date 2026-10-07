@@ -90,7 +90,7 @@ class TestQianwenRound(unittest.TestCase):
         r["error_code"] = "TIMEOUT"
         r["error_msg"] = "超时"
         warns = []
-        msgs = _round_messages(r, warns)
+        _round_messages(r, warns)
         self.assertTrue(any("TIMEOUT" in w for w in warns))
 
 

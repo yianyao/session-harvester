@@ -51,7 +51,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -458,7 +457,7 @@ def cmd_suggest_agents(args) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(content, encoding="utf-8", newline="\n")
     print(f"建议已写入: {out}")
-    print(f"纪律: 请人工审阅后自行并入 AGENTS.md（本工具绝不直接改它）。")
+    print("纪律: 请人工审阅后自行并入 AGENTS.md（本工具绝不直接改它）。")
     return 0
 
 
@@ -571,6 +570,13 @@ def _emit_report(report: str, args) -> None:
 
 
 def main(argv=None) -> int:
+    # Windows 原版解释器默认 cp936，report 输出含 emoji/特殊 Unicode 标题重定向
+    # 到文件/管道时会 UnicodeEncodeError——统一 UTF-8（DSH 等已全局 UTF-8 则无感）。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except AttributeError:  # 非 TextIOWrapper（如测试桩）
+            pass
     p = argparse.ArgumentParser(prog="harvester", description="AI 会话历史提取与分类导出工具")
     sub = p.add_subparsers(dest="cmd", required=True)
 

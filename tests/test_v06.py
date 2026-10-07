@@ -20,7 +20,7 @@ from harvester.indexing import index_session, index_exports  # noqa: E402
 from harvester.models import Message, SessionRecord  # noqa: E402
 from harvester.toolstats import (collect_stats_from_db, render_flow,  # noqa: E402
                                  render_report)
-from harvester.tracestats import GenStats, collect, render_report as rrep  # noqa: E402
+from harvester.tracestats import collect, render_report as rrep  # noqa: E402
 
 _TMP = Path(__file__).parent / "_tmp"
 
@@ -133,7 +133,7 @@ def _mk_con(db: Path, msgs):
     rec = SessionRecord(source="test", session_id="s1", title="t",
                         messages=msgs)
     con = sqlite3.connect(str(db))
-    from harvester.indexing import SCHEMA, _cjk_bigram
+    from harvester.indexing import SCHEMA
     con.executescript(SCHEMA)
     n = index_session(con, rec, include_notes=True)
     con.commit()
