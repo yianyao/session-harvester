@@ -77,9 +77,17 @@ def _hits(creg: re.Pattern, pattern: str, samples: list) -> bool:
     return any(creg.search(raw[:200]) for _sid, _seq, raw in samples)
 
 
-def build_suggestions(errors: list[dict], min_count: int = 3,
-                      max_items: int = 15) -> str:
-    """从归类后的错误生成 AGENTS.md 候选条目 Markdown。"""
+def build_suggestion_entries(errors: list[dict], min_count: int = 3,
+                             max_items: int = 15) -> dict:
+    """结构化建议构建（build_suggestions 的纯数据层，API 直接消费）。
+
+    返回 {"entries": [...], "leftover": [...], "min_count": n}：
+    - entries 按 total 降序、截 max_items，每项 {title, body, total,
+      samples: [(sid, seq, raw)]}；
+    - leftover 为未命中任何模板的 (pattern, stats) 列表，按 count 降序
+      （stats 含 class/count/tools(set)/samples）——"待人工归因"节与
+      前端报告页均消费此结构。
+    """
     stats = pattern_stats(errors)
     entries: list[dict] = []
     consumed: set[str] = set()
@@ -96,6 +104,18 @@ def build_suggestions(errors: list[dict], min_count: int = 3,
                             "samples": samples})
     entries.sort(key=lambda e: -e["total"])
     entries = entries[:max_items]
+    leftover = [(pat, d) for pat, d in stats.items() if pat not in consumed]
+    leftover.sort(key=lambda kv: -kv[1]["count"])
+    return {"entries": entries, "leftover": leftover, "min_count": min_count}
+
+
+def build_suggestions(errors: list[dict], min_count: int = 3,
+                      max_items: int = 15) -> str:
+    """从归类后的错误生成 AGENTS.md 候选条目 Markdown（数据层见
+    build_suggestion_entries；本函数只做渲染，保证两种出口同构）。"""
+    built = build_suggestion_entries(errors, min_count=min_count,
+                                     max_items=max_items)
+    entries, leftover = built["entries"], built["leftover"]
 
     lines = [
         "# AGENTS.md 条目建议（机器产出，人工审阅后并入）",
@@ -117,11 +137,8 @@ def build_suggestions(errors: list[dict], min_count: int = 3,
             f"   实测 {e['total']} 次，证据：`{sid}#{seq}`「{raw_short}」",
             "",
         ]
-    leftover = [(pat, d) for pat, d in stats.items()
-                if pat not in consumed]
     if leftover:
         lines += ["## 待人工归因（未命中模板，给证据不给结论）", ""]
-        leftover.sort(key=lambda kv: -kv[1]["count"])
         for pat, d in leftover[:10]:
             lines.append(f"- **x{d['count']}** [{d['class']}] `{pat}`")
             for sid, seq, raw in d["samples"][:2]:

@@ -69,13 +69,19 @@ def _load_card_texts(cards_root: Path | None) -> list[str]:
 
 def collect_triage(db: Path, since_days: float | None = None,
                    cards_root: Path | None = None,
-                   min_count: int = 2, top_n: int = 10) -> dict:
-    """产出蒸馏候选队列。返回 dict（render_triage 消费）。"""
+                   min_count: int = 2, top_n: int = 10,
+                   con: sqlite3.Connection | None = None) -> dict:
+    """产出蒸馏候选队列。返回 dict（render_triage 消费）。
+
+    con：外部连接（api-serve 传入 mode=ro + authorizer 连接），供内部
+    错误扫描 / skill 扫描 / 高信号会话查询三处复用——缺省自开普通连接
+    （CLI 兼容）。传入时 db 参数仅透传给子 collector 的签名（同样忽略）。
+    """
     db = Path(db)
     cutoff = _cutoff(since_days)
 
     # ---- 1/2. 错误 pattern（全史取 first_seen，窗口内取计数与样例）----
-    errors, meta = collect_errors_from_db(db, since_days=None)
+    errors, meta = collect_errors_from_db(db, since_days=None, con=con)
     by_pattern: dict[str, dict] = {}
     for e in errors:
         p = by_pattern.setdefault(e["pattern"], {
@@ -91,7 +97,10 @@ def collect_triage(db: Path, since_days: float | None = None,
     card_texts = _load_card_texts(cards_root)
 
     def _mark(p: dict) -> dict:
-        known = any(p["pattern"] in t for t in card_texts)
+        # 与 skill 侧同口径：pattern 先做宽松归一（lower+折叠空白）再
+        # 与卡片文本比对——此前 pattern 未归一，含大写的错误消息永远
+        # 判不中已有卡（v0.18 修正）。
+        known = any(_norm_for_match(p["pattern"]) in t for t in card_texts)
         return {
             "pattern": p["pattern"], "class": p["class"],
             "tools": sorted(p["tools"]),
@@ -113,7 +122,7 @@ def collect_triage(db: Path, since_days: float | None = None,
     old_patterns = old_patterns[:_CARDS_CAP]
 
     # ---- 3. Skill 行为链候选 ----
-    invocations = [i for i in collect_skill_invocations(db)
+    invocations = [i for i in collect_skill_invocations(db, con=con)
                    if cutoff is None or (i["ts"] or "") >= cutoff]
     skills: dict[str, dict] = {}
     for i in invocations:
@@ -141,29 +150,40 @@ def collect_triage(db: Path, since_days: float | None = None,
         })
 
     # ---- 4. 高信号会话 ----
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
+        # 相关子查询写法（per-session COUNT）在大库上是 O(会话数 × 全表)，
+        # 1946 会话实测 170s；改为 GROUP BY 预聚合 JOIN（各表单次全扫），
+        # 结果等价、毫秒级（v0.18 修正）。
         sql = """
             SELECT se.sid, se.source, se.title,
-              (SELECT COUNT(*) FROM messages m WHERE m.sid=se.sid) AS msgs,
-              (SELECT COUNT(*) FROM messages m WHERE m.sid=se.sid
-                 AND m.role='note') AS notes,
-              (SELECT COUNT(*) FROM steps st WHERE st.sid=se.sid) AS steps
+              COALESCE(m.msgs, 0) AS msgs,
+              COALESCE(m.notes, 0) AS notes,
+              COALESCE(st.steps, 0) AS steps
             FROM sessions se
+            LEFT JOIN (SELECT sid, COUNT(*) AS msgs,
+                       SUM(role='note') AS notes
+                       FROM messages GROUP BY sid) m ON m.sid = se.sid
+            LEFT JOIN (SELECT sid, COUNT(*) AS steps
+                       FROM steps GROUP BY sid) st ON st.sid = se.sid
         """
         params: list = []
         if cutoff is not None:
             sql += " WHERE se.updated_at >= ?"
             params.append(cutoff)
-        sql += " ORDER BY (msgs + 3 * steps) DESC LIMIT ?"
+        sql += (" ORDER BY (COALESCE(m.msgs, 0) + 3 * COALESCE(st.steps, 0))"
+                " DESC LIMIT ?")
         params.append(top_n)
         hot = [dict(r) | {"score": r["msgs"] + 3 * r["steps"]}
                for r in con.execute(sql, params).fetchall()]
         n_sessions = con.execute(
             "SELECT COUNT(*) FROM sessions").fetchone()[0]
     finally:
-        con.close()
+        if own:
+            con.close()
 
     return {
         "cutoff": cutoff, "db": str(db),

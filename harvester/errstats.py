@@ -107,7 +107,8 @@ def _bucket(ratio: float) -> str:
     return "收尾"
 
 
-def collect_errors_from_db(db: Path, since_days: float | None = None
+def collect_errors_from_db(db: Path, since_days: float | None = None,
+                           con: sqlite3.Connection | None = None
                            ) -> tuple[list[dict], dict]:
     """从 steps 表取全部错误步骤并归类。
 
@@ -116,13 +117,18 @@ def collect_errors_from_db(db: Path, since_days: float | None = None
     "since": cutoff 或 None}。
     --since_days 只统计最近 N 天（ts 为 'YYYY-MM-DD HH:MM:SS' 字符串，
     字典序即时间序）。
+    con：外部连接（api-serve 传入 mode=ro + authorizer 连接，使 steps
+    全表扫描同样处于内核级只读之下）；缺省自开普通连接（CLI 兼容）。
+    传入时 db 参数被忽略。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - since_days * 86400))
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
         if cutoff:
             rows = con.execute(
@@ -141,7 +147,8 @@ def collect_errors_from_db(db: Path, since_days: float | None = None
         max_seq = dict(con.execute(
             "SELECT sid, MAX(seq) FROM steps GROUP BY sid").fetchall())
     finally:
-        con.close()
+        if own:
+            con.close()
     errors = []
     for r in rows:
         hi = max_seq.get(r["sid"], 0) or 1

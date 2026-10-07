@@ -91,7 +91,8 @@ def _is_error_status(status: str) -> bool:
     return status not in _OK_STATUS
 
 
-def collect_stats_from_db(db: Path, since_days: float | None = None
+def collect_stats_from_db(db: Path, since_days: float | None = None,
+                          con: sqlite3.Connection | None = None
                           ) -> tuple[dict[str, ToolStats], dict]:
     """从索引库 steps 表聚合（结构化口径，替代 note 文本正则）。
 
@@ -102,14 +103,18 @@ def collect_stats_from_db(db: Path, since_days: float | None = None
     "errors": 总错误数}。
     --since_days 只统计最近 N 天（ts 'YYYY-MM-DD HH:MM:SS' 字典序即时间序；
     截断处跨界的重试对会漏配对，近似口径可接受）。
+    con：外部连接（api-serve 传入 mode=ro + authorizer 连接）；缺省自开
+    普通连接（CLI 兼容）。传入时 db 参数被忽略。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() - since_days * 86400))
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
         if cutoff:
             rows = con.execute(
@@ -120,7 +125,8 @@ def collect_stats_from_db(db: Path, since_days: float | None = None
                 "SELECT sid, seq, tool, phase, status, error FROM steps "
                 "ORDER BY sid, seq").fetchall()
     finally:
-        con.close()
+        if own:
+            con.close()
     stats: dict[str, ToolStats] = defaultdict(ToolStats)
     # 每会话每工具的最后 error 位置，供重试判定
     last_err_seq: dict[tuple[str, str], int] = {}
@@ -150,21 +156,25 @@ def collect_stats_from_db(db: Path, since_days: float | None = None
     return dict(stats), flow
 
 
-def collect_source_stats(db: Path, since_days: float | None = None
+def collect_source_stats(db: Path, since_days: float | None = None,
+                         con: sqlite3.Connection | None = None
                          ) -> dict[str, dict[str, ToolStats]]:
     """按数据源（=Agent Harness 身份）分别聚合工具统计。
 
     steps 只来自 agent harness 会话（workbuddy-transcript/dsh/autoclaw/
     vscode-copilot）；Chat 平台会话无工具遥测，天然不参与。
     注意：工具名词表因 harness 而异（如 Bash/pwsh/exec 都是执行类）。
+    con：外部连接（同 collect_stats_from_db 口径）。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() - since_days * 86400))
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
         if cutoff:
             rows = con.execute(
@@ -177,7 +187,8 @@ def collect_source_stats(db: Path, since_days: float | None = None
                 "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid "
                 "ORDER BY st.sid, st.seq").fetchall()
     finally:
-        con.close()
+        if own:
+            con.close()
     by_source: dict[str, dict[str, ToolStats]] = defaultdict(
         lambda: defaultdict(ToolStats))
     for r in rows:
@@ -196,19 +207,23 @@ def collect_source_stats(db: Path, since_days: float | None = None
     return dict(by_source)
 
 
-def collect_model_stats(db: Path, since_days: float | None = None
+def collect_model_stats(db: Path, since_days: float | None = None,
+                        con: sqlite3.Connection | None = None
                         ) -> dict[str, ToolStats]:
     """按模型聚合工具统计（v0.15：sessions.model，transcript 源提供）。
 
     返回 {model: ToolStats}；无模型信息的源（model 为 NULL）不参与。
+    con：外部连接（同 collect_stats_from_db 口径）。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() - since_days * 86400))
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    own = con is None
+    if own:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
     try:
         sql = ("SELECT st.tool, st.phase, st.status, st.error, s.model "
                "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid ")
@@ -219,7 +234,8 @@ def collect_model_stats(db: Path, since_days: float | None = None
         sql += "ORDER BY st.sid, st.seq"
         rows = con.execute(sql, params).fetchall()
     finally:
-        con.close()
+        if own:
+            con.close()
     by_model: dict[str, ToolStats] = defaultdict(ToolStats)
     for r in rows:
         model = r["model"]
