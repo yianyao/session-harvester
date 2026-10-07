@@ -355,6 +355,13 @@ def cmd_mcp_serve(args) -> int:
     return serve(args.sources, args.db)
 
 
+def cmd_api_serve(args) -> int:
+    """只读 HTTP JSON API（apiserve.run 自带自检与安全守卫）。"""
+    from .apiserve import run
+    return run(Path(args.db), port=args.port, host=args.host,
+               token=args.token)
+
+
 def cmd_report_tools(args) -> int:
     """工具调用/失败率统计。
 
@@ -784,6 +791,17 @@ def main(argv=None) -> int:
     pmc.add_argument("--sources", default="sources.json")
     pmc.add_argument("--db", default="harvester.db", help="search 用的索引库")
     pmc.set_defaults(func=cmd_mcp_serve)
+
+    pap = sub.add_parser(
+        "api-serve",
+        help="只读 HTTP JSON API（schema 自检；默认 127.0.0.1，"
+             "非回环 host 必须 --token）")
+    pap.add_argument("--db", default="harvester.db", help="索引库路径")
+    pap.add_argument("--port", type=int, default=8765)
+    pap.add_argument("--host", default="127.0.0.1",
+                     help="默认 127.0.0.1；跨机器暴露须配 --token")
+    pap.add_argument("--token", help="启用 X-Token 头鉴权（非回环 host 必配）")
+    pap.set_defaults(func=cmd_api_serve)
 
     args = p.parse_args(argv)
     return args.func(args)
