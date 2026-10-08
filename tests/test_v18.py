@@ -248,10 +248,16 @@ class TestNewEndpoints(unittest.TestCase):
         self.assertEqual(d["api_version"], 1)
         s = d["summary"]
         self.assertEqual(s["cards"], 2)
-        self.assertEqual(s["ok"], 1)          # 锚点 aaa 真实存在
+        # v0.19：ok 卡带警告（锚点 turn: null + evidence 两行均不在会话
+        # 原文——fixture 的 raw 为 JSON 形态，逐字匹配天然失配）→ 落入
+        # warn；warn 按卡计数；引文核对 additive 字段生效
+        self.assertEqual(s["ok"], 0)
+        self.assertEqual(s["warn"], 1)
         self.assertEqual(s["error"], 1)       # bad 卡缺 title/anchors/...
         self.assertEqual(s["anchor_checked"], 1)
         self.assertEqual(s["anchor_misses"], 0)
+        self.assertEqual(s["evidence_checked"], 2)
+        self.assertEqual(s["evidence_misses"], 2)
 
     def test_cards_unconfigured_and_missing(self):
         with self.assertRaises(ValueError):

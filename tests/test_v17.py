@@ -152,7 +152,7 @@ class TestEndpoints(unittest.TestCase):
         cls.tmp.cleanup()
 
     def test_meta(self):
-        meta = apiserve.api_meta(self.con)
+        meta = apiserve.api_meta(self.con, self.db)
         self.assertEqual(meta["api_version"], 1)
         self.assertTrue(meta["readonly"])
         self.assertEqual(meta["sessions"], 3)
@@ -217,17 +217,17 @@ class TestEndpoints(unittest.TestCase):
     def test_meta_schema_fingerprint(self):
         """meta 带 schema_fingerprint（设计稿 §3 承诺字段），schema 变
         则指纹变。"""
-        meta = apiserve.api_meta(self.con)
+        meta = apiserve.api_meta(self.con, self.db)
         fp = meta["schema_fingerprint"]
         self.assertEqual(len(fp), 12)
         self.assertEqual(
-            apiserve.api_meta(self.con)["schema_fingerprint"], fp)
+            apiserve.api_meta(self.con, self.db)["schema_fingerprint"], fp)
         saved = dict(apiserve.EXPECTED_SCHEMA)
         try:
             apiserve.EXPECTED_SCHEMA = {
                 **saved, "sessions": saved["sessions"] + ["newcol"]}
             self.assertNotEqual(
-                apiserve.api_meta(self.con)["schema_fingerprint"], fp)
+                apiserve.api_meta(self.con, self.db)["schema_fingerprint"], fp)
         finally:
             apiserve.EXPECTED_SCHEMA = saved
 

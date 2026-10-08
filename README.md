@@ -224,6 +224,13 @@ python -m harvester mcp-serve --sources sources.json --db harvester.db
 # （mode=ro + authorizer 白名单）；默认 127.0.0.1，非回环 host 必须 --token
 python -m harvester api-serve --db harvester.db [--port 8765] [--token <密钥>]
 # 端点：/api/meta /api/facets /api/sessions /api/session/<sid> /api/session/<sid>/turn/<no>
+#   v2（只增不改）：/api/triage /api/reports/{tools,errors,skills,agents} /api/cards
+#   v0.19 additive：/api/meta 与全部 reports/triage/cards 端点带
+#   db_fingerprint={sessions,steps,errors,db_mtime,generated_at}（产物判
+#   陈旧用）；/api/reports/tools 工具行带 given_up/retried/raw_tools/
+#   low_sample（?min_calls=）；/api/reports/agents 条目带 unresolved_count/
+#   owner/status（--suggestions-meta <meta库> 启用 status 读取）
+python -m harvester api-serve --db harvester.db --suggestions-meta suggestions_meta.db
 ```
 
 MCP 暴露 4 个工具：`list_sessions` / `search_history` / `read_session` /
@@ -253,30 +260,51 @@ python -m harvester report-tools --sources sources.json --out tools_report.md
 # ⚠️ 两口径结论必须一致；若有出入，以口径一（--db，结构化 steps 表）为准，
 #    口径二仅作无索引时的应急参考。
 # 两口径均支持 --since 7（只看最近 N 天，按 steps.ts 近似截断）
+#
+# 统计口径（v0.19 固化，与 errstats.py 模块 docstring 一致）：
+# - calls 只数 phase='call' 行；错误只出现在 phase='result' 行；
+# - 工具名归一：同工具异写（小写+去下划线后同键）合并为 canonical，
+#   如 edit/Edit、web_fetch/WebFetch、web_search/WebSearch；canonical 取
+#   组内调用最多写法，raw 名在报告括号与 API raw_tools 字段可追溯；
+# - 重试 = 错误后同会话同工具再次调用；放弃（未解决）= 无再次调用；
+#   given_up = errors - retried；--since 截断处跨界的重试对会漏配对
+#   （已知近似，跨期对比两侧用同一窗口）。
 
 # 错误三分类（G2）：env（环境）/ tool_interface（用法）/ context（目标状态）
-# + 开场/中途/收尾位置分桶 + 归一模式聚类（带锚点与原文）
+# + 开场/中途/收尾位置分桶 + 归一模式聚类（带锚点与原文；模式行附未解决数）
 python -m harvester report-errors --db harvester.db --out errors_report.md
 
 # AGENTS.md 条目建议（G2 闭环）：从错误模式产出候选条目（建议池，
 # 每条附锚点+原文证据；**绝不直接改 AGENTS.md**，人工审阅后并入）
+# v0.19：建议条目带 owner（harness/tool/workflow）与 unresolved_count，
+# 按"未解决次数"降序——unresolved>=1 进"待修清单"，已自愈（=0）降级
+# "观察区"；--meta 读建议状态 meta 库（status: pending/adopted/rejected）
 python -m harvester suggest-agents --db harvester.db --min-count 3 \
-    --out agents_suggestions.md
+    --out agents_suggestions.md --meta suggestions_meta.db
+
+# 审阅结论落库（独立 meta 库 suggestion_status 表，不碰采集库；key=
+# 建议池条目用 title，待人工归因模式用 pattern）
+python -m harvester suggest-status --meta suggestions_meta.db \
+    --key "Edit/Write 前必须先 Read 目标文件最新内容。" --status adopted
 
 # 知识卡片（G3）：候选池 ↔ 主库归一，三条供卡通道详见 docs/CARD_WORKFLOW.md
 # 从索引库会话一键起卡（锚点自动填，evidence 留白待补）
 python -m harvester cards new --sid <search输出的sid> --turn N \
     --root ~/.workbuddy/knowledge/cards --type insight
-# 校验：§8 frontmatter 规范 + 锚点查索引库；通过后人工并入 kb 主库
+# 校验：§8 frontmatter 规范 + 锚点查索引库 + 引文核对（v0.19：evidence
+# 每行须能在锚点会话原文中逐字找到——空白归一后子串匹配，未命中出警告；
+# 锚点 turn: null 出警告）；通过后人工并入 kb 主库
 # 结论三分支（v0.16）：error=有问题不并入；warn=有警告先检查再定；
 # 其余=可并入主库。PyYAML 可选——无它时降级解析器照常校验锚点
 python -m harvester cards validate --root ~/.workbuddy/knowledge/cards \
     --db harvester.db
 
 # Skill 行为画像（G4）：按 skill 聚合调用/触发任务/调用后行为链；
-# --skill 深挖单技能 = 可喂给 Agent 蒸馏决策过程的会话清单
+# --skill 深挖单技能 = 可喂给 Agent 蒸馏决策过程的会话清单；
+# --min-calls 样本量阈值：calls<阈值的 skill 标 low-sample（仅供观察）
 python -m harvester report-skill --db harvester.db
-python -m harvester report-skill --db harvester.db --skill wechat-article-search
+python -m harvester report-skill --db harvester.db --skill wechat-article-search \
+    --min-calls 5
 
 # OTel trace 统计（精确耗时 p50/p95、失败率、用户取消；与 steps 互相校验）
 python -m harvester report-traces --out traces_report.md

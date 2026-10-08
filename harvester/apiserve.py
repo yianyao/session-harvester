@@ -48,9 +48,11 @@ from . import __version__
 from .agent_suggest import build_suggestion_entries
 from .behstats import collect_skill_invocations, skill_summary
 from .cards import validate_cards
+from .dbmeta import db_fingerprint
 from .errstats import collect_errors_from_db, pattern_stats
 from .indexing import search
 from .reader import split_turns
+from .suggestmeta import load_statuses
 from .toolstats import collect_source_stats, collect_stats_from_db
 from .triage import collect_triage
 
@@ -191,7 +193,7 @@ def _schema_fingerprint() -> str:
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
 
 
-def api_meta(con: sqlite3.Connection) -> dict:
+def api_meta(con: sqlite3.Connection, db: Path) -> dict:
     n = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     row = con.execute("SELECT MIN(updated_at), MAX(updated_at) "
                       "FROM sessions").fetchone()
@@ -199,7 +201,9 @@ def api_meta(con: sqlite3.Connection) -> dict:
             "package_version": __version__, "readonly": True,
             "schema_fingerprint": _schema_fingerprint(),
             "sessions": n,
-            "time_min": row[0], "time_max": row[1]}
+            "time_min": row[0], "time_max": row[1],
+            # v0.19 additive：库快照指纹（前端 meta 行与消费方判陈旧用）
+            "db_fingerprint": db_fingerprint(db, con=con)}
 
 
 def api_facets(con: sqlite3.Connection, db: Path) -> dict:
@@ -342,6 +346,8 @@ def api_triage(con: sqlite3.Connection, db: Path,
         s["sample"] = ({"sid": s["sample"][0], "seq": s["sample"][1]}
                        if s["sample"] else None)
     r["api_version"] = API_VERSION
+    # v0.19 additive：库快照指纹
+    r["db_fingerprint"] = db_fingerprint(db, con=con)
     return r
 
 
@@ -364,15 +370,22 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
     return {"api_version": API_VERSION, "meta": meta,
             "by_class": dict(by_class), "by_bucket": dict(by_bucket),
             "by_source": {k: dict(v) for k, v in by_source.items()},
-            "patterns": patterns}
+            "patterns": patterns,
+            "db_fingerprint": db_fingerprint(db, con=con)}
 
 
-def _tool_rows(stats: dict) -> list[dict]:
-    """ToolStats 字典 → 排序后的 JSON 行（失败率优先，与 render_report 同序）。"""
+def _tool_rows(stats: dict, min_calls: int = 0) -> list[dict]:
+    """ToolStats 字典 → 排序后的 JSON 行（失败率优先，与 render_report 同序）。
+    v0.19 additive：given_up/retried（per-tool 失败后续行为）、raw_tools
+    （归一前的原始写法，可追溯）、low_sample（min_calls>0 且 calls<阈值）。
+    """
     order = sorted(stats.items(),
                    key=lambda kv: (-kv[1].fail_rate, -kv[1].calls, kv[0]))
     return [{"tool": t, "calls": st.calls, "success": st.success,
              "error": st.error, "fail_rate": round(st.fail_rate, 4),
+             "given_up": st.given_up, "retried": st.retried,
+             "raw_tools": sorted(st.raw_names),
+             "low_sample": bool(min_calls > 0 and st.calls < min_calls),
              "errors": [{"detail": d, "count": n} for d, n in
                         sorted(st.errors.items(), key=lambda kv: -kv[1])]}
             for t, st in order]
@@ -380,8 +393,10 @@ def _tool_rows(stats: dict) -> list[dict]:
 
 def api_reports_tools(con: sqlite3.Connection, db: Path,
                       params: dict) -> dict:
-    """G1 工具统计：总表 + 重试/放弃 + 按源分布。"""
+    """G1 工具统计：总表 + 重试/放弃 + 按源分布（工具名已归一）。
+    min_calls（v0.19 additive）：样本量阈值，calls<阈值的行 low_sample=true。"""
     days = _since_days(params)
+    min_calls = _int_param(params, "min_calls", 0, 0, 10 ** 6)
     stats, flow = collect_stats_from_db(db, since_days=days, con=con)
     by_source = collect_source_stats(db, since_days=days, con=con)
     src_out = {}
@@ -389,17 +404,21 @@ def api_reports_tools(con: sqlite3.Connection, db: Path,
         src_out[src] = {
             "calls": sum(st.calls for st in tm.values()),
             "errors": sum(st.error for st in tm.values()),
-            "tools": _tool_rows(dict(tm)),
+            "tools": _tool_rows(dict(tm), min_calls=min_calls),
         }
-    return {"api_version": API_VERSION, "tools": _tool_rows(stats),
-            "flow": flow, "by_source": src_out}
+    return {"api_version": API_VERSION,
+            "tools": _tool_rows(stats, min_calls=min_calls),
+            "flow": flow, "by_source": src_out, "min_calls": min_calls,
+            "db_fingerprint": db_fingerprint(db, con=con)}
 
 
 def api_reports_skills(con: sqlite3.Connection, db: Path,
                        params: dict) -> dict:
-    """G4 Skill 行为画像：behstats.skill_summary 口径（G4 权威聚合复用）。"""
+    """G4 Skill 行为画像：behstats.skill_summary 口径（G4 权威聚合复用）。
+    min_calls（v0.19 additive）：样本量阈值，calls<阈值的行 low_sample=true。"""
     invocations = collect_skill_invocations(db, con=con)
     days = _since_days(params)
+    min_calls = _int_param(params, "min_calls", 0, 0, 10 ** 6)
     if days is not None:
         cutoff = _days_cutoff(days)
         invocations = [i for i in invocations if (i["ts"] or "") >= cutoff]
@@ -407,33 +426,47 @@ def api_reports_skills(con: sqlite3.Connection, db: Path,
     skills = [{"skill": name, "calls": d["calls"], "sids": d["sids"],
                "sources": d["sources"], "ok": d["ok"], "err": d["err"],
                "no_result": d["no_result"],
+               "low_sample": bool(min_calls > 0 and d["calls"] < min_calls),
                "args_samples": d["args_samples"], "chains": d["chains"],
                "anchors": d["anchors"]}
               for name, d in sorted(summary.items(),
                                     key=lambda kv: -kv[1]["calls"])]
     return {"api_version": API_VERSION,
-            "n_invocations": len(invocations), "skills": skills}
+            "n_invocations": len(invocations), "skills": skills,
+            "min_calls": min_calls,
+            "db_fingerprint": db_fingerprint(db, con=con)}
 
 
 def api_reports_agents(con: sqlite3.Connection, db: Path,
-                       params: dict) -> dict:
-    """G2 建议条目（结构化）：agent_suggest.build_suggestion_entries 复用。"""
+                       params: dict, meta_db: Path | None = None) -> dict:
+    """G2 建议条目（结构化）：agent_suggest.build_suggestion_entries 复用。
+    v0.19 additive：每条 entries 带 unresolved_count/owner；status 取自
+    独立 meta 库（suggestion_status 表，key=title），未记录默认 pending。
+    排序口径：unresolved_count 降序 → total 降序（未解决优先）；
+    待修清单 = unresolved_count>=1，自愈条目（=0）由消费方降级"观察区"。"""
     errors, meta = collect_errors_from_db(db, since_days=_since_days(params),
                                           con=con)
     min_count = _int_param(params, "min_count", 3, 1, 100)
     max_items = _int_param(params, "max_items", 15, 1, 50)
     built = build_suggestion_entries(errors, min_count=min_count,
                                      max_items=max_items)
+    statuses = load_statuses(meta_db)
     entries = [{"title": e["title"], "body": e["body"], "total": e["total"],
+                "unresolved_count": e["unresolved_count"],
+                "owner": e["owner"],
+                "status": statuses.get(e["title"], "pending"),
                 "samples": _samples_json(e["samples"])}
                for e in built["entries"]]
     leftover = [{"pattern": pat, "class": d["class"], "count": d["count"],
+                 "given_up": d.get("given_up", 0),
                  "tools": sorted(d["tools"]),
+                 "status": statuses.get(pat, "pending"),
                  "samples": _samples_json(d["samples"][:3])}
                 for pat, d in built["leftover"][:20]]
     return {"api_version": API_VERSION, "meta": meta,
             "min_count": min_count, "entries": entries,
-            "leftover": leftover}
+            "leftover": leftover,
+            "db_fingerprint": db_fingerprint(db, con=con)}
 
 
 def api_cards(con: sqlite3.Connection, db: Path,
@@ -449,13 +482,15 @@ def api_cards(con: sqlite3.Connection, db: Path,
         raise FileNotFoundError(f"cards 目录不存在: {root}")
     results, summary = validate_cards(root, db, con=con)
     return {"api_version": API_VERSION, "root": str(root),
-            "summary": summary, "cards": results}
+            "summary": summary, "cards": results,
+            "db_fingerprint": db_fingerprint(db, con=con)}
 
 
 # ---------- HTTP 层（薄壳） ----------
 
 def make_handler(db: Path, token: str | None,
-                 cards_root: Path | None = None):
+                 cards_root: Path | None = None,
+                 suggestions_meta: Path | None = None):
     """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。"""
 
     class ApiHandler(BaseHTTPRequestHandler):
@@ -511,7 +546,7 @@ def make_handler(db: Path, token: str | None,
                         self._json({"error": "sid 不存在"}, 404)
                     return
                 if path == "/api/meta":
-                    self._json(api_meta(con))
+                    self._json(api_meta(con, db))
                 elif path == "/api/facets":
                     self._json(api_facets(con, db))
                 elif path == "/api/sessions":
@@ -525,7 +560,8 @@ def make_handler(db: Path, token: str | None,
                 elif path == "/api/reports/skills":
                     self._json(api_reports_skills(con, db, qs))
                 elif path == "/api/reports/agents":
-                    self._json(api_reports_agents(con, db, qs))
+                    self._json(api_reports_agents(con, db, qs,
+                                                  meta_db=suggestions_meta))
                 elif path == "/api/cards":
                     try:
                         self._json(api_cards(con, db, cards_root, qs))
@@ -551,7 +587,8 @@ def make_handler(db: Path, token: str | None,
 
 
 def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
-        token: str | None = None, cards_root: Path | None = None) -> int:
+        token: str | None = None, cards_root: Path | None = None,
+        suggestions_meta: Path | None = None) -> int:
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
@@ -573,7 +610,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
         print(f"[api-serve] 警告: --cards-root 目录不存在: {cards_root}"
               "（/api/cards 将返回 404）", file=sys.stderr)
     srv = ThreadingHTTPServer((host, port), make_handler(db, token,
-                                                         cards_root))
+                                                         cards_root,
+                                                         suggestions_meta))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
     print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "
