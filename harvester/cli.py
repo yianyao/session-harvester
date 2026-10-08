@@ -456,6 +456,19 @@ def cmd_report_errors(args) -> int:
     return 0
 
 
+def cmd_report_chains(args) -> int:
+    """工具链失败翼报告（P2-1）：长回合/连击/循环/空转/高步 Top N。"""
+    from .chainstats import collect, render_report
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    d = collect(dbp, since_days=args.since, top=args.top)
+    _emit_report(render_report(d, top=args.top), args)
+    return 0
+
+
 def cmd_suggest_agents(args) -> int:
     """从错误模式生成 AGENTS.md 候选条目（只产出建议文件，不直接改 AGENTS.md）。"""
     from .agent_suggest import build_suggestions
@@ -838,6 +851,17 @@ def main(argv=None) -> int:
                      help="只统计最近 N 天")
     pre.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pre.set_defaults(func=cmd_report_errors)
+
+    prc = sub.add_parser("report-chains",
+                         help="工具链失败翼报告（长回合/同工具连击/"
+                              "序列循环/空转/高步 Top N，steps 表）")
+    prc.add_argument("--db", default="harvester.db", help="索引库路径")
+    prc.add_argument("--since", type=float, default=None, metavar="DAYS",
+                     help="只统计最近 N 天（按 steps.ts，近似口径）")
+    prc.add_argument("--top", type=int, default=10,
+                     help="高步会话 Top N（默认 10）")
+    prc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prc.set_defaults(func=cmd_report_chains)
 
     psa = sub.add_parser("suggest-agents",
                          help="从错误模式生成 AGENTS.md 候选条目"
