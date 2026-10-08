@@ -581,11 +581,40 @@ def api_topic_chain(con: sqlite3.Connection, db: Path, topic_id: str,
     return None
 
 
+def api_keywords(con: sqlite3.Connection, db: Path,
+                 keywords_meta: Path | None, qs: dict) -> dict:
+    """P2-2：n-gram 关键词频次（additive；api_version=1 不动）。
+
+    读 keywords_meta 最新 run；未配置/缺失 → 空表 + hint（降级不炸，
+    对齐 /api/topics 口径）。query: n（档位，默认 2）、limit（默认 50）。
+    """
+    from .kwstats import load_stats
+    try:
+        n = int(qs.get("n", "2"))
+    except ValueError:
+        n = 2
+    try:
+        limit = max(1, min(500, int(qs.get("limit", "50"))))
+    except ValueError:
+        limit = 50
+    d = load_stats(Path(keywords_meta) if keywords_meta else None,
+                   n=n, limit=limit)
+    r = {"api_version": API_VERSION, "n": n, "limit": limit,
+         "rows": d.get("rows", []),
+         "db_fingerprint": db_fingerprint(db, con=con)}
+    if d.get("run"):
+        r["run"] = d["run"]
+    if d.get("hint"):
+        r["hint"] = d["hint"]
+    return r
+
+
 def make_handler(db: Path, token: str | None,
                  cards_root: Path | None = None,
                  suggestions_meta: Path | None = None,
                  topics_meta: Path | None = None,
-                 chain_root: Path | None = None):
+                 chain_root: Path | None = None,
+                 keywords_meta: Path | None = None):
     """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。"""
 
     class ApiHandler(BaseHTTPRequestHandler):
@@ -668,6 +697,8 @@ def make_handler(db: Path, token: str | None,
                                    404)
                     else:
                         self._json(doc)
+                elif path == "/api/keywords":
+                    self._json(api_keywords(con, db, keywords_meta, qs))
                 elif path == "/api/cards":
                     try:
                         self._json(api_cards(con, db, cards_root, qs))
@@ -696,7 +727,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
         token: str | None = None, cards_root: Path | None = None,
         suggestions_meta: Path | None = None,
         topics_meta: Path | None = None,
-        chain_root: Path | None = None) -> int:
+        chain_root: Path | None = None,
+        keywords_meta: Path | None = None) -> int:
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
@@ -721,7 +753,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
                                                          cards_root,
                                                          suggestions_meta,
                                                          topics_meta,
-                                                         chain_root))
+                                                         chain_root,
+                                                         keywords_meta))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
     print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "
