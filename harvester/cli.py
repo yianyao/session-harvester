@@ -574,26 +574,82 @@ def cmd_topic(args) -> int:
             ev = f"  # {m['evidence']}" if m.get("evidence") else ""
             print(f"- {m['sid']}{ev}")
         return 0
-    if args.cmd == "chain":
+    if args.cmd in ("chain", "pack"):
         dbp = Path(args.db)
         if not dbp.is_file():
             print(f"错误: 索引库不存在: {dbp}", file=sys.stderr)
             return 2
-        chain = title_chain(meta, args.id_, dbp)
-        text = render_title_chain(chain)
+        from .topics import build_topic_packet, render_timeline, timeline
+        level = getattr(args, "level", "title") or "title"
+        max_chars = getattr(args, "max_chars", None)
+        adb = (Path(args.artifacts_meta)
+               if getattr(args, "artifacts_meta", None) else None)
+        if args.cmd == "chain":
+            d = timeline(meta, args.id_, db=dbp, level=level,
+                         sid=args.sid, artifacts_db=adb,
+                         max_chars=max_chars)
+            text = render_timeline(d)
+            if args.out:
+                out = Path(args.out)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text, encoding="utf-8", newline="\n")
+                print(f"[topic] 链产物已写入: {out}", file=sys.stderr)
+            else:
+                print(text)
+            n_rows = len(d.get("rows") or [])
+            print(f"[topic] {level} 档 {n_rows} 条"
+                  f"｜未命中 {len(d.get('missing') or [])}",
+                  file=sys.stderr)
+            return 0
+        # pack：主题蒸馏包（复用 draft 分层预算）
+        packet = build_topic_packet(dbp, meta, args.id_, level=level,
+                                    sid=args.sid, artifacts_db=adb,
+                                    max_chars=max_chars)
         if args.out:
             out = Path(args.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(text, encoding="utf-8", newline="\n")
-            print(f"[topic] 链产物已写入: {out}", file=sys.stderr)
+            out.write_text(packet, encoding="utf-8", newline="\n")
+            print(f"[topic] 蒸馏包已写入: {out}（{level} 档，"
+                  f"{len(packet)} 字符）", file=sys.stderr)
         else:
-            print(text)
-        print(f"[topic] 演进链 {len(chain['rows'])} 行｜月度 "
-              f"{len(chain['monthly'])}｜未命中 {len(chain['missing'])}",
-              file=sys.stderr)
+            print(packet)
         return 0
     print("错误: 未知子命令", file=sys.stderr)
     return 2
+
+
+def cmd_artifacts(args) -> int:
+    """产物提取（T0-②，v0.22）：独立 meta 库 artifacts_meta.db。"""
+    from .artifacts import ensure_artifacts_db, extract_session, show_artifacts
+    meta = ensure_artifacts_db(Path(args.meta))
+    if args.cmd == "extract":
+        dbp = Path(args.db)
+        if not dbp.is_file():
+            print(f"错误: 索引库不存在: {dbp}", file=sys.stderr)
+            return 2
+        try:
+            n = extract_session(meta, dbp, args.sid)
+        except NotImplementedError as e:
+            print(f"错误: {e}", file=sys.stderr)
+            return 2
+        except KeyError as e:
+            print(f"错误: {e}", file=sys.stderr)
+            return 2
+        print(f"[artifacts] {args.sid} 提取 {n} 条 Write/Edit 记录")
+        return 0
+    # show：版本对照预览
+    rows = show_artifacts(meta, args.sid, limit=args.limit)
+    if not rows:
+        print(f"（{args.sid} 无产物提取记录；先跑 "
+              f"`python -m harvester artifacts extract --sid {args.sid}`）")
+        return 0
+    for r in rows:
+        old = (r["old_text"] or "（创建）")[:120]
+        new = (r["new_text"] or "")[:120]
+        print(f"#{r['seq']} [{r['ts'] or '-'}] {r['tool']} {r['file_path']}")
+        print(f"  旧: {old}")
+        print(f"  新: {new}")
+    return 0
 
 
 def cmd_triage(args) -> int:
@@ -814,9 +870,9 @@ def main(argv=None) -> int:
 
     ptp = sub.add_parser(
         "topic",
-        help="主题注册表（T1）：register/add/remove/list/show/chain")
+        help="主题注册表（T1/T2）：register/add/remove/list/show/chain/pack")
     ptp.add_argument("cmd", choices=["register", "add", "remove", "list",
-                                     "show", "chain"])
+                                     "show", "chain", "pack"])
     ptp.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
     ptp.add_argument("--name", help="register：主题名称")
@@ -825,11 +881,32 @@ def main(argv=None) -> int:
     ptp.add_argument("--sids", help="add：逗号分隔成员 sid 列表")
     ptp.add_argument("--evidence", default="",
                      help="add：成员证据说明（如关键词命中口径）")
-    ptp.add_argument("--sid", help="remove：要移除的成员 sid")
+    ptp.add_argument("--sid", help="remove/fine/artifact 档：成员 sid")
     ptp.add_argument("--db", default="harvester.db",
-                     help="chain：索引库路径（只读）")
-    ptp.add_argument("--out", help="chain：产物输出路径（缺省打印）")
+                     help="chain/pack：索引库路径（只读）")
+    ptp.add_argument("--out", help="chain/pack：产物输出路径（缺省打印）")
+    ptp.add_argument("--level", default="title",
+                     choices=["title", "coarse", "mid", "fine", "artifact"],
+                     help="chain/pack 分层：title(极粗~2K)/coarse(粗~10K)/"
+                          "mid(中~30K)/fine/artifact（后两档按需，须 --sid）")
+    ptp.add_argument("--artifacts-meta", default="artifacts_meta.db",
+                     help="artifact 档产物 meta 库路径")
+    ptp.add_argument("--max-chars", type=int, default=None,
+                     help="覆盖该档默认字符预算")
     ptp.set_defaults(func=cmd_topic)
+
+    par = sub.add_parser(
+        "artifacts",
+        help="产物提取（T0-②）：Write/Edit args 回源提取 → artifacts_meta.db")
+    par.add_argument("cmd", choices=["extract", "show"])
+    par.add_argument("--sid", required=True, help="会话 sid（source:session_id）")
+    par.add_argument("--meta", default="artifacts_meta.db",
+                     help="产物 meta 库路径（默认 artifacts_meta.db）")
+    par.add_argument("--db", default="harvester.db",
+                     help="extract：索引库路径（只读，校验 sid 存在）")
+    par.add_argument("--limit", type=int, default=None,
+                     help="show：最多展示条数")
+    par.set_defaults(func=cmd_artifacts)
 
     ptt = sub.add_parser(
         "triage",
