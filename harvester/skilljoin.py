@@ -12,10 +12,11 @@ chain 时间线锚点（stage → {sid, turn} 节点）× skill 调用锚点
 2. 时间窗 join：非成员会话的调用，ts 落在 stage span（含尾日，即
    尾日+1天为界）+ margin 天内 → 归该 stage。
 
-实测背景（T4 开工探查）：「叙事节奏」55 成员全为导出型源，成员内
-skill 调用为 0；创作推进的 skill 使用（写作理论链）在 WorkBuddy 本体
-会话——时间窗 join 是当前数据形态的主通道。成员内 join 仍保留：换
-主题（含 workbuddy-transcript 成员）或未来源升级后即生效，不写死。
+通用性（用户红线）：本模块对任意 chain × 任意 skill 通用，不写死
+任何主题名/会话/skill 名——chain 与 skill 全部由 CLI 参数传入。
+T4 开工探查（仅实测示例）：「叙事节奏」55 成员全为导出型源，成员内
+skill 调用为 0；时间窗 join 是该数据形态的主通道。成员内 join 仍
+保留：换主题（含 workbuddy-transcript 成员）或未来源升级后即生效。
 
 "贡献了什么/拖了后腿"的语义判定是 LLM 工作：本模块只产确定性交叉表
 （含锚点回链），语义报告由 Agent 消费交叉表另行出具、交用户复核
