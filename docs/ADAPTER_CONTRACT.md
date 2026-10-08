@@ -67,6 +67,22 @@
 是本文件 DB schema 的消费方冻结清单。改表时必须同步该清单，否则
 api-serve 启动自检会 fail loud（设计如此，防静默 schema 漂移）。
 
+**messages.text / messages.raw 读写契约（v0.22 T0 起，T 轨硬约束）**：
+`messages.text` 列是 bigram 索引改写文本（实测 6079 条 user 消息为
+"又来 来了 ！"形态），**原文只存在于 `raw`**。一切统计、蒸馏、引文核对、
+产物提取一律 **raw 优先、text 兜底**（`(r["raw"] if r["raw"] else r["text"])`，
+既定实现：`apiserve._session_messages`、`cards._session_content`）；禁止
+新代码直接对 text 列做词频/相似度/子串判断。防回归测试：
+`tests/test_v22_t0_contract.py`（text 为干扰文本时，读取路径产物必须只含
+raw 内容）。
+
+**T 轨锚点格式（v0.22 起）**：跨会话时间线/思维链的节点锚点统一为
+`{sid, turn, seq?}`——sid 为索引库 `sessions.sid`（`source:session_id`）；
+turn 按 `reader.split_turns` 权威口径（user 消息开新回合，前置 note 归
+第一回合；messages 表无 turn 存储列，由 rowid 序推导）；seq 为回合内
+消息序（可选精度）。凡产出锚点的新代码必须与 `split_turns` 同口径推导，
+禁止自造第二套回合切分。
+
 ## 2. 适配器契约（采集器必须遵守）
 
 新增/重写一个采集器，必须：

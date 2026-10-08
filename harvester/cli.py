@@ -538,6 +538,64 @@ def cmd_cards_new(args) -> int:
     return 0
 
 
+def cmd_topic(args) -> int:
+    """主题注册表（T1 MVP，v0.22）：独立 meta 库 topics_meta.db。"""
+    from .topics import (add_members, list_topics, register_topic,
+                         remove_member, render_title_chain, show_topic,
+                         title_chain)
+    meta = Path(args.meta)
+    if args.cmd == "register":
+        kws = [k.strip() for k in (args.keywords or "").split(",")
+               if k.strip()]
+        tid = register_topic(meta, args.name, keywords=kws)
+        print(f"[topic] 已注册: {tid} {args.name}")
+        return 0
+    if args.cmd == "add":
+        sids = [s.strip() for s in (args.sids or "").split(",") if s.strip()]
+        n = add_members(meta, args.id_, sids,
+                        evidence=args.evidence or "")
+        print(f"[topic] {args.id_} 新增成员 {n} 个（重复幂等跳过）")
+        return 0
+    if args.cmd == "remove":
+        remove_member(meta, args.id_, args.sid)
+        print(f"[topic] {args.id_} 移除成员 {args.sid}")
+        return 0
+    if args.cmd == "list":
+        for t in list_topics(meta):
+            print(f"- {t['id']}  {t['name']}  成员 {t['members']}  "
+                  f"关键词 {('、'.join(t['keywords'])) or '（无）'}")
+        return 0
+    if args.cmd == "show":
+        d = show_topic(meta, args.id_)
+        print(f"id: {d['id']}\nname: {d['name']}\n"
+              f"keywords: {d['keywords']}\ncreated: {d['created']}\n"
+              f"members ({len(d['members'])}):")
+        for m in d["members"]:
+            ev = f"  # {m['evidence']}" if m.get("evidence") else ""
+            print(f"- {m['sid']}{ev}")
+        return 0
+    if args.cmd == "chain":
+        dbp = Path(args.db)
+        if not dbp.is_file():
+            print(f"错误: 索引库不存在: {dbp}", file=sys.stderr)
+            return 2
+        chain = title_chain(meta, args.id_, dbp)
+        text = render_title_chain(chain)
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic] 链产物已写入: {out}", file=sys.stderr)
+        else:
+            print(text)
+        print(f"[topic] 演进链 {len(chain['rows'])} 行｜月度 "
+              f"{len(chain['monthly'])}｜未命中 {len(chain['missing'])}",
+              file=sys.stderr)
+        return 0
+    print("错误: 未知子命令", file=sys.stderr)
+    return 2
+
+
 def cmd_triage(args) -> int:
     """蒸馏队列（T1 确定性初筛）：机器排队，人判断，draft 蒸馏包喂 Agent 草稿（T2）。"""
     from .triage import collect_triage, render_triage
@@ -753,6 +811,25 @@ def main(argv=None) -> int:
                           "（默认 0=不标）")
     prs.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     prs.set_defaults(func=cmd_report_skill)
+
+    ptp = sub.add_parser(
+        "topic",
+        help="主题注册表（T1）：register/add/remove/list/show/chain")
+    ptp.add_argument("cmd", choices=["register", "add", "remove", "list",
+                                     "show", "chain"])
+    ptp.add_argument("--meta", default="topics_meta.db",
+                     help="主题 meta 库路径（默认 topics_meta.db）")
+    ptp.add_argument("--name", help="register：主题名称")
+    ptp.add_argument("--keywords", help="register：逗号分隔关键词")
+    ptp.add_argument("--id", dest="id_", help="add/remove/show/chain：主题 id")
+    ptp.add_argument("--sids", help="add：逗号分隔成员 sid 列表")
+    ptp.add_argument("--evidence", default="",
+                     help="add：成员证据说明（如关键词命中口径）")
+    ptp.add_argument("--sid", help="remove：要移除的成员 sid")
+    ptp.add_argument("--db", default="harvester.db",
+                     help="chain：索引库路径（只读）")
+    ptp.add_argument("--out", help="chain：产物输出路径（缺省打印）")
+    ptp.set_defaults(func=cmd_topic)
 
     ptt = sub.add_parser(
         "triage",
