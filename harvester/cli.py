@@ -22,8 +22,10 @@
       错误三分类（env/tool_interface/context）+ 开场/中途/收尾分桶（G2）
   python -m harvester report-skill [--db] [--skill <名>] [--out report.md]
       Skill 行为画像：按 skill 聚合调用/触发任务/调用后行为链（G4）
-  python -m harvester suggest-agents [--db] [--min-count 3] [--out 文件]
+  python -m harvester suggest-agents [--db] [--min-count 3] [--out 文件] [--meta 路径]
       从错误模式生成 AGENTS.md 候选条目（建议池，人工审阅后并入）（G2 闭环）
+  python -m harvester suggest-status --meta 路径 --key <key> --status pending|adopted|rejected
+      建议池审阅结论落库（独立 meta 库 suggestion_status 表，不碰采集库）
   python -m harvester triage [--db] [--since 7d] [--cards-root 目录] [--min-count 2] [--out 文件]
   python -m harvester draft --sid <sid> [--type pitfall] [--out 文件] [--max-chars 24000]
       蒸馏队列：新会话确定性初筛（新错误pattern/旧坑重现/Skill行为链/高信号会话）
@@ -51,6 +53,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -360,7 +363,9 @@ def cmd_api_serve(args) -> int:
     from .apiserve import run
     return run(Path(args.db), port=args.port, host=args.host,
                token=args.token,
-               cards_root=Path(args.cards_root) if args.cards_root else None)
+               cards_root=Path(args.cards_root) if args.cards_root else None,
+               suggestions_meta=Path(args.suggestions_meta)
+               if args.suggestions_meta else None)
 
 
 def cmd_report_tools(args) -> int:
@@ -450,6 +455,7 @@ def cmd_suggest_agents(args) -> int:
     """从错误模式生成 AGENTS.md 候选条目（只产出建议文件，不直接改 AGENTS.md）。"""
     from .agent_suggest import build_suggestions
     from .errstats import collect_errors_from_db
+    from .suggestmeta import load_statuses
     dbp = Path(args.db)
     if not dbp.is_file():
         print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
@@ -459,8 +465,9 @@ def cmd_suggest_agents(args) -> int:
     if not errors:
         print("steps 表无错误记录，无建议可产出。")
         return 0
+    statuses = load_statuses(Path(args.meta)) if args.meta else None
     content = build_suggestions(errors, min_count=args.min_count,
-                                max_items=args.max)
+                                max_items=args.max, statuses=statuses)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(content, encoding="utf-8", newline="\n")
@@ -478,8 +485,21 @@ def cmd_report_skill(args) -> int:
               file=sys.stderr)
         return 2
     invocations = collect_skill_invocations(dbp)
-    _emit_report(render_skill_report(invocations, skill_filter=args.skill),
+    _emit_report(render_skill_report(invocations, skill_filter=args.skill,
+                                     min_calls=args.min_calls),
                  args)
+    return 0
+
+
+def cmd_suggest_status(args) -> int:
+    """建议池状态落库（suggestion_status 表，独立 meta 库，不碰采集库）。"""
+    from .suggestmeta import set_status
+    try:
+        set_status(Path(args.meta), args.key, args.status)
+    except ValueError as e:
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    print(f"已记录: {args.key} -> {args.status}（{args.meta}）")
     return 0
 
 
@@ -568,6 +588,17 @@ def cmd_draft(args) -> int:
 
 
 def _emit_report(report: str, args) -> None:
+    """报告统一出口：库快照产物头（v0.19）+ 落盘/打印。
+    产物头仅在 args 带 --db 且库文件存在时写入（report-traces 等
+    非库报告自动跳过）；只加行不改报告正文。"""
+    dbp = getattr(args, "db", None)
+    if dbp and Path(dbp).is_file():
+        from .dbmeta import db_fingerprint, fingerprint_line
+        try:
+            report = (f"> {fingerprint_line(db_fingerprint(Path(dbp)))}\n\n"
+                      + report)
+        except sqlite3.Error:
+            pass  # 指纹失败不阻断报告产出
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -676,7 +707,22 @@ def main(argv=None) -> int:
     psa.add_argument("--max", type=int, default=15, help="最多条目数")
     psa.add_argument("--out", default="agents_suggestions.md",
                      help="建议文件输出路径")
+    psa.add_argument("--meta", default=None,
+                     help="建议状态 meta 库路径（suggestion_status 表；"
+                          "缺省不读状态，全部按 pending 渲染）")
     psa.set_defaults(func=cmd_suggest_agents)
+
+    pss = sub.add_parser("suggest-status",
+                         help="建议池状态落库（pending/adopted/rejected，"
+                              "写独立 meta 库，不碰采集库）")
+    pss.add_argument("--meta", required=True, help="meta 库路径")
+    pss.add_argument("--key", required=True,
+                     help="建议条目 key（建议池条目=title，"
+                          "待人工归因模式=pattern）")
+    pss.add_argument("--status", required=True,
+                     choices=["pending", "adopted", "rejected"],
+                     help="审阅结论")
+    pss.set_defaults(func=cmd_suggest_status)
 
     pcd = sub.add_parser("cards",
                          help="知识卡片校验（§8 frontmatter 规范 + 锚点有效性）")
@@ -702,6 +748,9 @@ def main(argv=None) -> int:
         help="Skill 行为画像（G4）：按 skill 聚合调用/触发任务/行为链")
     prs.add_argument("--db", default="harvester.db", help="索引库路径")
     prs.add_argument("--skill", help="只看这一个 skill（输出全量调用深挖清单）")
+    prs.add_argument("--min-calls", dest="min_calls", type=int, default=0,
+                     help="样本量阈值：calls<阈值的 skill 标 low-sample"
+                          "（默认 0=不标）")
     prs.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     prs.set_defaults(func=cmd_report_skill)
 
@@ -805,6 +854,10 @@ def main(argv=None) -> int:
     pap.add_argument("--cards-root", dest="cards_root", default=None,
                      help="知识卡片目录（可选；启用 /api/cards 校验端点，"
                           "访问面启动时钉死，不接受 URL 指定目录）")
+    pap.add_argument("--suggestions-meta", dest="suggestions_meta",
+                     default=None,
+                     help="建议状态 meta 库路径（可选；启用 /api/reports/"
+                          "agents 的 status 字段）")
     pap.set_defaults(func=cmd_api_serve)
 
     args = p.parse_args(argv)

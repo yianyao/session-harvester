@@ -159,15 +159,20 @@ def skill_summary(invocations: list[dict]) -> dict[str, dict]:
 
 
 def render_skill_report(invocations: list[dict],
-                        skill_filter: str | None = None) -> str:
-    """渲染 Markdown：总览 + 每技能画像；--skill 时渲染全量调用清单（深挖）。"""
+                        skill_filter: str | None = None,
+                        min_calls: int = 0) -> str:
+    """渲染 Markdown：总览 + 每技能画像；--skill 时渲染全量调用清单（深挖）。
+    min_calls（v0.19 additive）：样本量阈值，calls < min_calls 的 skill 行
+    标记 low-sample（小样本，结论仅供观察不进决策）。0 = 不标。"""
     if skill_filter:
         invocations = [i for i in invocations if i["skill"] == skill_filter]
         if not invocations:
             return (f"# Skill 行为画像：{skill_filter}\n\n"
                     "steps 表中没有该 skill 的调用记录。\n")
         lines = [f"# Skill 行为画像：{skill_filter}（深挖清单）", "",
-                 f"共 {len(invocations)} 次调用。以下每行可交给 Agent 按"
+                 f"共 {len(invocations)} 次调用"
+                 + ("（low-sample）" if 0 < min_calls > len(invocations) else "")
+                 + "。以下每行可交给 Agent 按"
                  "锚点读取原会话，蒸馏该 skill 的决策过程与行为模式（→ 卡片）。", ""]
         for inv in invocations:
             chain = "→".join(inv["after_tools"]) or "（无后续工具步）"
@@ -188,11 +193,14 @@ def render_skill_report(invocations: list[dict],
         f"｜失败 {sum(d['err'] for d in summary.values())}"
         f"｜无结果 {sum(d['no_result'] for d in summary.values())}", "",
         "- 数据源：steps 表的 Skill/skill/skill_read_active 步骤；"
-        "状态与紧随的 result 配对。'行为链'=调用后前 8 步工具序列（相邻去重）。", "",
+        "状态与紧随的 result 配对。'行为链'=调用后前 8 步工具序列（相邻去重）。"
+        + (f"low-sample 阈值 = {min_calls} 次调用。" if min_calls > 0 else ""),
+        "",
     ]
     for name in sorted(summary, key=lambda k: -summary[k]["calls"]):
         d = summary[name]
-        lines += [f"## {name}", ""]
+        low = "（low-sample，样本不足，仅供观察）" if 0 < min_calls > d["calls"] else ""
+        lines += [f"## {name}{low}", ""]
         lines.append(f"- 调用 {d['calls']} 次 / {d['sids']} 个会话"
                      f"（来源: {', '.join(d['sources'])}）｜成功 {d['ok']}"
                      f" 失败 {d['err']} 无结果 {d['no_result']}")

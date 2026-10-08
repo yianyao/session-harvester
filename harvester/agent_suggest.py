@@ -21,52 +21,66 @@ import re
 
 from .errstats import pattern_stats
 
-# 模板表：正则（对归一模式或错误原文匹配）→ (规则句, 做法说明)。
+# 模板表：正则（对归一模式或错误原文匹配）→ (规则句, 做法说明, owner)。
 # 每条模板都源自本库 steps 表真实踩过的错误，不是通用建议。
-_TEMPLATES: list[tuple[str, str, str]] = [
+# owner（v0.19 additive）：建议的修复责任方，三值——
+#   harness=上游 harness 本身（自动重试/自动重建/分页等平台能力）；
+#   tool=工具实现本身；workflow=使用方（agent/人）改用法即可消。
+_TEMPLATES: list[tuple[str, str, str, str]] = [
     (r"tool_permission_revoked",
      "权限被撤销的工具不要原地重试。",
      "出现 tool_permission_revoked（read/ls/find 等）说明用户已撤销授权，"
-     "重试只会重复失败；先向用户说明意图请求重新授权，或改走无权限要求的路径。"),
+     "重试只会重复失败；先向用户说明意图请求重新授权，或改走无权限要求的路径。",
+     "harness"),
     (r"sandbox",
      "沙箱拦截不等于命令有错。",
      "sandbox-center 拦截时先判断命令是否真的需要越界；确需越界时显式申请"
-     "（dangerouslyDisableSandbox 走用户批准），否则改写为无越界写法。"),
+     "（dangerouslyDisableSandbox 走用户批准），否则改写为无越界写法。",
+     "harness"),
     (r"Win32|SetNamedSecurityInfo",
      "写 ACL 失败是环境权限问题，不要反复重试同一命令。",
      "grantWrite 报 Win32 5（拒绝访问）时先检查目录所有权/占用，"
-     "或换目标路径；同一命令重复撞墙只会刷失败率。"),
+     "或换目标路径；同一命令重复撞墙只会刷失败率。",
+     "harness"),
     (r"fetch failed|socket hang up",
      "网络类失败先重试一次再下结论。",
      "web fetch / socket 报错多为瞬时故障（代理/网络抖动），"
-     "直接放弃会把假阴性当结论留档。"),
+     "直接放弃会把假阴性当结论留档。",
+     "harness"),
     (r"browser_instance_unknown|browser_cancelled",
      "browser 工具报实例失效时先重建实例再继续。",
      "browser_instance_unknown / browser_cancelled 说明浏览器会话已失效，"
-     "重试原调用无意义。"),
+     "重试原调用无意义。",
+     "harness"),
     (r"exceeds maximum allowed tokens",
      "工具输出超限先收窄再取，不要一次性拉全量。",
      "result exceeds maximum allowed tokens 说明返回体过大被宿主截断；"
-     "加 head_limit/分页/offset，或让结果落盘后按需读片段。"),
+     "加 head_limit/分页/offset，或让结果落盘后按需读片段。",
+     "harness"),
     (r"String to replace not found|old_string|file changed since|"
      r"not been read|Found N matches|replace_all",
      "Edit/Write 前必须先 Read 目标文件最新内容。",
      "old_string 不匹配 / file changed since read / not been read / "
-     "多处匹配都源于拿着过期记忆改文件；先重读，多处匹配用 replace_all。"),
+     "多处匹配都源于拿着过期记忆改文件；先重读，多处匹配用 replace_all。",
+     "workflow"),
     (r"exceeds maxDepth",
      "子代理嵌套深度受 maxDepth 限制，深任务改平铺编排。",
-     "subagent depth exceeds maxDepth 时不要继续嵌套，回到主代理分层调度。"),
+     "subagent depth exceeds maxDepth 时不要继续嵌套，回到主代理分层调度。",
+     "harness"),
     (r"out of range",
      "read 的 offset 要先确认文件行数，不要盲猜。",
-     "offset out of range 说明行号是猜的；先读尾部或用检索定位再取段。"),
+     "offset out of range 说明行号是猜的；先读尾部或用检索定位再取段。",
+     "workflow"),
     (r"file no longer exists|File not found",
      "引用记忆里的旧路径前先确认目标仍在。",
      "file no longer exists / File not found 说明目标已被删除或改名；"
-     "写/改前先探存在性，失败后不要用同一路径重试。"),
+     "写/改前先探存在性，失败后不要用同一路径重试。",
+     "workflow"),
     (r"skill_asset_invalid",
      "技能包引用的资产先校验存在性再运行。",
      "skill_asset_invalid 说明技能声明的资产路径失效；"
-     "技能安装/更新后先跑资产校验。"),
+     "技能安装/更新后先跑资产校验。",
+     "workflow"),
 ]
 
 
@@ -78,69 +92,99 @@ def _hits(creg: re.Pattern, pattern: str, samples: list) -> bool:
 
 
 def build_suggestion_entries(errors: list[dict], min_count: int = 3,
-                             max_items: int = 15) -> dict:
+                             max_items: int = 15,
+                             statuses: dict[str, str] | None = None) -> dict:
     """结构化建议构建（build_suggestions 的纯数据层，API 直接消费）。
 
+    statuses（v0.19 additive，可选）：{key: status} 映射（key=title，
+    来自独立 meta 库 suggestion_status 表）；缺省/未记录 → "pending"。
     返回 {"entries": [...], "leftover": [...], "min_count": n}：
-    - entries 按 total 降序、截 max_items，每项 {title, body, total,
-      samples: [(sid, seq, raw)]}；
+    - entries 每项 {title, body, total, owner, unresolved_count,
+      samples: [(sid, seq, raw)]}；按 unresolved_count 降序、再按 total
+      降序排序（v0.19：未解决维度优先——待修清单是 unresolved_count>=1 的
+      条目，unresolved_count==0 的自愈条目降级为"观察区"，由消费方拆分），
+      截 max_items；
     - leftover 为未命中任何模板的 (pattern, stats) 列表，按 count 降序
-      （stats 含 class/count/tools(set)/samples）——"待人工归因"节与
-      前端报告页均消费此结构。
+      （stats 含 class/count/tools(set)/samples/given_up）——"待人工归因"
+      节与前端报告页均消费此结构。
     """
     stats = pattern_stats(errors)
     entries: list[dict] = []
     consumed: set[str] = set()
-    for reg, title, body in _TEMPLATES:
+    for reg, title, body, owner in _TEMPLATES:
         creg = re.compile(reg, re.IGNORECASE)
-        total, samples = 0, []
+        total, unresolved, samples = 0, 0, []
         for pat, d in stats.items():
             if _hits(creg, pat, d["samples"]):
                 total += d["count"]
+                unresolved += d.get("given_up", 0)
                 consumed.add(pat)
                 samples += d["samples"]
         if total >= min_count and samples:
             entries.append({"title": title, "body": body, "total": total,
+                            "owner": owner, "unresolved_count": unresolved,
+                            "status": (statuses or {}).get(title, "pending"),
                             "samples": samples})
-    entries.sort(key=lambda e: -e["total"])
+    entries.sort(key=lambda e: (-e["unresolved_count"], -e["total"]))
     entries = entries[:max_items]
     leftover = [(pat, d) for pat, d in stats.items() if pat not in consumed]
-    leftover.sort(key=lambda kv: -kv[1]["count"])
+    leftover.sort(key=lambda kv: (-kv[1]["count"], -kv[1].get("given_up", 0)))
     return {"entries": entries, "leftover": leftover, "min_count": min_count}
 
 
 def build_suggestions(errors: list[dict], min_count: int = 3,
-                      max_items: int = 15) -> str:
+                      max_items: int = 15,
+                      statuses: dict[str, str] | None = None) -> str:
     """从归类后的错误生成 AGENTS.md 候选条目 Markdown（数据层见
     build_suggestion_entries；本函数只做渲染，保证两种出口同构）。"""
     built = build_suggestion_entries(errors, min_count=min_count,
-                                     max_items=max_items)
+                                     max_items=max_items, statuses=statuses)
     entries, leftover = built["entries"], built["leftover"]
 
     lines = [
         "# AGENTS.md 条目建议（机器产出，人工审阅后并入）",
         "",
         "> 来源：harvester steps 表错误三分类；每条附真实锚点与原文证据。",
+        "> 口径：未解决 = 错误后同会话同工具无再次调用（放弃）；"
+        "未解决>=1 进待修清单，其余（已自愈）降级观察区。",
         "> 纪律：本文件只是建议池，**不自动写入 AGENTS.md**；并入时按",
         "> AGENTS.md 现有编号顺延，并清理被取代的同类旧条目。",
         "",
     ]
-    if not entries:
-        lines += [f"（无达标模式：所有模板聚合次数均未达到 --min-count "
-                  f"{min_count}。）", ""]
-    for i, e in enumerate(entries, 1):
+    todo = [e for e in entries if e["unresolved_count"] >= 1]
+    watch = [e for e in entries if e["unresolved_count"] == 0]
+    lines += ["## 待修清单（未解决 >= 1，优先处理）", ""]
+    if not todo:
+        lines += [f"（无：所有达标条目均已自愈。）", ""]
+    for i, e in enumerate(todo, 1):
         sid, seq, raw = e["samples"][0]
         raw_short = raw[:100].replace("\n", " ").replace("`", "'")
         lines += [
-            f"{i}. **{e['title']}**",
+            f"{i}. **{e['title']}**（owner: {e['owner']}"
+            f"｜status: {e['status']}）",
             f"   {e['body']}",
-            f"   实测 {e['total']} 次，证据：`{sid}#{seq}`「{raw_short}」",
+            f"   实测 {e['total']} 次｜未解决 {e['unresolved_count']} 次，"
+            f"证据：`{sid}#{seq}`「{raw_short}」",
+            "",
+        ]
+    lines += ["## 观察区（未解决 = 0，已自愈，暂不动 AGENTS.md）", ""]
+    if not watch:
+        lines += ["（无。）", ""]
+    for i, e in enumerate(watch, 1):
+        sid, seq, raw = e["samples"][0]
+        raw_short = raw[:100].replace("\n", " ").replace("`", "'")
+        lines += [
+            f"{i}. **{e['title']}**（owner: {e['owner']}）",
+            f"   实测 {e['total']} 次｜未解决 0 次，"
+            f"证据：`{sid}#{seq}`「{raw_short}」",
             "",
         ]
     if leftover:
         lines += ["## 待人工归因（未命中模板，给证据不给结论）", ""]
         for pat, d in leftover[:10]:
-            lines.append(f"- **x{d['count']}** [{d['class']}] `{pat}`")
+            unsolved = d.get("given_up", 0)
+            lines.append(f"- **x{d['count']}** [{d['class']}] `{pat}`"
+                         + (f"（未解决 {unsolved}）" if unsolved else ""))
             for sid, seq, raw in d["samples"][:2]:
                 lines.append(f"      - `{sid}#{seq}` {raw[:140]}")
         lines.append("")

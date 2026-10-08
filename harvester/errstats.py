@@ -14,6 +14,20 @@
 
 模式归一：把同类错误的差异部分（路径/引号内容/数字）替换为占位符后聚类，
 使 "cannot edit a.md" 与 "cannot edit b.py" 聚成同一模式。
+
+失败后续行为口径定义（v0.19 固化，toolstats/建议池/排行共用，勿再各说各话）：
+- 错误步骤：steps 表 phase='result' 且 status='error' 的行（错误只出现在
+  result 行；phase='call' 行 status 恒为 NULL，统计 calls 时必须过滤）；
+- 重试（retried）：某错误步骤之后，同会话（sid）内同一工具（tool）再次
+  出现 phase='call' 行 → 该错误记为已重试（自愈候选）；
+- 放弃（given_up）：某错误步骤之后，同会话内该工具再无调用 → 记为未解决
+  （unresolved）。given_up = errors - retried；
+- 近似性声明：steps 表无用户轮次边界，"再次调用"不区分是否人为决策；
+  --since_days 截断处跨界的重试对会漏配对（截断使后续 call 不可见，
+  重试被误记为放弃），属已知近似，跨期对比时两侧用同一窗口；
+- 落点：collect_errors_from_db 为每条错误附 resolved 布尔字段；
+  pattern_stats 聚合出每模式 given_up 计数；建议池（agent_suggest）与
+  G1 工具行（toolstats.ToolStats.given_up）消费该维度。
 """
 
 from __future__ import annotations
@@ -113,8 +127,10 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
     """从 steps 表取全部错误步骤并归类。
 
     返回 (errors, meta)：errors 每项含 sid/seq/ts/tool/error/class/pattern/
-    bucket；meta = {"total_steps": n, "error_count": n, "sessions": n,
-    "since": cutoff 或 None}。
+    bucket/resolved；meta = {"total_steps": n, "error_count": n, "sessions": n,
+    "since": cutoff 或 None}。resolved（v0.19 additive）：该错误之后同会话
+    同工具是否有再次调用（True=重试/自愈候选，False=放弃/未解决），口径见
+    模块 docstring。
     --since_days 只统计最近 N 天（ts 为 'YYYY-MM-DD HH:MM:SS' 字符串，
     字典序即时间序）。
     con：外部连接（api-serve 传入 mode=ro + authorizer 连接，使 steps
@@ -138,17 +154,41 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
                 ("error", cutoff)).fetchall()
             total = con.execute(
                 "SELECT COUNT(*) FROM steps WHERE ts>=?", (cutoff,)).fetchone()[0]
+            call_rows = con.execute(
+                "SELECT sid, tool, seq FROM steps WHERE phase='call' AND ts>=? "
+                "ORDER BY sid, seq", (cutoff,)).fetchall()
         else:
             rows = con.execute(
                 "SELECT st.sid, st.seq, st.ts, st.tool, st.error, s.source "
                 "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid "
                 "WHERE st.status=? ORDER BY st.sid, st.seq", ("error",)).fetchall()
             total = con.execute("SELECT COUNT(*) FROM steps").fetchone()[0]
+            call_rows = con.execute(
+                "SELECT sid, tool, seq FROM steps WHERE phase='call' "
+                "ORDER BY sid, seq").fetchall()
         max_seq = dict(con.execute(
             "SELECT sid, MAX(seq) FROM steps GROUP BY sid").fetchall())
     finally:
         if own:
             con.close()
+    # 重试判定索引：sid → {tool: [call seq 升序]}（同一连接内取，守卫约束）
+    calls_by_sid: dict[str, dict[str, list[int]]] = defaultdict(
+        lambda: defaultdict(list))
+    for c in call_rows:
+        calls_by_sid[c["sid"]][c["tool"]].append(c["seq"])
+
+    def _resolved(sid: str, tool: str, seq: int) -> bool:
+        seqs = calls_by_sid.get(sid, {}).get(tool, [])
+        # seqs 升序；二分找是否存在 > seq 的调用
+        lo, hi = 0, len(seqs)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if seqs[mid] > seq:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo < len(seqs)
+
     errors = []
     for r in rows:
         hi = max_seq.get(r["sid"], 0) or 1
@@ -160,6 +200,7 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
             "class": classify_error(r["error"] or ""),
             "pattern": normalize_error(r["error"] or ""),
             "bucket": _bucket(ratio),
+            "resolved": _resolved(r["sid"], r["tool"], r["seq"]),
         })
     meta = {"total_steps": total, "error_count": len(errors),
             "sessions": len({e["sid"] for e in errors}), "since": cutoff}
@@ -167,13 +208,19 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
 
 
 def pattern_stats(errors: list[dict]) -> dict[str, dict]:
-    """按归一模式聚类：pattern → {class, count, tools, samples[(sid,seq,text)]}。"""
+    """按归一模式聚类：pattern → {class, count, tools, samples[(sid,seq,text)],
+    given_up}。given_up（v0.19 additive）：模式内未解决（放弃）次数 =
+    resolved=False 的错误数；旧调用方传入无 resolved 字段的错误时按
+    resolved=True（自愈）处理，不误报未解决。"""
     out: dict[str, dict] = {}
     for e in errors:
         p = out.setdefault(e["pattern"], {
-            "class": e["class"], "count": 0, "tools": set(), "samples": []})
+            "class": e["class"], "count": 0, "tools": set(), "samples": [],
+            "given_up": 0})
         p["count"] += 1
         p["tools"].add(e["tool"])
+        if not e.get("resolved", True):
+            p["given_up"] += 1
         if len(p["samples"]) < 3:
             p["samples"].append((e["sid"], e["seq"], e["error"]))
     return out
@@ -253,7 +300,9 @@ def render_report(errors: list[dict], meta: dict,
         lines.append(f"### {cls}")
         for pat, d in items[:max_detail]:
             tools = "/".join(sorted(d["tools"]))
-            lines.append(f"- **x{d['count']}** [{tools}] `{pat}`")
+            unsolved = d.get("given_up", 0)
+            lines.append(f"- **x{d['count']}** [{tools}] `{pat}`"
+                         + (f"（未解决 {unsolved}）" if unsolved else ""))
             for sid, seq, raw in d["samples"][:2]:
                 lines.append(f"      - `{sid}#{seq}` {raw[:140]}")
         if len(items) > max_detail:

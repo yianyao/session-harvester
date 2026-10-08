@@ -188,6 +188,82 @@ def _anchor_known(sid: str, db: Path | None,
             con.close()
 
 
+def _norm_ws(s: str) -> str:
+    """空白归一（与 view 端锚点定位同思路）：换行/连续空白压成单空格。"""
+    return " ".join(s.split())
+
+
+def _session_content(sid: str, db: Path | None,
+                     con: sqlite3.Connection | None = None) -> str | None:
+    """取锚点会话的全文（messages.raw 优先、退 text，跨源口径与
+    apiserve._session_messages 一致）。会话不在库 → None。"""
+    if con is None:
+        if db is None or not db.is_file():
+            return None
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
+        own = True
+    else:
+        own = False
+    try:
+        row = con.execute("SELECT sid FROM sessions WHERE session_id=? OR sid=?",
+                          (sid, sid)).fetchone()
+        if row is None:
+            return None
+        rows = con.execute("SELECT raw, text FROM messages WHERE sid=? "
+                           "ORDER BY rowid", (row["sid"],)).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        if own:
+            con.close()
+    return "\n".join((r["raw"] if r["raw"] else r["text"]) or "" for r in rows)
+
+
+def _evidence_warnings(fm: dict, warns: list[str], db: Path | None,
+                       con: sqlite3.Connection | None = None
+                       ) -> tuple[int, int]:
+    """引文核对（v0.19 additive，只产警告不改错误判定）：evidence 每行
+    （空白归一后 >=6 字）必须能在 anchors 指向会话的原文中逐字找到；
+    找不到 → 警告（adapter 改写/跨源格式差异可能造成误报，故降为警告）。
+    anchors 的 turn 为 null → 警告（锚点定位精度不足）。
+    返回 (checked, misses)：核对行数与未命中行数（供 summary 汇总）。"""
+    evidence = str(fm.get("evidence") or "")
+    anchors = fm.get("anchors")
+    if not evidence.strip() or not isinstance(anchors, list):
+        return (0, 0)
+    checked = misses = 0
+    cache: dict[str, str | None] = {}
+    for a in anchors:
+        if not isinstance(a, dict):
+            continue
+        if a.get("turn") is None:
+            warns.append(f"锚点 {a.get('session_id')} turn 为 null"
+                         "（定位精度不足，建议补回合号）")
+    lines = [_norm_ws(ln) for ln in evidence.splitlines()]
+    lines = [ln for ln in lines if len(ln) >= 6]
+    sids = [str(a.get("session_id")) for a in anchors
+            if isinstance(a, dict) and a.get("session_id")]
+    if not sids:
+        return (0, 0)
+    corpus = ""
+    for sid in dict.fromkeys(sids):  # 去重保序
+        if sid not in cache:
+            cache[sid] = _session_content(sid, db, con=con)
+        got = cache[sid]
+        if got is None:
+            warns.append(f"锚点 {sid} 会话原文不可得，evidence 未核对")
+            continue
+        corpus += "\n" + _norm_ws(got)
+    for i, ln in enumerate(lines, 1):
+        checked += 1
+        if corpus and ln not in corpus:
+            misses += 1
+            warns.append(f"evidence 第 {i} 行未在锚点会话原文中找到"
+                         "（原文可能经 adapter 改写，请人工复核）")
+    return (checked, misses)
+
+
 def validate_cards(root: Path, db: Path | None = None,
                    con: sqlite3.Connection | None = None
                    ) -> tuple[list[dict], dict]:
@@ -201,6 +277,8 @@ def validate_cards(root: Path, db: Path | None = None,
     n_ok = n_warn = n_err = 0
     anchor_miss = 0
     anchor_checked = 0
+    evidence_checked = 0
+    evidence_misses = 0
     for p in sorted(root.rglob("*.md")):
         if p.name.upper() in ("INDEX.md", "README.md"):
             continue
@@ -219,6 +297,10 @@ def validate_cards(root: Path, db: Path | None = None,
                             errors.append(f"锚点 session_id={sid} 不在索引库")
                         elif known is None:
                             warns.append(f"锚点 {sid} 未能校验（无索引库）")
+                # 引文核对（v0.19 additive）：evidence 必须出自锚点会话原文
+                c, m = _evidence_warnings(fm, warns, db, con=con)
+                evidence_checked += c
+                evidence_misses += m
         rel = str(p.relative_to(root))
         results.append({"path": rel, "errors": errors, "warnings": warns})
         if errors:
@@ -229,7 +311,9 @@ def validate_cards(root: Path, db: Path | None = None,
             n_ok += 1
     summary = {"cards": len(results), "ok": n_ok, "warn": n_warn,
                "error": n_err, "anchor_checked": anchor_checked,
-               "anchor_misses": anchor_miss}
+               "anchor_misses": anchor_miss,
+               "evidence_checked": evidence_checked,
+               "evidence_misses": evidence_misses}
     return results, summary
 
 
@@ -245,7 +329,9 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
         f"- 卡片 {summary['cards']}：通过 {summary['ok']}｜警告 "
         f"{summary['warn']}｜错误 {summary['error']}",
         f"- 锚点校验 {summary['anchor_checked']} 个，"
-        f"未命中索引库 {summary['anchor_misses']} 个", "",
+        f"未命中索引库 {summary['anchor_misses']} 个",
+        f"- 引文核对 {summary.get('evidence_checked', 0)} 行，"
+        f"未命中原文 {summary.get('evidence_misses', 0)} 行", "",
     ]
     for r in results:
         if r["errors"] or r["warnings"]:
