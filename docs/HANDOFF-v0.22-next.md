@@ -8,14 +8,14 @@
 
 ---
 
-## 1. 当前状态（截至 2026-10-08 16:30，head=`cb3c952`）
+## 1. 当前状态（截至 2026-10-08 17:55，head=`9e8ce9b`）
 
 | 项 | 值 |
 |---|---|
-| 后端 head | `cb3c952`（v0.22 T2 完成），已推送 |
-| 前端 head | `443f478` 系（v2.4.1），已推送，本阶段无改动 |
-| 后端测试基线 | **296 例全绿**（246 → 259 → 262 → 269 → 277 → 296） |
-| view 测试基线 | **24 例全绿**（含 render_smoke.js 12 项 H22 断言） |
+| 后端 head | `9e8ce9b`（v0.22 T3 第 1-4 步完成），已推送 |
+| 前端 head | `b085133`（T3-5 主题 tab 完成），已推送 |
+| 后端测试基线 | **316 例全绿**（296 + T3 校验器 16 + T3 API 4） |
+| view 测试基线 | **24 例全绿**（render_smoke.js 31 项断言 = 原 12 + 主题 tab 19） |
 
 ### 已完成任务与提交对照（PLAN §3 顺序）
 
@@ -30,9 +30,12 @@
 | T1 注册表 MVP | `2fa9b4c` | topics_meta.db + topic CLI；叙事节奏 55 会话导入 |
 | T2 五档时间线 | `cb3c952` | topics.timeline 五档 + artifacts.py 提取 MVP + topic pack |
 | P1-1 采纳闭环 | `cb3c952`（状态库） | 7 adopted / 1 rejected 落库 suggestions_meta.db |
+| T3 蒸馏+校验器+API | `9e8ce9b` | chain 长文 7 阶段 30 锚点 + topicchain.py + /api/topics、/api/topic/<id>/chain |
+| T3-5 view 主题 tab | view `b085133` | 三栏（动态主题列表/锚点时间线/chain 文档）+ 分层复制命令，绝不执行 |
 
-**下一步队列**：T3 → P2-1 → T4 → P2-2 → T5；P1-2 / P1-4 可并行插入。
+**下一步队列**：P2-1 → T4 → P2-2 → T5；P1-2 / P1-4 可并行插入。
 （P1-3 在 PLAN 顺序里位于 T1 之后，SOP 无独立节——实施前先到 PLAN §4 确认其范围。）
+（T3 已闭环含用户复核三点裁决，见 H39–H41。）
 
 ## 2. 增量事实台账（H24+，SOP 引用源，勿重复验证）
 
@@ -52,6 +55,10 @@
 | H35 | `.gitignore` 含 `docs/reports/`——报告/时间线/pack 产物只留本地不入库；commit 信息里可提但别 git add | git 提交实测 |
 | H36 | 叙事节奏成员口径=sessions.title 含「节奏」（55 个，H18 评审时点 41，sync 后增长可归因）；聚类粒度用户已裁决=**按技法聚** | topics_meta.db evidence 字段 |
 | H37 | `_budget_join` 对首块超预算也会截断（保底 100 字符）+ 截断提示行（"预算 N 字符内展示 X/Y 条"） | topics.py 实测 |
+| H38 | **H32 修正**：703 条全样本实测——raw 列恒为原文（0 条 bigram）、text 列部分为 bigram（31 条命中）。蒸馏/统计一律 raw 优先（H3 契约不变），H32 "蒸馏读 text 列"的表述作废 | 全样本统计实测 |
+| H39 | **复核裁决①②**（chain 证据口径，用户 2026-10-08 采信）：标题与 turn 摘录可作证据但必须带 {sid,turn} 锚点可链接打开会话；artifact 档无数据时以 user 消息粘贴文本片段佐证演进 | chain 草稿"复核裁决"节 |
+| H40 | **复核裁决③（去重口径）**：会话级 user-raw 字符 bigram Jaccard ≥0.90 判重复（实测 12 对全为同稿重贴/跨端重发），7 簇 10 个重复并入最早代表，55→45；0.80–0.90 边界带 34 对=同阶段迭代，保留；轮级同稿多轮只采首末差异。锚点不迁移（2 个锚点在重复会话上仍可回溯），计数归代表。分析底稿 docs/reports/dedupe-叙事节奏.md（gitignore 本地） | t3_dedupe.py 实测 |
+| H41 | T3 全闭环：chain 草稿（55 members/7 阶段/30 锚点，fm 含 dedup 块）校验通过、正式位 `~/.workbuddy/knowledge/topics/chain-叙事节奏.md` 已同步；view「主题」tab 主题列表**数据驱动**（/api/topics 返回什么渲染什么，绝不写死主题名——用户红线）；链路验收 10 主题/30 节点/404 透传全过 | 端到端冒烟实测 |
 
 ## 3. T3 开工要点（下一任务）
 
@@ -94,8 +101,8 @@
 ## 6. 开工流程
 
 1. 读 PLAN §4（T3 行）→ 旧 HANDOFF（H1–H23 + 红线）→ 本文件 → SOP-T3。
-2. SOP-0 检查单：版本对账（预期 head≥`cb3c952`）+ `python -m unittest discover
-   -s tests`（预期 **296 例 OK**）+ 端口自查。
+2. SOP-0 检查单：版本对账（预期 head≥`9e8ce9b`）+ `python -m unittest discover
+   -s tests`（预期 **316 例 OK**）+ 端口自查。
 3. T3 按 §3 顺序：创作 → 校验器（测试先行）→ API → view → 节律收尾。
 4. 冲突回到 PLAN §0 裁决；§7 用户交互协议继续生效（P1-1/T1 已闭环，T4 的
    skill 选定届时仍需用户指定）。
