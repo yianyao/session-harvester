@@ -29,6 +29,15 @@ except ImportError:  # pragma: no cover
 REQUIRED_TYPES = {"insight", "pitfall", "workflow"}
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
+# v0.21 P0-1（H11）：cards new 脚手架占位符登记处。
+# 新增脚手架占位符必须同步登记（scaffold_card 模板改动时）。
+_PLACEHOLDER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("evidence 含 <粘贴 占位", re.compile(r"<粘贴")),
+    ("字段含 <待补 占位", re.compile(r"<待补")),
+    ("title 为脚手架兜底标题", re.compile(r"^（补标题）$")),
+)
+_BLOCK_LITERAL_RE = re.compile(r"^\|[-+]?$|^>[-+]?$")
+
 
 def _split_top(s: str, sep: str = ",") -> list[str]:
     """按顶层分隔符切分（忽略引号内与 {}/[] 嵌套内的 sep）。"""
@@ -63,6 +72,8 @@ def _split_top(s: str, sep: str = ",") -> list[str]:
 
 def _coerce_scalar(v: str):
     v = v.strip()
+    if v in ("null", "~"):
+        return None  # YAML null 语义（turn: null 等），与 PyYAML 对齐
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         return v[1:-1]
     try:
@@ -115,16 +126,69 @@ def _parse_frontmatter(text: str) -> tuple[dict | None, str]:
     # 降级：顶层 "key: value" 标量；行内 [..] 流式序列做最小解析
     # （anchors: [{session_id: "...", turn: N}, ...]），保证无 PyYAML
     # 时锚点校验照常执行。
+    # v0.21 P0-1（H8）：补块标量（|/|-/|>/>) 与块序列（缩进 "- " 项）——
+    # cards new 脚手架 evidence 用块标量，此前降级分支读成 '|' 字面量，
+    # 占位卡与真实证据一律静默失效。
     data: dict = {}
-    for line in raw.splitlines():
+    lines = raw.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         km = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
-        if km and not line.startswith((" ", "-", "\t")):
-            value = km.group(2).strip()
-            if value.startswith("[") and value.endswith("]"):
-                parsed = _parse_flow_seq(value)
-                data[km.group(1)] = parsed if parsed is not None else value
-            else:
-                data[km.group(1)] = value
+        if not (km and not line.startswith((" ", "-", "\t"))):
+            i += 1
+            continue
+        key, value = km.group(1), km.group(2).strip()
+        if value in ("|", "|-", "|+", ">", ">-", ">+"):
+            block: list[str] = []
+            base_indent: int | None = None
+            j = i + 1
+            while j < len(lines):
+                ln = lines[j]
+                if not ln.strip():
+                    block.append("")
+                    j += 1
+                    continue
+                indent = len(ln) - len(ln.lstrip())
+                if indent == 0:
+                    break
+                if base_indent is None:
+                    base_indent = indent
+                block.append(ln[base_indent:] if indent >= base_indent
+                             else ln.strip())
+                j += 1
+            while block and not block[-1]:
+                block.pop()
+            data[key] = "\n".join(block)
+            i = j
+            continue
+        if value == "":
+            seq: list = []
+            j = i + 1
+            while j < len(lines):
+                sm = re.match(r"^\s+-\s+(.*)$", lines[j])
+                if not sm:
+                    break
+                item = sm.group(1).strip()
+                if item.startswith("{") and item.endswith("}"):
+                    # _parse_flow_seq 期望 [...] 包裹，单 flow map 项包一层复用
+                    parsed = _parse_flow_seq(f"[{item}]")
+                    seq.append(parsed[0] if parsed else item)
+                elif ":" in item:
+                    k, _, v = item.partition(":")
+                    seq.append({k.strip(): _coerce_scalar(v)})
+                else:
+                    seq.append(_coerce_scalar(item))
+                j += 1
+            data[key] = seq if seq else ""
+            i = j
+            continue
+        if value.startswith("[") and value.endswith("]"):
+            parsed = _parse_flow_seq(value)
+            data[key] = parsed if parsed is not None else value
+        else:
+            data[key] = value
+        i += 1
     return data, text[m.end():]
 
 
@@ -160,6 +224,14 @@ def validate_card(path: Path) -> tuple[list[str], list[str], dict | None]:
     except (TypeError, ValueError):
         if fm.get("confidence") is not None:
             errors.append(f"confidence={fm.get('confidence')!r} 不是数值")
+    # v0.21 P0-1（H11）：脚手架占位符 = 错误级（此前零检查 → 空壳卡
+    # 结论"可并入主库"）。
+    for label, pat in _PLACEHOLDER_PATTERNS:
+        hay = [str(fm.get("evidence") or ""), body, str(fm.get("title") or "")]
+        if any(pat.search(h) for h in hay):
+            errors.append(f"[占位符] {label}（cards new 脚手架未补全）")
+    if _BLOCK_LITERAL_RE.match(str(fm.get("evidence") or "").strip()):
+        errors.append("[占位符] evidence 仍是块标量字面量（降级解析或未填）")
     return errors, warns, fm
 
 
@@ -220,6 +292,28 @@ def _session_content(sid: str, db: Path | None,
     return "\n".join((r["raw"] if r["raw"] else r["text"]) or "" for r in rows)
 
 
+def _session_title(sid: str, db: Path | None,
+                   con: sqlite3.Connection | None = None) -> str | None:
+    """取锚点会话原标题。会话不在库 → None（无法比对则不判）。"""
+    if con is None:
+        if db is None or not db.is_file():
+            return None
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
+        own = True
+    else:
+        own = False
+    try:
+        row = con.execute("SELECT title FROM sessions "
+                          "WHERE session_id=? OR sid=?", (sid, sid)).fetchone()
+        return row["title"] if row else None
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        if own:
+            con.close()
+
+
 def _evidence_warnings(fm: dict, warns: list[str], db: Path | None,
                        con: sqlite3.Connection | None = None
                        ) -> tuple[int, int]:
@@ -230,16 +324,17 @@ def _evidence_warnings(fm: dict, warns: list[str], db: Path | None,
     返回 (checked, misses)：核对行数与未命中行数（供 summary 汇总）。"""
     evidence = str(fm.get("evidence") or "")
     anchors = fm.get("anchors")
+    # v0.21 P0-1（H10）：turn:null 警告必须在提前 return 之前——
+    # evidence 为空/anchors 非列表不应吞掉锚点精度警告。
+    if isinstance(anchors, list):
+        for a in anchors:
+            if isinstance(a, dict) and a.get("turn") is None:
+                warns.append(f"锚点 {a.get('session_id')} turn 为 null"
+                             "（定位精度不足，建议补回合号）")
     if not evidence.strip() or not isinstance(anchors, list):
         return (0, 0)
     checked = misses = 0
     cache: dict[str, str | None] = {}
-    for a in anchors:
-        if not isinstance(a, dict):
-            continue
-        if a.get("turn") is None:
-            warns.append(f"锚点 {a.get('session_id')} turn 为 null"
-                         "（定位精度不足，建议补回合号）")
     lines = [_norm_ws(ln) for ln in evidence.splitlines()]
     lines = [ln for ln in lines if len(ln) >= 6]
     sids = [str(a.get("session_id")) for a in anchors
@@ -279,11 +374,14 @@ def validate_cards(root: Path, db: Path | None = None,
     anchor_checked = 0
     evidence_checked = 0
     evidence_misses = 0
+    placeholder_cards = 0
+    evidence_unchecked = 0
     for p in sorted(root.rglob("*.md")):
         if p.name.upper() in ("INDEX.md", "README.md"):
             continue
         errors, warns, fm = validate_card(p)
-        # 锚点校验：fm 里有 anchors 且形态可读时逐个查库
+        had_evidence = bool(str((fm or {}).get("evidence") or "").strip())
+        c = 0
         if fm and (db is not None or con is not None):
             anchors = fm.get("anchors")
             if isinstance(anchors, list):
@@ -301,8 +399,24 @@ def validate_cards(root: Path, db: Path | None = None,
                 c, m = _evidence_warnings(fm, warns, db, con=con)
                 evidence_checked += c
                 evidence_misses += m
+                # v0.21 P0-1（H11）：title == 锚点会话原标题 = 脚手架痕迹
+                title = str(fm.get("title") or "").strip()
+                if title and not any(e.startswith("[占位符]") for e in errors):
+                    sids = [str(a.get("session_id")) for a in anchors
+                            if isinstance(a, dict) and a.get("session_id")]
+                    for sid in dict.fromkeys(sids):
+                        st = _session_title(sid, db, con=con)
+                        if st is not None and _norm_ws(st) == _norm_ws(title):
+                            errors.append(
+                                "[占位符] title 与锚点会话原标题相同"
+                                "（cards new 脚手架痕迹，须改为描述性标题）")
+                            break
+        if had_evidence and c == 0:
+            evidence_unchecked += 1
         rel = str(p.relative_to(root))
         results.append({"path": rel, "errors": errors, "warnings": warns})
+        if any(e.startswith("[占位符]") for e in errors):
+            placeholder_cards += 1
         if errors:
             n_err += 1
         elif warns:
@@ -313,7 +427,9 @@ def validate_cards(root: Path, db: Path | None = None,
                "error": n_err, "anchor_checked": anchor_checked,
                "anchor_misses": anchor_miss,
                "evidence_checked": evidence_checked,
-               "evidence_misses": evidence_misses}
+               "evidence_misses": evidence_misses,
+               "evidence_unchecked": evidence_unchecked,
+               "placeholder_cards": placeholder_cards}
     return results, summary
 
 
@@ -341,9 +457,21 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
             for w in r["warnings"]:
                 lines.append(f"- [警告] {w}")
             lines.append("")
-    if summary["error"]:
+    if summary.get("placeholder_cards"):
+        lines.append("结论：存在未补全的脚手架占位卡"
+                     f"（{summary['placeholder_cards']} 张），禁止并入主库。")
+    elif summary["error"]:
         lines.append("结论：存在错误卡片（不满足 §8 冻结规范），"
                      "修复前不得并入主库。")
+    elif summary.get("evidence_unchecked"):
+        unchecked = summary["evidence_unchecked"]
+        if summary["warn"]:
+            lines.append(f"结论：{unchecked} 张卡片 evidence 未核对"
+                         "（无 PyYAML 或原文不可得），不得视为通过；"
+                         f"另有 {summary['warn']} 张带警告需复核。")
+        else:
+            lines.append(f"结论：{unchecked} 张卡片 evidence 未核对"
+                         "（无 PyYAML 或原文不可得），不得视为通过。")
     elif summary["warn"]:
         lines.append(f"结论：无错误，但 {summary['warn']} 张卡片带警告"
                      "——复核警告项后再并入主库。")
