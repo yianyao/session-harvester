@@ -488,6 +488,25 @@ def cmd_report_skill_join(args) -> int:
     return 0
 
 
+def cmd_topic_candidates(args) -> int:
+    """T5 自动聚类候选推荐器：标题 n-gram + 任务签名产候选。
+
+    **只产候选，不改注册表**（topics_meta 只读，人工裁决后再
+    topic register）；范围/特征全数据驱动，不写死任何主题。"""
+    from .candidates import build_candidates, render_candidates
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    r = build_candidates(dbp, min_sim=args.min_sim, min_size=args.min_size,
+                         top_tools=args.top_tools,
+                         topics_meta=Path(args.topics_meta)
+                         if args.topics_meta else None)
+    _emit_report(render_candidates(r), args)
+    return 0
+
+
 def cmd_keywords(args) -> int:
     """P2-2 n-gram 关键词统计：只统计 messages.raw（H3 契约/H38），
     落 keywords_meta.db（runs+stats），可出报告。范围 --sid/--topic
@@ -923,6 +942,21 @@ def main(argv=None) -> int:
                      help="stage 时间窗向后放宽天数（默认 0）")
     psj.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     psj.set_defaults(func=cmd_report_skill_join)
+
+    ptc = sub.add_parser("topic-candidates",
+                         help="自动聚类候选推荐（T5）：标题 n-gram + 任务"
+                              "签名产候选簇；只产候选不改注册表")
+    ptc.add_argument("--db", default="harvester.db", help="索引库路径")
+    ptc.add_argument("--topics-meta", dest="topics_meta", default=None,
+                     help="主题注册库（只读，用于排除已注册成员）")
+    ptc.add_argument("--min-sim", dest="min_sim", type=float, default=0.35,
+                     help="成簇相似度阈值（默认 0.35）")
+    ptc.add_argument("--min-size", dest="min_size", type=int, default=2,
+                     help="最小簇大小（默认 2）")
+    ptc.add_argument("--top-tools", dest="top_tools", type=int, default=3,
+                     help="任务签名的工具序列 top-k（默认 3）")
+    ptc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    ptc.set_defaults(func=cmd_topic_candidates)
 
     pk = sub.add_parser("keywords",
                         help="n-gram 关键词统计（只统计 messages.raw，"
