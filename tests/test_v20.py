@@ -154,5 +154,53 @@ class TestSessionErrorSteps(unittest.TestCase):
         self.assertEqual(d["error_steps"], [])
 
 
+class TestApiToolsRoots(unittest.TestCase):
+    """P0-2：api_reports_tools additive roots（根因聚合接线到 API，
+    view G1 不再直吐未聚合明细）。断言"过滤真的能滤"式不变量：
+    roots 总计数 == 工具 error 计数（防聚合丢数）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.db = _fixture_db(Path(cls.tmp.name))
+        cls.con = apiserve.open_ro(cls.db)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.con.close()
+        cls.tmp.cleanup()
+
+    def _edit_row(self, d):
+        return next(t for t in d["tools"] if t["tool"] == "Edit")
+
+    def test_roots_shape_and_count(self):
+        d = apiserve.api_reports_tools(self.con, self.db, {})
+        edit = self._edit_row(d)
+        self.assertIn("roots", edit)
+        self.assertLessEqual(len(edit["roots"]), 12)
+        self.assertGreater(len(edit["roots"]), 0)
+        for g in edit["roots"]:
+            self.assertEqual(set(g), {"pattern", "class", "count", "sample"})
+        # 防聚合丢数：roots 计数合计 == error 字段
+        self.assertEqual(sum(g["count"] for g in edit["roots"]),
+                         edit["error"])
+        # 同根因（路径差异）已归并：_ERR_A/_ERR_B → 1 条
+        self.assertEqual(len(edit["roots"]), 2)
+
+    def test_errors_field_kept_additive(self):
+        """additive 红线：原 errors 明细字段保留不动。"""
+        d = apiserve.api_reports_tools(self.con, self.db, {})
+        edit = self._edit_row(d)
+        self.assertEqual(len(edit["errors"]), 3)  # 未聚合明细仍在
+        self.assertEqual(edit["error"], 3)
+
+    def test_by_source_rows_also_have_roots(self):
+        d = apiserve.api_reports_tools(self.con, self.db, {})
+        row = next(t for t in d["by_source"]["src"]["tools"]
+                   if t["tool"] == "Edit")
+        self.assertIn("roots", row)
+        self.assertEqual(sum(g["count"] for g in row["roots"]), row["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
