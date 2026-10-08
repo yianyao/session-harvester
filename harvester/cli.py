@@ -370,7 +370,9 @@ def cmd_api_serve(args) -> int:
                if args.suggestions_meta else None,
                topics_meta=Path(args.topics_meta)
                if args.topics_meta else None,
-               chain_root=chain_root)
+               chain_root=chain_root,
+               keywords_meta=Path(args.keywords_meta)
+               if getattr(args, "keywords_meta", None) else None)
 
 
 def cmd_report_tools(args) -> int:
@@ -483,6 +485,35 @@ def cmd_report_skill_join(args) -> int:
     d = build_cross(Path(args.chain), dbp, skill=args.skill,
                     margin_days=args.margin_days)
     _emit_report(render_cross(d), args)
+    return 0
+
+
+def cmd_keywords(args) -> int:
+    """P2-2 n-gram 关键词统计：只统计 messages.raw（H3 契约/H38），
+    落 keywords_meta.db（runs+stats），可出报告。范围 --sid/--topic
+    数据驱动（任何主题可用，不写死）。"""
+    from .kwstats import build_stats, render_report
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    ns = [x.strip() for x in str(args.n).split(",") if x.strip()]
+    if not ns or any(not x.isdigit() or int(x) < 2 for x in ns):
+        print(f"错误: --n 需为 >=2 的档位列表（如 2,3），收到: {args.n}",
+              file=sys.stderr)
+        return 2
+    s = build_stats(dbp, Path(args.meta), ns=[int(x) for x in ns],
+                    role=args.role,
+                    sids=list(args.sid) if args.sid else None,
+                    topic_ids=list(args.topic) if args.topic else None,
+                    topics_meta=Path(args.topics_meta)
+                    if args.topics_meta else None,
+                    stopwords_path=Path(args.stopwords)
+                    if args.stopwords else None)
+    print(f"统计完成: 消息 {s['total_msgs']} 条 → "
+          f"{args.meta}（run 追加）")
+    _emit_report(render_report(s, top=args.top), args)
     return 0
 
 
@@ -893,6 +924,30 @@ def main(argv=None) -> int:
     psj.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     psj.set_defaults(func=cmd_report_skill_join)
 
+    pk = sub.add_parser("keywords",
+                        help="n-gram 关键词统计（只统计 messages.raw，"
+                             "H3 契约；落 keywords_meta.db）")
+    pk.add_argument("--db", default="harvester.db", help="索引库路径")
+    pk.add_argument("--meta", default="keywords_meta.db",
+                    help="关键词 meta 库路径（run 追加式）")
+    pk.add_argument("--n", default="2,3",
+                    help="n-gram 档位列表，逗号分隔（默认 2,3）")
+    pk.add_argument("--role", default="user", choices=["user", "all"],
+                    help="消息角色过滤（默认 user；all=全部）")
+    pk.add_argument("--sid", action="append",
+                    help="限定会话 sid（可重复；缺省=全库）")
+    pk.add_argument("--topic", action="append",
+                    help="限定主题 id（可重复；从 --topics-meta 注册库"
+                         "展开成员，与 --sid 合并去重）")
+    pk.add_argument("--topics-meta", dest="topics_meta", default=None,
+                    help="主题注册库路径（--topic 展开成员用）")
+    pk.add_argument("--stopwords", default=None,
+                    help="停用词文件（每行一词，# 注释）")
+    pk.add_argument("--top", type=int, default=50,
+                    help="报告每档 Top N（默认 50）")
+    pk.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pk.set_defaults(func=cmd_keywords)
+
     psa = sub.add_parser("suggest-agents",
                          help="从错误模式生成 AGENTS.md 候选条目"
                               "（建议池，不直接改 AGENTS.md）")
@@ -1113,6 +1168,9 @@ def main(argv=None) -> int:
     pap.add_argument("--chain-root", dest="chain_root", default=None,
                      help="topic-chain 长文目录（可选；默认 "
                           "~/.workbuddy/knowledge/topics）")
+    pap.add_argument("--keywords-meta", dest="keywords_meta",
+                     default=None,
+                     help="关键词 meta 库路径（可选；启用 /api/keywords）")
     pap.set_defaults(func=cmd_api_serve)
 
     args = p.parse_args(argv)
