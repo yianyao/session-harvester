@@ -34,3 +34,9 @@ verify/outline/
 __pycache__/
 *.pyc
 .zwork/
+
+# 独立 meta 库（运行时数据，不随仓库）
+topics_meta.db
+suggestions_meta.db
+artifacts_meta.db
+*.db.bak*
