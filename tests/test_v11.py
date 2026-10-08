@@ -186,7 +186,10 @@ class CardsNewTest(unittest.TestCase):
         self.assertIn('session_id: "abc"', text)  # 用 adapter 级 session_id
         self.assertIn("turn: 3", text)
         errors, warns, fm = validate_card(p)
-        self.assertEqual(errors, [])  # 脚手架本身即满足 §8 规范
+        # v0.21 P0-1（H11）：脚手架含占位符 → 必须错误级拒绝
+        # （旧断言"脚手架即满足 §8"是空壳卡通过校验的漏洞，已修）
+        self.assertTrue(all(e.startswith("[占位符]") for e in errors))
+        self.assertEqual(len(errors), 2)  # <粘贴 evidence + <待补 正文
         self.assertEqual(fm["type"], "insight")
         # 第二张自动编号
         p2 = scaffold_card(self.db, "yuanbao-raw:abc", self.root,
