@@ -269,12 +269,36 @@ class AutoClawAdapter(BaseAdapter):
                 updated_at=to_local_ts(row["updated_at"]),
                 messages=msgs,
                 extra={"db": str(db), "deleted_at": row["deleted_at"],
-                       "entry_stats": entry_stats, "dedup": dedup},
+                       "entry_stats": entry_stats, "dedup": dedup,
+                       # v0.22 P0-5（H13）：主模型（entry payload 众数）
+                       "model": _model_from_entries(entries)},
             )
         raise KeyError(f"AutoClaw 未找到会话: {session_id}")
 
 
 # ---- 条目 → 消息映射 ----
+
+def _model_from_entries(entries: list[tuple]) -> str | None:
+    """会话主模型抽取（v0.22 P0-5，H13）：entry payload 的
+    data.model.model（真实库实测：request/assistant/reasoning/answer
+    四类 entry 统一路径），取众数。纯函数，坏 payload 忽略。"""
+    from collections import Counter
+    seen: Counter[str] = Counter()
+    for row in entries:
+        payload_raw = row[3]
+        if not isinstance(payload_raw, str):
+            continue
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        m = ((payload.get("data") or {}).get("model") or {}).get("model")
+        if isinstance(m, str) and m:
+            seen[m] += 1
+    return seen.most_common(1)[0][0] if seen else None
+
 
 def _entry_text(entry_type: str, payload: dict) -> str:
     """对话条目的可见正文（不含 reasoning；assistant 优先 data.text）。"""
