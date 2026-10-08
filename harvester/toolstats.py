@@ -392,6 +392,26 @@ def _tool_label(tool: str, st: ToolStats) -> str:
     return f"{tool}（{'/'.join(extras)}）" if extras else tool
 
 
+def aggregate_error_roots(errors: dict[str, int]) -> list[dict]:
+    """错误明细根因聚合（v0.20）：{错误原文: 次数} → 根因行列表。
+
+    口径：复用 errstats.normalize_error 归一（首行、去路径/引号/数字差异）
+    作为聚类键，classify_error 出三分类；原文样例每根因只留一条、空白归一
+    后截断——修复 G1 报告被 old_string 多行内容（如「七步骨架」「批次 8」
+    等用户文档片段）污染明细的可读性问题。
+    返回 [{pattern, class, count, sample}]，count 降序（确定性：同次数按
+    pattern 字典序）。
+    """
+    from .errstats import classify_error, normalize_error
+    out: dict[str, dict] = {}
+    for raw, n in errors.items():
+        pat = normalize_error(raw) or (raw[:60] if raw else "（空错误文本）")
+        g = out.setdefault(pat, {"pattern": pat, "class": classify_error(raw),
+                                 "count": 0, "sample": raw})
+        g["count"] += n
+    return sorted(out.values(), key=lambda g: (-g["count"], g["pattern"]))
+
+
 def render_report(stats: dict[str, ToolStats], title: str = "工具调用统计",
                   flow: dict | None = None) -> str:
     """渲染 Markdown 报告。无数据时返回可读的空态说明。"""
@@ -423,11 +443,24 @@ def render_report(stats: dict[str, ToolStats], title: str = "工具调用统计"
                      f"{st.given_up} |")
     err_tools = [(t, s) for t, s in order if s.errors]
     if err_tools:
-        lines += ["", "## 错误明细（按失败次数排序）", ""]
+        lines += ["", "## 错误明细（根因聚合，按失败次数排序）", "",
+                  "- 同根因已归并：路径/引号/数字差异替换为占位符后聚类；"
+                  "原文只留一条样例（空白归一、截断），完整原文按锚点到 "
+                  "steps 表回溯。", ""]
         for tool, st in err_tools:
             lines.append(f"### {tool}")
-            for detail, n in sorted(st.errors.items(), key=lambda kv: -kv[1]):
-                lines.append(f"- x{n} {detail[:160]}")
+            for g in aggregate_error_roots(st.errors):
+                sample = re.sub(r"\s+", " ", g["sample"])
+                # 截掉工具回显的用户输入（Edit 失败时把 old_string 前 N 字
+                # 附在错误文本尾部——「七步骨架/批次 8」类污染即来源于此）
+                for marker in ("String:", "old_string was", "Input:"):
+                    if marker in sample:
+                        sample = sample.split(marker)[0].rstrip()
+                        break
+                sample = sample[:120]
+                lines.append(f"- x{g['count']} [{g['class']}] `{g['pattern']}`")
+                if sample:
+                    lines.append(f"      - 例：{sample}")
     if flow:
         lines += render_flow(flow)
     return "\n".join(lines) + "\n"

@@ -49,7 +49,8 @@ from .agent_suggest import build_suggestion_entries
 from .behstats import collect_skill_invocations, skill_summary
 from .cards import validate_cards
 from .dbmeta import db_fingerprint
-from .errstats import collect_errors_from_db, pattern_stats
+from .errstats import (classify_error, collect_errors_from_db,
+                       normalize_error, pattern_stats)
 from .indexing import search
 from .reader import split_turns
 from .suggestmeta import load_statuses
@@ -260,6 +261,14 @@ def api_sessions(con: sqlite3.Connection, db: Path, params: dict) -> dict:
         items = [r for r in items if r["sid"] in want]
 
     total = len(items)
+    # errors_only=1（v0.20 additive）：只含有错误步骤的会话（分页前过滤，
+    # total 同步反映过滤后数量）；error_count 全量预聚合一并给出。
+    err_cnt: dict[str, int] = {}
+    if params.get("errors_only"):
+        err_cnt = {r[0]: r[1] for r in con.execute(
+            "SELECT sid, COUNT(*) FROM steps WHERE status='error' GROUP BY sid")}
+        items = [r for r in items if err_cnt.get(r["sid"], 0) > 0]
+        total = len(items)
     limit = _int_param(params, "limit", 50, 1, 200)
     offset = _int_param(params, "offset", 0, 0, 10 ** 9)
     page_items = items[offset:offset + limit]
@@ -267,10 +276,13 @@ def api_sessions(con: sqlite3.Connection, db: Path, params: dict) -> dict:
     # 'error' 预聚合，≤200 行 IN 查询，避免全表 JOIN。
     if page_items:
         sids = [r["sid"] for r in page_items]
-        marks = ",".join("?" * len(sids))
-        cnt = {r[0]: r[1] for r in con.execute(
-            f"SELECT sid, COUNT(*) FROM steps WHERE status='error' "
-            f"AND sid IN ({marks}) GROUP BY sid", sids)}
+        if err_cnt:
+            cnt = {s: err_cnt[s] for s in sids if s in err_cnt}
+        else:
+            marks = ",".join("?" * len(sids))
+            cnt = {r[0]: r[1] for r in con.execute(
+                f"SELECT sid, COUNT(*) FROM steps WHERE status='error' "
+                f"AND sid IN ({marks}) GROUP BY sid", sids)}
         for it in page_items:
             it["error_count"] = cnt.get(it["sid"], 0)
     return {"api_version": API_VERSION, "total": total,
@@ -312,7 +324,17 @@ def api_session(con: sqlite3.Connection, sid: str) -> dict:
                           "ts": seg_ts[0] if seg_ts else None,
                           "preview": preview})
     return {"api_version": API_VERSION, "meta": dict(row),
-            "n_turns": len(out_turns), "turns": out_turns}
+            "n_turns": len(out_turns), "turns": out_turns,
+            # v0.20 additive：错误步骤清单（pattern/class 为 errstats 归一口径，
+            # 供前端批量导出按「会话ID+异常类型」分类与机器可读聚合去重）
+            "error_steps": [
+                {"sid": sid, "seq": r[0], "ts": r[1], "tool": r[2],
+                 "error": r[3] or "",
+                 "class": classify_error(r[3] or ""),
+                 "pattern": normalize_error(r[3] or "")}
+                for r in con.execute(
+                    "SELECT seq, ts, tool, error FROM steps "
+                    "WHERE sid=? AND status='error' ORDER BY seq", (sid,))]}
 
 
 def api_turn(con: sqlite3.Connection, sid: str, no: int) -> dict:
