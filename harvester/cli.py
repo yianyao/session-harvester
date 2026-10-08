@@ -469,6 +469,23 @@ def cmd_report_chains(args) -> int:
     return 0
 
 
+def cmd_report_skill_join(args) -> int:
+    """T4 skill 进化 join：chain 时间线锚点 × skill 调用锚点交叉表。"""
+    from .skilljoin import build_cross, render_cross
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    if not Path(args.chain).is_file():
+        print(f"错误: chain 长文不存在: {args.chain}", file=sys.stderr)
+        return 2
+    d = build_cross(Path(args.chain), dbp, skill=args.skill,
+                    margin_days=args.margin_days)
+    _emit_report(render_cross(d), args)
+    return 0
+
+
 def cmd_suggest_agents(args) -> int:
     """从错误模式生成 AGENTS.md 候选条目（只产出建议文件，不直接改 AGENTS.md）。"""
     from .agent_suggest import build_suggestions
@@ -862,6 +879,19 @@ def main(argv=None) -> int:
                      help="高步会话 Top N（默认 10）")
     prc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     prc.set_defaults(func=cmd_report_chains)
+
+    psj = sub.add_parser("report-skill-join",
+                         help="skill 进化 join：chain 时间线锚点 × "
+                              "skill 调用锚点交叉表（T4）")
+    psj.add_argument("--chain", required=True, help="chain 长文路径")
+    psj.add_argument("--db", default="harvester.db", help="索引库路径")
+    psj.add_argument("--skill", default=None,
+                     help="只交叉指定 skill 名（缺省全部）")
+    psj.add_argument("--margin-days", type=float, default=0.0,
+                     dest="margin_days",
+                     help="stage 时间窗向后放宽天数（默认 0）")
+    psj.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    psj.set_defaults(func=cmd_report_skill_join)
 
     psa = sub.add_parser("suggest-agents",
                          help="从错误模式生成 AGENTS.md 候选条目"
