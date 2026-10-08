@@ -361,11 +361,16 @@ def cmd_mcp_serve(args) -> int:
 def cmd_api_serve(args) -> int:
     """只读 HTTP JSON API（apiserve.run 自带自检与安全守卫）。"""
     from .apiserve import run
+    chain_root = (Path(args.chain_root) if args.chain_root
+                  else Path.home() / ".workbuddy" / "knowledge" / "topics")
     return run(Path(args.db), port=args.port, host=args.host,
                token=args.token,
                cards_root=Path(args.cards_root) if args.cards_root else None,
                suggestions_meta=Path(args.suggestions_meta)
-               if args.suggestions_meta else None)
+               if args.suggestions_meta else None,
+               topics_meta=Path(args.topics_meta)
+               if args.topics_meta else None,
+               chain_root=chain_root)
 
 
 def cmd_report_tools(args) -> int:
@@ -616,6 +621,30 @@ def cmd_topic(args) -> int:
         return 0
     print("错误: 未知子命令", file=sys.stderr)
     return 2
+
+
+def cmd_chain_validate(args) -> int:
+    """topic-chain 长文校验（T3，v0.22）：独立校验器，非 §8 卡片校验。"""
+    import json as _json
+
+    from .topicchain import validate_chain
+    r = validate_chain(args.file, args.meta, args.db)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(_json.dumps(r, ensure_ascii=False, indent=1) + "\n",
+                       encoding="utf-8", newline="\n")
+        print(f"[chain-validate] 报告已写入: {out}", file=sys.stderr)
+    for e in r["errors"]:
+        print(f"ERROR: {e}")
+    for w in r["warnings"]:
+        print(f"WARN: {w}")
+    st = r["stats"]
+    verdict = "通过" if r["ok"] else "未通过"
+    print(f"[chain-validate] {verdict}｜members {st.get('members', 0)}"
+          f" / stages {st.get('stages', 0)} / nodes {st.get('nodes', 0)}"
+          f"｜errors {len(r['errors'])} warnings {len(r['warnings'])}")
+    return 0 if r["ok"] else 1
 
 
 def cmd_artifacts(args) -> int:
@@ -895,6 +924,18 @@ def main(argv=None) -> int:
                      help="覆盖该档默认字符预算")
     ptp.set_defaults(func=cmd_topic)
 
+    pcv = sub.add_parser(
+        "chain-validate",
+        help="topic-chain 长文校验（T3）：frontmatter 必填项 + 锚点可回溯"
+             "（独立校验器，非 §8 卡片校验）")
+    pcv.add_argument("file", help="chain 长文路径（chain-<topic>.md）")
+    pcv.add_argument("--meta", default="topics_meta.db",
+                     help="主题 meta 库路径（默认 topics_meta.db）")
+    pcv.add_argument("--db", default="harvester.db",
+                     help="索引库路径（只读，锚点回溯核对）")
+    pcv.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pcv.set_defaults(func=cmd_chain_validate)
+
     par = sub.add_parser(
         "artifacts",
         help="产物提取（T0-②）：Write/Edit args 回源提取 → artifacts_meta.db")
@@ -1012,6 +1053,12 @@ def main(argv=None) -> int:
                      default=None,
                      help="建议状态 meta 库路径（可选；启用 /api/reports/"
                           "agents 的 status 字段）")
+    pap.add_argument("--topics-meta", dest="topics_meta", default=None,
+                     help="主题注册 meta 库路径（可选；启用 /api/topics 与 "
+                          "/api/topic/<id>/chain 端点）")
+    pap.add_argument("--chain-root", dest="chain_root", default=None,
+                     help="topic-chain 长文目录（可选；默认 "
+                          "~/.workbuddy/knowledge/topics）")
     pap.set_defaults(func=cmd_api_serve)
 
     args = p.parse_args(argv)

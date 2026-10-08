@@ -514,9 +514,78 @@ def api_cards(con: sqlite3.Connection, db: Path,
 
 # ---------- HTTP 层（薄壳） ----------
 
+def api_topics(con: sqlite3.Connection, db: Path,
+               topics_meta: Path | None) -> dict:
+    """T3：主题注册表 + 簇统计（additive；api_version=1 不动）。
+
+    topics_meta 未配置或文件缺失 → 空表 + hint（降级不炸，view 需兼容
+    旧上游，红线 §5.2）。
+    """
+    topics: list[dict] = []
+    hint = None
+    if not topics_meta or not Path(topics_meta).is_file():
+        hint = ("topics_meta 未配置或不存在（启动时加 "
+                "--topics-meta <topics_meta.db>）")
+    else:
+        mcon = sqlite3.connect(f"file:{Path(topics_meta)}?mode=ro", uri=True)
+        mcon.row_factory = sqlite3.Row
+        try:
+            for row in mcon.execute(
+                    "SELECT id, name, keywords, members, created "
+                    "FROM topics ORDER BY id"):
+                members = json.loads(row["members"]) if row["members"] else []
+                member_sids = [m["sid"] if isinstance(m, dict) else m
+                               for m in members]
+                first_at = last_at = None
+                for sid in member_sids:
+                    r = con.execute(
+                        "SELECT MIN(created_at), MAX(created_at) "
+                        "FROM sessions WHERE sid=?", (sid,)).fetchone()
+                    if r and r[0]:
+                        first_at = (min(first_at, r[0])
+                                    if first_at else r[0])
+                        last_at = (max(last_at, r[1]) if last_at else r[1])
+                topics.append({
+                    "id": row["id"], "name": row["name"],
+                    "keywords": row["keywords"], "created": row["created"],
+                    "members_count": len(member_sids),
+                    "first_activity": first_at, "last_activity": last_at})
+        finally:
+            mcon.close()
+    r = {"api_version": API_VERSION, "topics": topics,
+         "db_fingerprint": db_fingerprint(db, con=con)}
+    if hint:
+        r["hint"] = hint
+    return r
+
+
+def api_topic_chain(con: sqlite3.Connection, db: Path, topic_id: str,
+                    topics_meta: Path | None, chain_root: Path | None) -> dict | None:
+    """T3：chain 长文结构化。在 chain_root 下扫 chain-*.md，按
+    frontmatter.topic_id 匹配。未找到/未配置 → None（HTTP 404）。"""
+    from .topicchain import load_chain
+    root = Path(chain_root) if chain_root else None
+    if not root or not root.is_dir() or not topics_meta \
+            or not Path(topics_meta).is_file():
+        return None
+    for p in sorted(root.glob("chain-*.md")):
+        try:
+            d = load_chain(p)
+        except (ValueError, RuntimeError, OSError):
+            continue  # 坏文档跳过：暴露端点不因单文件失败而 500
+        fm = d["fm"]
+        if isinstance(fm, dict) and fm.get("topic_id") == topic_id:
+            return {"api_version": API_VERSION, "topic_id": topic_id,
+                    "fm": fm, "body": d["body"], "chain_path": str(p),
+                    "db_fingerprint": db_fingerprint(db, con=con)}
+    return None
+
+
 def make_handler(db: Path, token: str | None,
                  cards_root: Path | None = None,
-                 suggestions_meta: Path | None = None):
+                 suggestions_meta: Path | None = None,
+                 topics_meta: Path | None = None,
+                 chain_root: Path | None = None):
     """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。"""
 
     class ApiHandler(BaseHTTPRequestHandler):
@@ -588,6 +657,17 @@ def make_handler(db: Path, token: str | None,
                 elif path == "/api/reports/agents":
                     self._json(api_reports_agents(con, db, qs,
                                                   meta_db=suggestions_meta))
+                elif path == "/api/topics":
+                    self._json(api_topics(con, db, topics_meta))
+                elif (m2 := re.fullmatch(r"/api/topic/(.+)/chain", path)):
+                    doc = api_topic_chain(con, db, unquote(m2.group(1)),
+                                          topics_meta, chain_root)
+                    if doc is None:
+                        self._json({"error": "chain 文档不存在或未配置"
+                                             "（--topics-meta/--chain-root）"},
+                                   404)
+                    else:
+                        self._json(doc)
                 elif path == "/api/cards":
                     try:
                         self._json(api_cards(con, db, cards_root, qs))
@@ -614,7 +694,9 @@ def make_handler(db: Path, token: str | None,
 
 def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
         token: str | None = None, cards_root: Path | None = None,
-        suggestions_meta: Path | None = None) -> int:
+        suggestions_meta: Path | None = None,
+        topics_meta: Path | None = None,
+        chain_root: Path | None = None) -> int:
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
@@ -637,7 +719,9 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
               "（/api/cards 将返回 404）", file=sys.stderr)
     srv = ThreadingHTTPServer((host, port), make_handler(db, token,
                                                          cards_root,
-                                                         suggestions_meta))
+                                                         suggestions_meta,
+                                                         topics_meta,
+                                                         chain_root))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
     print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "
