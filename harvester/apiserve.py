@@ -54,7 +54,8 @@ from .errstats import (classify_error, collect_errors_from_db,
 from .indexing import search
 from .reader import split_turns
 from .suggestmeta import load_statuses
-from .toolstats import collect_source_stats, collect_stats_from_db
+from .toolstats import (aggregate_error_roots, collect_source_stats,
+                        collect_stats_from_db)
 from .triage import collect_triage
 
 API_VERSION = 1
@@ -400,6 +401,8 @@ def _tool_rows(stats: dict, min_calls: int = 0) -> list[dict]:
     """ToolStats 字典 → 排序后的 JSON 行（失败率优先，与 render_report 同序）。
     v0.19 additive：given_up/retried（per-tool 失败后续行为）、raw_tools
     （归一前的原始写法，可追溯）、low_sample（min_calls>0 且 calls<阈值）。
+    v0.21 P0-2 additive：roots（aggregate_error_roots 根因聚合，view G1
+    优先渲染；原 errors 明细字段保留）。
     """
     order = sorted(stats.items(),
                    key=lambda kv: (-kv[1].fail_rate, -kv[1].calls, kv[0]))
@@ -408,6 +411,7 @@ def _tool_rows(stats: dict, min_calls: int = 0) -> list[dict]:
              "given_up": st.given_up, "retried": st.retried,
              "raw_tools": sorted(st.raw_names),
              "low_sample": bool(min_calls > 0 and st.calls < min_calls),
+             "roots": aggregate_error_roots(st.errors),
              "errors": [{"detail": d, "count": n} for d, n in
                         sorted(st.errors.items(), key=lambda kv: -kv[1])]}
             for t, st in order]
