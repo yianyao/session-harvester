@@ -230,6 +230,10 @@ python -m harvester api-serve --db harvester.db [--port 8765] [--token <密钥>]
 #   陈旧用）；/api/reports/tools 工具行带 given_up/retried/raw_tools/
 #   low_sample（?min_calls=）；/api/reports/agents 条目带 unresolved_count/
 #   owner/status（--suggestions-meta <meta库> 启用 status 读取）
+#   v0.20 additive：/api/sessions 支持 ?errors_only=1（只含错误步骤的会话，
+#   total 同步过滤后数量）；/api/session/<sid> 带 error_steps 清单
+#   （seq/ts/tool/error + errstats 归一 pattern/class，供前端批量导出按
+#   「会话ID+异常类型」分类与跨会话模式去重）
 python -m harvester api-serve --db harvester.db --suggestions-meta suggestions_meta.db
 ```
 
@@ -254,6 +258,9 @@ python -m harvester kb-stats  --root ~/.workbuddy/knowledge   # 盘点
 # 工具调用/失败率统计（服务「工具改进」与「Harness 踩坑」）
 # 口径一（推荐）：先 index 再用 --db，读结构化 steps 表，含重试/放弃率
 # 与按模型分布表（v0.15 起，sessions.model 列；仅 workbuddy-transcript 源有值）
+# 错误明细为「根因聚合」形态（v0.20）：同构文本（路径/引号/数字差异）归并
+# 出根因行 + 三分类标注；原文只留一条单行样例并截掉 old_string 输入回显，
+# 杜绝用户文档片段（如「七步骨架」类）污染明细——完整原文按锚点回溯 steps 表
 python -m harvester report-tools --db harvester.db --out tools_report.md
 # 口径二：无索引时实时扫描（note 标记汇总，无重试/放弃统计）
 python -m harvester report-tools --sources sources.json --out tools_report.md
