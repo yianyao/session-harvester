@@ -39,13 +39,14 @@ python -m harvester draft --sid <队列锚点里的 sid> --type pitfall --out do
 产出**自包含蒸馏包**（任务指令 + §8 卡片规范 + 带 `sid#seq` 锚点的
 会话原文 + 产出要求），任何 Agent 拿到即可开工，不必手工拼上下文。
 
-- Agent 草稿卡落 `cards_pending/`（confidence 固定 0.3）；
-- `cards validate --root cards_pending --db harvester.db` 照跑
-  （锚点查库一样生效），通过后**仍由人工终审**才并入主库；
+- Agent 草稿卡落 `~/.workbuddy/knowledge/cards/drafts/`（confidence 固定
+  0.3；v0.22 P0-4：原 `cards_pending/` 空柜已废止——G3 校验对象就是主库，
+  草稿用主库子目录隔离，`cards validate` 递归扫描不受影响）；
+- `cards validate --root ~/.workbuddy/knowledge/cards --db harvester.db`
+  照跑（锚点查库一样生效），通过后**仍由人工终审**才留在主库顶层；
 - 已验证实例：`~/.workbuddy/knowledge/cards/kc-20261006-0004-file-changed-since-read.md`
   （pitfall，源自队列榜首"file changed since it was read"26 次的
-  dsh 会话，validate 通过、锚点命中，**已终审并入主库**——cards_pending/
-  清空属正常，草稿并入后即移走）。
+  dsh 会话，validate 通过、锚点命中，**已终审并入主库**）。
 
 ### 通道 1：Harness 踩坑 → 建议池（全自动）
 
