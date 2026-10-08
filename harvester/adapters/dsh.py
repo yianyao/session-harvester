@@ -146,6 +146,28 @@ def _policy_line(t: str, data: dict) -> str | None:
     return None
 
 
+def _model_from_lines(lines: list[dict]) -> tuple[str | None, dict]:
+    """会话主模型抽取（v0.22 P0-5，H13）：request/header 每请求一条
+    header.config.model 计次（真实日志实测路径）；subagent 会话由
+    subagent/descriptor.agentModel 兜底。返回 (众数, 全分布)。
+    纯函数（行列表已解析），与 workbuddy_transcript 的 providerData.model
+    众数口径对齐。"""
+    from collections import Counter
+    seen: Counter[str] = Counter()
+    for o in lines:
+        t = o.get("type")
+        data = o.get("data") or {}
+        if t == "request/header":
+            cfg = ((data.get("header") or {}).get("config") or {})
+            if cfg.get("model"):
+                seen[str(cfg["model"])] += 1
+        elif t == "subagent/descriptor" and data.get("agentModel"):
+            seen[str(data["agentModel"])] += 1
+    if not seen:
+        return None, {}
+    return seen.most_common(1)[0][0], dict(seen)
+
+
 class DshAdapter(BaseAdapter):
     """DSH session.v4.jsonl.zstd。id: dsh。"""
 
@@ -387,6 +409,7 @@ class DshAdapter(BaseAdapter):
             warns.append("文件为空或尚无完整 zstd frame（会话可能正在写入）")
         if not msgs:
             warns.append("未解析出任何消息（格式可能已改版）")
+        model, models = _model_from_lines(lines)  # v0.22 P0-5（H13）
         return SessionRecord(
             source=self.id, session_id=rel,
             title=title or f"DSH 会话 {f.parent.name[:8]}",
@@ -396,5 +419,6 @@ class DshAdapter(BaseAdapter):
                    "is_subagent": (meta.get("origin") == "subagent"
                                    or int(meta.get("delegationDepth") or 0) > 0),
                    "origin": "dsh-session-v4", "dsh_meta": meta,
+                   "model": model, "models": models or None,
                    "lossy": bool(warns), "warnings": warns},
         )

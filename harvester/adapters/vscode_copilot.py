@@ -35,6 +35,27 @@ CODE_GLOBAL = Path(os.environ.get(
 WS_INDEX_KEY = "chat.ChatSessionStore.index"
 
 
+def _model_from_state(state: dict | None) -> tuple[str | None, dict]:
+    """会话主模型抽取（v0.22 P0-5，H13）：requests[].result.metadata
+    .resolvedModel 优先（路由后真实模型，真实日志实测路径），缺失兜底
+    requests[].modelId（用户选择的模型项，常为 copilot/auto）；众数胜出。
+    返回 (众数, 全分布)。纯函数。"""
+    from collections import Counter
+    if not isinstance(state, dict):
+        return None, {}
+    seen: Counter[str] = Counter()
+    for req in state.get("requests") or []:
+        if not isinstance(req, dict):
+            continue
+        meta = ((req.get("result") or {}).get("metadata") or {})
+        m = meta.get("resolvedModel") or req.get("modelId")
+        if isinstance(m, str) and m:
+            seen[m] += 1
+    if not seen:
+        return None, {}
+    return seen.most_common(1)[0][0], dict(seen)
+
+
 def _replay_patches(lines: list[str]) -> tuple[dict | None, int, int]:
     """重放 workspace chatSessions 的增量补丁日志。
 
@@ -380,7 +401,8 @@ class VscodeCopilotAdapter(BaseAdapter):
         # empty window jsonl
         f = self.empty_dir / f"{sid}.jsonl"
         msgs = []
-        for line in self._read_text(f).splitlines():
+        lines = self._read_text(f).splitlines()
+        for line in lines:
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
@@ -388,10 +410,16 @@ class VscodeCopilotAdapter(BaseAdapter):
             role, txt = _extract_role_text(obj)
             if txt:
                 msgs.append(Message(role, txt))
+        # v0.22 P0-5（H13）：文件为增量补丁日志，重放后取模型众数
+        # （消息仍按既有逐行口径提取，不在本任务范围）
+        state, _applied, _failed = _replay_patches(lines)
+        model, models = _model_from_state(state)
         return SessionRecord(
             source=self.id, session_id=sid, title=f"空窗口会话 {sid[:8]}",
             created_at=_fmt_ts(f.stat().st_mtime), updated_at=_fmt_ts(f.stat().st_mtime),
-            messages=msgs, extra={"origin": "emptyWindowChatSessions"},
+            messages=msgs,
+            extra={"origin": "emptyWindowChatSessions",
+                   "model": model, "models": models or None},
         )
 
     def _load_ws_session(self, wshash: str, sid: str) -> SessionRecord:
@@ -419,6 +447,7 @@ class VscodeCopilotAdapter(BaseAdapter):
         created = (idx.get("timing") or {}).get("created")
         updated = idx.get("lastMessageDate")
         title = idx.get("title") or f"工作区会话 {sid[:8]}"
+        model, models = _model_from_state(state)  # v0.22 P0-5（H13）
         return SessionRecord(
             source=self.id, session_id=sid, title=title,
             created_at=_fmt_ts(created) or _fmt_ts(f.stat().st_mtime),
@@ -427,6 +456,7 @@ class VscodeCopilotAdapter(BaseAdapter):
             extra={"origin": "workspaceStorage/chatSessions",
                    "workspace": wshash,
                    "patches": {"applied": applied, "failed": failed},
+                   "model": model, "models": models or None,
                    "lossy": bool(warns), "warnings": warns},
         )
 
