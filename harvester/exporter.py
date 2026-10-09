@@ -94,7 +94,8 @@ def render_session_md(rec: SessionRecord) -> str:
 def export(outdir: Path, selection: str | None = None,
            include_notes: bool = False, verbose: bool = False,
            sources: dict | None = None,
-           only: set[str] | None = None) -> dict:
+           only: set[str] | None = None,
+           select_sids: set[str] | None = None) -> dict:
     adapters_list, items, reports = scan_all(verbose=verbose, sources=sources,
                                              only=only)
     if not items:
@@ -109,6 +110,11 @@ def export(outdir: Path, selection: str | None = None,
         chosen = [it for it in items if it["no"] in set(nos)]
     else:
         chosen = items
+    if select_sids is not None:
+        # 增量模式（v0.22 update）：只导出调用方挑选的 sid（None=不过滤）。
+        # sid 为库口径 "{source}:{session_id}"（与 sessions 表/run_sync 报告一致）
+        chosen = [it for it in chosen
+                  if f"{it['adapter']}:{it['session_id']}" in select_sids]
 
     adapters = {ad.id: ad for ad in adapters_list}  # 复用 scan_all 已构建的实例，不重复建
     for it in chosen:
