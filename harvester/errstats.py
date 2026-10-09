@@ -194,6 +194,17 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
                 "ORDER BY sid, seq").fetchall()
         max_seq = dict(con.execute(
             "SELECT sid, MAX(seq) FROM steps GROUP BY sid").fetchall())
+        # v0.23 #14：skill 维度归因——取全会话的 call 相行，按 seq 序求
+        # "该错误发生时活跃的 skill"（最近一次 Skill 类调用的 skill 名）。
+        if cutoff:
+            skill_rows = con.execute(
+                "SELECT sid, seq, tool, detail FROM steps "
+                "WHERE phase='call' AND ts>=? ORDER BY sid, seq",
+                (cutoff,)).fetchall()
+        else:
+            skill_rows = con.execute(
+                "SELECT sid, seq, tool, detail FROM steps "
+                "WHERE phase='call' ORDER BY sid, seq").fetchall()
     finally:
         if own:
             con.close()
@@ -215,6 +226,8 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
                 lo = mid + 1
         return lo < len(seqs)
 
+    # v0.23 #14：skill 维度索引（call 相行 → sid → [(seq, skill)]）
+    skill_by_sid = _build_skill_index(skill_rows)
     errors = []
     for r in rows:
         hi = max_seq.get(r["sid"], 0) or 1
@@ -229,10 +242,67 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
             "pattern": normalize_error(r["error"] or ""),
             "bucket": _bucket(ratio),
             "resolved": _resolved(r["sid"], r["tool"], r["seq"]),
+            # v0.23 #14：活跃 skill（无则 None）——只增字段，不动既有键
+            "skill": _active_skill(skill_by_sid, r["sid"], r["seq"], r["tool"]),
         })
     meta = {"total_steps": total, "error_count": len(errors),
             "sessions": len({e["sid"] for e in errors}), "since": cutoff}
     return errors, meta
+
+
+def _skill_name_of(tool: str, detail: str | None) -> str | None:
+    """从 call 相行取 skill 名；非 Skill 类调用返回 None。
+
+    **必须先按 SKILL_TOOLS 白名单过滤**：`_skill_name_from_detail` 对任意
+    detail 都会尝试解析，且其键回退链含 `command`（为 skill 自身的
+    command 形态服务）——若不过滤，pwsh/Bash 的 `{"command": "icacls ..."}`
+    会被当成 skill 名（真实库实测过：出现 "icacls tests\\... | dsh" 这种
+    "skill"）。白名单与 behstats.collect_skill_invocations 的判定同源。
+    """
+    try:
+        from .behstats import SKILL_TOOLS, _skill_name_from_detail
+    except ImportError:  # pragma: no cover - 理论上不会发生
+        return None
+    if tool not in SKILL_TOOLS | {"skill_read_active", "skill_run_asset"}:
+        return None
+    name, _rest = _skill_name_from_detail(tool, detail)
+    return name or None
+
+
+def _build_skill_index(skill_rows) -> dict[str, list[tuple[int, str]]]:
+    """sid → [(call_seq, skill_name)] 升序。"""
+    out: dict[str, list[tuple[int, str]]] = {}
+    for r in skill_rows:
+        name = _skill_name_of(r["tool"], r["detail"])
+        if name:
+            out.setdefault(r["sid"], []).append((r["seq"], name))
+    for v in out.values():
+        v.sort()
+    return out
+
+
+def _active_skill(index: dict[str, list[tuple[int, str]]], sid: str,
+                  seq: int, tool: str) -> str | None:
+    """错误步骤发生时"活跃"的 skill。
+
+    若错误本身出自 Skill 调用，取它自己；否则取该会话内**最近一次**
+    Skill 调用（seq ≤ 错误 seq）的 skill 名——近似口径：skill 一旦载入
+    即视为持续生效至会话结束。无 skill 参与则为 None。
+    """
+    own = index.get(sid) or []
+    if not own:
+        return None
+    if (tool or "") == "Skill":
+        for cseq, name in own:
+            if cseq == seq:
+                return name
+    best: str | None = None
+    for cseq, name in own:
+        if cseq <= seq:
+            best = name
+        else:
+            break
+    return best
 
 
 def pattern_stats(errors: list[dict]) -> dict[str, dict]:
@@ -270,6 +340,26 @@ def cross_stats(errors: list[dict]) -> list[dict]:
     rows = [{"source": src, "model": model, **counts, "total": sum(counts.values())}
             for (src, model), counts in agg.items()]
     rows.sort(key=lambda r: (-r["total"], r["source"], r["model"]))
+    return rows
+
+
+def cross_stats_by_skill(errors: list[dict]) -> list[dict]:
+    """v0.23 #14 交叉表：活跃 skill × 数据源（harness）× 错误类别。
+
+    与 cross_stats 同构，但把 model 换成 skill——回答"哪个 skill 在哪个
+    harness 上出哪类错误"（用户的五类实体里，skill 是原交叉表唯一缺的一维）。
+    `skill=None` 的错误（无 skill 参与的步骤）归"（无 skill）"，不丢数；
+    sum(total) 恒等于 cross_stats 的 sum(total)（同一 errors 输入）。
+    """
+    agg: dict[tuple[str, str], dict[str, int]] = {}
+    for e in errors:
+        key = (e.get("skill") or "（无 skill）", e["source"])
+        row = agg.setdefault(key, {c: 0 for c in CLASSES})
+        row[e["class"]] += 1
+    rows = [{"skill": sk, "source": src, **counts,
+             "total": sum(counts.values())}
+            for (sk, src), counts in agg.items()]
+    rows.sort(key=lambda r: (-r["total"], r["skill"], r["source"]))
     return rows
 
 
@@ -356,6 +446,26 @@ def render_report(errors: list[dict], meta: dict,
         f"- 最多坑组合：**{top['source']} × {top['model']}**（{top['total']} 条，"
         f"以 {worst_cls} 为主）；model 列\"（未知）\"= 会话未携带模型信息"
         "（导出型源范围外，见 H29 口径）。",
+    ]
+    # v0.23 #14：skill × 数据源 × 错误类别（用户五类实体里 skill 原缺一维）
+    sk_cross = cross_stats_by_skill(errors)
+    lines += [
+        "",
+        "## 活跃 skill × 数据源 × 错误类别交叉表",
+        "",
+        "| skill | 数据源 | env | tool_interface | context | unclassified | 合计 |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for r in sk_cross:
+        lines.append("| %s | %s | %d | %d | %d | %d | %d |" % (
+            r["skill"], r["source"], r["env"], r["tool_interface"],
+            r["context"], r["unclassified"], r["total"]))
+    n_noskill = sum(r["total"] for r in sk_cross if r["skill"] == "（无 skill）")
+    lines += [
+        "",
+        f"- 口径：skill = 该错误步骤发生时**最近一次 Skill 类调用**载入的技能"
+        f"（skill 一旦载入即视为持续生效至会话结束）；\"（无 skill）\""
+        f"{n_noskill} 条 = 会话内无 skill 参与。合计与上表恒等（同一 errors 输入）。",
     ]
     # 模式明细，按 class 分组、count 降序
     stats = pattern_stats(errors)

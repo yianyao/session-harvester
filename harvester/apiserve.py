@@ -52,7 +52,7 @@ from .behstats import collect_skill_invocations, skill_summary
 from .cards import validate_cards
 from .dbmeta import db_fingerprint
 from .errstats import (classify_error, collect_errors_from_db, cross_stats,
-                       normalize_error, pattern_stats)
+                       cross_stats_by_skill, normalize_error, pattern_stats)
 from .export_analysis import build_analysis
 from .indexing import search
 from .reader import split_turns
@@ -399,6 +399,8 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
             "patterns": patterns,
             # P1-3 additive：交叉表 class × harness × model（行序 total 降序）
             "cross": cross_stats(errors),
+            # v0.23 #14 additive：交叉表 class × harness × skill
+            "cross_skill": cross_stats_by_skill(errors),
             "db_fingerprint": db_fingerprint(db, con=con)}
 
 
