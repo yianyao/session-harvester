@@ -14,6 +14,15 @@ FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
 - **`harvester/` 包本体零第三方依赖**——纯 Python 3.10+ 标准库，单测同
   （unittest）。`python -m harvester ...` / `python -m unittest discover -s tests`
   中的 `python` 指代"你的解释器"。
+- **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
+  **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
+  23 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
+- ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
+  `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
+  （3.13 + PyYAML 6.0.3，**417 例全绿**）。用无 PyYAML 的解释器会得到
+  `Ran 408 tests / FAILED (errors=23)`——那 23 例全是 PyYAML 缺失所致。
+  自检一行：`python -c "import yaml; print(yaml.__version__)"`。
 - **`verify/` 采集工具需要 `requests` + `websocket-client`**（登录态直采管
   线，见下文），用独立 venv 运行，不污染包本体。
 - 敏感文件（`weblogin_profile/`、`webchat.accounts.json`）与运行产物已列入
@@ -141,7 +150,7 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
 | `report-skill` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
 | `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4） |
-| `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db） |
+| `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db）。**排序口径 doc_freq 优先**（= 含该词的消息条数），freq 为出现总次数；人名/专名请走 `--stopwords` |
 | `suggest-agents` | 从错误模式生成 AGENTS.md 候选条目（建议池，不直改） |
 | `suggest-status` | 建议池状态落库（pending/adopted/rejected） |
 | `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
