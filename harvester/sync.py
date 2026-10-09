@@ -32,6 +32,7 @@ from pathlib import Path
 from .adapters import PLUGIN_IDS, load_sources
 from .exporter import export
 from .indexing import index_exports
+from .outline import scan_all
 
 INBOX_DONE = "done"
 
@@ -149,6 +150,20 @@ def _db_sids(db: Path) -> set[str]:
         con.close()
 
 
+def _db_updated(db: Path) -> dict[str, str | None]:
+    """库中 sid -> updated_at 高水位（增量判定用；updated_at 与导出同源同值）。"""
+    if not Path(db).exists():
+        return {}
+    con = sqlite3.connect(str(db))
+    try:
+        return {r[0]: r[1] for r in
+                con.execute("SELECT sid, updated_at FROM sessions")}
+    except sqlite3.DatabaseError:
+        return {}
+    finally:
+        con.close()
+
+
 # ---- 主流程 ----
 
 def run_sync(root: Path = Path("."),
@@ -202,6 +217,83 @@ def run_sync(root: Path = Path("."),
         "sessions_total": stats.get("sessions", len(after)),
         "new": new_sids,
         "gone": gone_sids,
+        "db": str(db_path),
+        "exports_dir": str(exports_dir),
+    }
+
+
+def run_update(root: Path = Path("."),
+               sources_path: Path | str = "sources.json",
+               db_path: Path | str = "harvester.db",
+               inbox_dir: Path | str | None = None,
+               exports_dir: Path | str | None = None,
+               include_notes: bool = True,
+               only: set[str] | None = None,
+               verbose: bool = False) -> dict:
+    """增量同步（v0.22，用户裁决 2026-10-09）：只获取未获取的。
+
+    收件箱收割 -> 库水位对比 -> 仅导出新 sid / updated_at 变化的会话
+    -> 整库重建索引（毫秒级，与 sync 同口径）。
+
+    库即状态：水位 = sessions(sid, updated_at)，与导出 json 同源同值，
+    字符串直比即可靠，不建独立水位文件。
+    - 新 sid => 导出；
+    - updated_at 与库不同 => 重导（续聊场景；库侧缺失时视为变更，宁多勿漏）；
+    - 其余跳过——不全量重取历史轨迹。
+    首跑无库 = 天然全量。sync 保持全量语义，作为对账/rebuild 基线。
+    各路径默认相对 root，参数与 run_sync 一致；返回统计 dict。
+    """
+    root = Path(root)
+    inbox_dir = Path(inbox_dir) if inbox_dir else root / "inbox"
+    exports_dir = Path(exports_dir) if exports_dir else root / "exports"
+    db_path = Path(db_path)
+
+    # 1. 收件箱（与 sync 同协议：AI CHAT 官方导出包丢 inbox 即自动收割）
+    harvested = harvest_inbox(inbox_dir, verbose=verbose)
+
+    # 2. 数据源声明合并（与 run_sync 同逻辑）
+    sources = load_sources(sources_path)
+    plugins = inbox_plugins(inbox_dir)
+    merged = dict(sources)
+    merged["plugins"] = list(sources.get("plugins", []) or []) + plugins
+
+    # 3. 水位对比：只挑未获取 / 已变更的会话
+    high = _db_updated(db_path)
+    _, items, _ = scan_all(verbose=verbose, sources=merged, only=only)
+    wanted: set[str] = set()
+    new_sids: list[str] = []
+    updated_sids: list[str] = []
+    for it in items:
+        sid = f"{it['adapter']}:{it['session_id']}"  # 与 indexing 入库口径一致
+        src_u = it.get("updated_at")
+        if sid not in high:
+            wanted.add(sid)
+            new_sids.append(sid)
+        elif src_u and src_u != high.get(sid):
+            wanted.add(sid)
+            updated_sids.append(sid)
+
+    # 4. 选择性导出（空集则跳过，连 scan 都省）；索引仍整库重建
+    if wanted:
+        manifest = export(exports_dir, selection=None,
+                          include_notes=include_notes, verbose=verbose,
+                          sources=merged, only=only, select_sids=wanted)
+        export_count = manifest.get("count", 0)
+        export_msg = manifest.get("message")
+    else:
+        export_count, export_msg = 0, None
+    stats = index_exports(exports_dir, db_path, verbose=verbose)
+
+    return {
+        "mode": "incremental",
+        "inbox": harvested,
+        "plugins": plugins,
+        "export": {"count": export_count, "message": export_msg},
+        "index": stats,
+        "sessions_total": stats.get("sessions", len(high) + len(new_sids)),
+        "new": new_sids,
+        "updated": updated_sids,
+        "unchanged": len(items) - len(wanted),
         "db": str(db_path),
         "exports_dir": str(exports_dir),
     }

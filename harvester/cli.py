@@ -65,7 +65,7 @@ from .indexing import fts5_available, index_exports, index_sources, search, sess
 from .outline import scan_all, write_outline
 from .pack import build_pack, write_pack
 from .reader import render_read
-from .sync import run_sync
+from .sync import run_sync, run_update
 from .weblogin import PRODUCTS, check_all, init_config, prepare
 
 
@@ -212,6 +212,45 @@ def cmd_sync(args) -> int:
         print(f"  ... 其余 {len(r['new']) - 10} 条略")
     print("后续: harvester report-tools / report-errors / report-skill / cards new "
           "均直接消费该索引库")
+    return 0
+
+
+def cmd_update(args) -> int:
+    root = Path(args.root)
+    r = run_update(root=root, sources_path=root / args.sources,
+                   db_path=root / args.db,
+                   inbox_dir=root / args.inbox,
+                   exports_dir=root / args.exports,
+                   include_notes=not args.no_notes, verbose=args.verbose)
+    inbox = r["inbox"]
+    for a in inbox["archived"]:
+        tag = "重复跳过" if a.get("duplicate") else "已认领"
+        print(f"  [收件箱-{tag}] {Path(a['file']).name} -> {a['plugin']}/")
+    for u in inbox["unclaimed"]:
+        print(f"  [收件箱-未认领] {Path(u['file']).name}（留在原地，请人工处理）")
+        print(f"      原因: {u['reason']}")
+    if r["export"]["message"]:
+        print(f"  [导出] {r['export']['message']}")
+    else:
+        print(f"  [导出] {r['export']['count']} 个会话"
+              f"（新增 {len(r['new'])} / 更新 {len(r['updated'])}"
+              f" / 未变跳过 {r['unchanged']}）-> {r['exports_dir']}")
+    if r["plugins"]:
+        by: dict[str, int] = {}
+        for p in r["plugins"]:
+            by[p["id"]] = by.get(p["id"], 0) + 1
+        print("  [导出源] " + ", ".join(f"{k}×{v}" for k, v in sorted(by.items())))
+    st = r["index"]
+    print(f"  [索引] {st['sessions']} 会话 / {st['messages']} 消息 -> {r['db']}"
+          + (f"（跳过损坏 {st['skipped']} 文件）" if st.get("skipped") else ""))
+    for sid in r["new"][:10]:
+        print(f"  + {sid}")
+    for sid in r["updated"][:10]:
+        print(f"  ~ {sid}（updated_at 变化，重导）")
+    if len(r["new"]) + len(r["updated"]) > 20:
+        print("  ... 其余略")
+    print("增量口径：只获取未获取的（新 sid / updated_at 变化）；"
+          "全量对账请用 sync")
     return 0
 
 
@@ -929,6 +968,18 @@ def main(argv=None) -> int:
                           "note 消息里，排除会导致 steps 表为空、分析失效）")
     psy.add_argument("-v", "--verbose", action="store_true")
     psy.set_defaults(func=cmd_sync)
+
+    pu = sub.add_parser("update",
+                        help="增量同步：收件箱收割 -> 只导出新/变更会话 -> 重建索引")
+    pu.add_argument("--root", default=".", help="项目根目录（其余相对路径的基准）")
+    pu.add_argument("--sources", default="sources.json", help="数据源声明（相对 root）")
+    pu.add_argument("--db", default="harvester.db", help="索引库路径（相对 root）")
+    pu.add_argument("--inbox", default="inbox", help="收件箱目录（相对 root）")
+    pu.add_argument("--exports", default="exports", help="导出目录（相对 root）")
+    pu.add_argument("--no-notes", action="store_true",
+                    help="导出时排除 note 角色（默认包含，理由同 sync）")
+    pu.add_argument("-v", "--verbose", action="store_true")
+    pu.set_defaults(func=cmd_update)
 
     prt = sub.add_parser("report-tools",
                          help="工具调用/失败率统计（steps 表或 tool note 汇总）")

@@ -368,7 +368,7 @@ class VscodeCopilotAdapter(BaseAdapter):
         kind, _, rest = session_id.partition("::")
         if kind == "ws":
             wshash, _, sid = rest.partition("::")
-            return self._load_ws_session(wshash, sid)
+            return self._load_ws_session(wshash, sid, session_id)
         sid = rest
         if kind == "db":
             con = open_ro_sqlite(self.db)
@@ -394,7 +394,10 @@ class VscodeCopilotAdapter(BaseAdapter):
                 con.close()
             cwd, summary, agent, ca, ua = row
             return SessionRecord(
-                source=self.id, session_id=sid, title=summary or f"Copilot 会话 {sid}",
+                # v0.22 H47：session_id 用完整 kind 形态（与 list_sessions
+                # 一致），保证增量水位 sid == 入库 sid
+                source=self.id, session_id=session_id,
+                title=summary or f"Copilot 会话 {sid}",
                 created_at=_fmt_ts(ca), updated_at=_fmt_ts(ua), messages=msgs,
                 extra={"cwd": cwd, "agent": agent, "origin": "session-store.db"},
             )
@@ -415,14 +418,15 @@ class VscodeCopilotAdapter(BaseAdapter):
         state, _applied, _failed = _replay_patches(lines)
         model, models = _model_from_state(state)
         return SessionRecord(
-            source=self.id, session_id=sid, title=f"空窗口会话 {sid[:8]}",
+            source=self.id, session_id=session_id, title=f"空窗口会话 {sid[:8]}",
             created_at=_fmt_ts(f.stat().st_mtime), updated_at=_fmt_ts(f.stat().st_mtime),
             messages=msgs,
             extra={"origin": "emptyWindowChatSessions",
                    "model": model, "models": models or None},
         )
 
-    def _load_ws_session(self, wshash: str, sid: str) -> SessionRecord:
+    def _load_ws_session(self, wshash: str, sid: str,
+                         full_id: str) -> SessionRecord:
         """加载 workspaceStorage/<wshash>/chatSessions/<sid>.jsonl。
 
         结构为逆向所得的补丁日志，重构按行容错；标题/时间取 index，
@@ -449,7 +453,7 @@ class VscodeCopilotAdapter(BaseAdapter):
         title = idx.get("title") or f"工作区会话 {sid[:8]}"
         model, models = _model_from_state(state)  # v0.22 P0-5（H13）
         return SessionRecord(
-            source=self.id, session_id=sid, title=title,
+            source=self.id, session_id=full_id, title=title,
             created_at=_fmt_ts(created) or _fmt_ts(f.stat().st_mtime),
             updated_at=_fmt_ts(updated) or _fmt_ts(f.stat().st_mtime),
             messages=msgs,
