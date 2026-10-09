@@ -33,6 +33,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .agent_suggest import _TEMPLATES, root_key_assign
 from .behstats import collect_skill_invocations
 from .errstats import collect_errors_from_db
 
@@ -101,6 +102,13 @@ def collect_triage(db: Path, since_days: float | None = None,
         # 与卡片文本比对——此前 pattern 未归一，含大写的错误消息永远
         # 判不中已有卡（v0.18 修正）。
         known = any(_norm_for_match(p["pattern"]) in t for t in card_texts)
+        # P1-2 additive：命中根因模板 id（连通分量分组渲染在
+        # render_triage；模板表唯一权威 = agent_suggest._TEMPLATES）
+        cregs = [(i, re.compile(reg, re.IGNORECASE))
+                 for i, (reg, _t, _b, _o) in enumerate(_TEMPLATES)]
+        hits = [i for i, creg in cregs
+                if creg.search(p["pattern"])
+                or any(creg.search(e["error"][:200]) for e in p["window"])]
         return {
             "pattern": p["pattern"], "class": p["class"],
             "tools": sorted(p["tools"]),
@@ -109,6 +117,7 @@ def collect_triage(db: Path, since_days: float | None = None,
             "samples": [(e["sid"], e["seq"], e["error"])
                         for e in p["window"][:_SAMPLE_CAP]],
             "known_card": known,
+            "templates": hits,
         }
 
     new_patterns, old_patterns = [], []
@@ -208,19 +217,37 @@ def render_triage(r: dict) -> str:
                  f"{'未启用' if r['cards_scanned'] is None else str(r['cards_scanned']) + ' 个文件'}")
     lines.append("")
 
+    # ---- A 节：按根因组分块渲染（P1-2）----
+    # 同根因（连通分量，root_key_assign）的 pattern 合并展示为一组，
+    # 组头注明归并口径；未命中模板的 pattern 保持独立块（原样式）。
     lines.append("## A. 新错误 pattern（优先做 pitfall 卡）")
     if not r["new_patterns"]:
         lines.append("窗口内无首次出现的错误 pattern。")
+    key_of = root_key_assign([(p["pattern"], p.get("templates", []))
+                              for p in r["new_patterns"]])
+    titles = {i: t for i, (_r_, t, _b, _o) in enumerate(_TEMPLATES)}
+    grouped: dict[int | None, list[dict]] = {}
     for p in r["new_patterns"]:
-        dup = " ⚠️疑似已有卡" if p["known_card"] else ""
-        lines.append(f"\n### {p['pattern']}{dup}")
-        lines.append(f"- 类别 {p['class']} · 工具 {'/'.join(p['tools'])}"
-                     f" · 窗口内 {p['count']} 次 · 首现 {p['first_seen']}")
-        for sid, seq, err in p["samples"]:
-            lines.append(f"- 锚点 `{sid}#{seq}`: {err[:120]}")
-        sid0 = p["samples"][0][0] if p["samples"] else ""
-        lines.append(f"- 动作: `python -m harvester cards new --sid "
-                     f"{sid0} --type pitfall`")
+        grouped.setdefault(key_of[p["pattern"]], []).append(p)
+    for gid, pats in grouped.items():
+        multi = gid is not None and len(pats) > 1
+        if multi:
+            total = sum(p["count"] for p in pats)
+            lines.append(f"\n### 同根因组：{titles[gid]}"
+                         f"（{len(pats)} 个 pattern 归并 · 共 {total} 次）")
+        for p in pats:
+            dup = " ⚠️疑似已有卡" if p["known_card"] else ""
+            if multi:
+                lines.append(f"\n#### x{p['count']} `{p['pattern']}`{dup}")
+            else:
+                lines.append(f"\n### {p['pattern']}{dup}")
+            lines.append(f"- 类别 {p['class']} · 工具 {'/'.join(p['tools'])}"
+                         f" · 窗口内 {p['count']} 次 · 首现 {p['first_seen']}")
+            for sid, seq, err in p["samples"]:
+                lines.append(f"- 锚点 `{sid}#{seq}`: {err[:120]}")
+            sid0 = p["samples"][0][0] if p["samples"] else ""
+            lines.append(f"- 动作: `python -m harvester cards new --sid "
+                         f"{sid0} --type pitfall`")
     lines.append("")
 
     lines.append("## B. 旧坑重现（检查旧卡/建议池是否要更新）")

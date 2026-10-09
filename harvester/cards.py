@@ -492,12 +492,17 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
 
 def scaffold_card(db: Path, sid_query: str, out_dir: Path,
                   ctype: str = "pitfall", title: str | None = None,
-                  turn: int | None = None) -> Path:
+                  turn: int | None = None,
+                  dupe_warnings: list[str] | None = None) -> Path:
     """从索引库会话生成卡片脚手架（frontmatter 锚点真实、evidence 留白）。
 
     sid_query 匹配 sessions.sid 或 session_id。id 自动编号
     kc-YYYYMMDD-NNNN（扫描 out_dir 既有卡片取号）。 ctype 必须在
     REQUIRED_TYPES 内。
+    dupe_warnings（P1-2 additive，可选）：传入 list 则收集跨卡查重警告——
+    该会话错误步骤的 normalize_error 归一键（唯一权威键，禁第二把）在
+    既有卡（排除本次生成卡）evidence/正文中命中时，警告"疑似已有卡"，
+    口径与 triage 的"疑似已有卡"一致（宽松归一子串比对）。
     """
     if ctype not in REQUIRED_TYPES:
         raise ValueError(f"type={ctype!r} 不在 {sorted(REQUIRED_TYPES)}")
@@ -549,5 +554,40 @@ def scaffold_card(db: Path, sid_query: str, out_dir: Path,
         f"`cards validate`。\n"
     )
     path = out_dir / f"{card_id}.md"
+    if dupe_warnings is not None:
+        dupe_warnings.extend(_dupe_check(db, row["sid"], out_dir))
     path.write_text(text, encoding="utf-8", newline="\n")
     return path
+
+
+def _dupe_check(db: Path, sid: str, cards_root: Path) -> list[str]:
+    """跨卡查重（P1-2，SOP 第 3 条）：本会话错误步骤经 normalize_error
+    归一（唯一权威键）后与既有卡 evidence/正文做宽松子串比对（归一口径
+    与 triage._norm_for_match 一致：lower + 折叠空白），命中即警告疑似
+    已有卡。只告警不阻断——语义级判断仍留给人（triage 去重诚实声明）。"""
+    from .errstats import normalize_error
+    from .triage import _norm_for_match
+    con = sqlite3.connect(str(db))
+    try:
+        errs = [r[0] for r in con.execute(
+            "SELECT error FROM steps WHERE sid=? AND status='error' "
+            "AND error IS NOT NULL", (sid,)).fetchall()]
+    finally:
+        con.close()
+    keys = {_norm_for_match(normalize_error(e or "")) for e in errs}
+    keys.discard("")
+    if not keys or not Path(cards_root).is_dir():
+        return []
+    warnings: list[str] = []
+    for p in sorted(Path(cards_root).rglob("*.md")):
+        try:
+            text = _norm_for_match(p.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        for k in sorted(keys):
+            if k in text:
+                warnings.append(
+                    f"疑似已有卡 {p.stem}（错误模式「{k}」已在其 "
+                    f"evidence/正文命中；请先审阅旧卡，避免同根因重复做卡）")
+                break
+    return warnings

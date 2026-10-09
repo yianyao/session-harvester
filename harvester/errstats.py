@@ -113,6 +113,29 @@ def normalize_error(text: str) -> str:
     return s[:100]
 
 
+#: 工具回显标记：Edit 类失败原文常把 old_string/new_string 的用户文档内容
+#: 附在错误文本尾部，污染证据展示（v0.20 G1 修正经验，P1-2 提为共享口径）。
+_ECHO_MARKERS = ("String:", "old_string was", "Input:")
+
+
+def clean_error_sample(raw: str, max_len: int | None = None) -> str:
+    """错误原文 → 单行证据引用（P1-2 共享口径，建议池/G1 报告同源）。
+
+    - 截掉工具回显（_ECHO_MARKERS 起的用户文档内容，错误本体只在前段）；
+    - 空白（含换行）折叠为单空格；
+    - 缺省**不截断**（全文展示交给消费方；max_len 供表格类展示传截断值）。
+    """
+    s = raw or ""
+    for marker in _ECHO_MARKERS:
+        if marker in s:
+            s = s.split(marker)[0]
+            break
+    s = _WS_RE.sub(" ", s).strip()
+    if max_len is not None:
+        s = s[:max_len]
+    return s
+
+
 def _bucket(ratio: float) -> str:
     if ratio <= 1 / 3:
         return "开场"
