@@ -51,7 +51,7 @@ from .agent_suggest import build_suggestion_entries
 from .behstats import collect_skill_invocations, skill_summary
 from .cards import validate_cards
 from .dbmeta import db_fingerprint
-from .errstats import (classify_error, collect_errors_from_db,
+from .errstats import (classify_error, collect_errors_from_db, cross_stats,
                        normalize_error, pattern_stats)
 from .export_analysis import build_analysis
 from .indexing import search
@@ -397,6 +397,8 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
             "by_class": dict(by_class), "by_bucket": dict(by_bucket),
             "by_source": {k: dict(v) for k, v in by_source.items()},
             "patterns": patterns,
+            # P1-3 additive：交叉表 class × harness × model（行序 total 降序）
+            "cross": cross_stats(errors),
             "db_fingerprint": db_fingerprint(db, con=con)}
 
 

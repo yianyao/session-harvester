@@ -20,7 +20,7 @@ def _make_db(path: Path) -> None:
     con.executescript("""
     CREATE TABLE sessions (sid TEXT PRIMARY KEY, source TEXT, session_id TEXT,
                            title TEXT, category TEXT, created_at TEXT,
-                           updated_at TEXT, file TEXT);
+                           updated_at TEXT, file TEXT, model TEXT);
     CREATE VIRTUAL TABLE messages USING fts5(
         sid UNINDEXED, role UNINDEXED, ts UNINDEXED, text, raw UNINDEXED,
         tokenize='unicode61');
@@ -34,7 +34,8 @@ def _make_db(path: Path) -> None:
         ("a:2", "a", "2", "新坑会话", "", "", f"{d_new}T08:00:00", None),
         ("a:3", "a", "3", "skill 会话", "", "", f"{d_new}T09:00:00", None),
     ]
-    con.executemany("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?)", sessions)
+    con.executemany("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,NULL)",
+                    sessions)
     msgs = [
         ("a:1", "user", f"{d_old} 08:00:00", "你好", "你好"),
         ("a:1", "assistant", f"{d_old} 08:01:00", "回复", "回复"),

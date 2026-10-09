@@ -27,7 +27,7 @@ def _make_db(tmp: Path) -> Path:
     con.executescript("""
     CREATE TABLE sessions (sid TEXT PRIMARY KEY, session_id TEXT,
                            title TEXT, category TEXT, source TEXT
-                           DEFAULT 'test');
+                           DEFAULT 'test', model TEXT);
     CREATE TABLE steps (sid TEXT, seq INTEGER, ts TEXT, tool TEXT,
                         phase TEXT, status TEXT, error TEXT, detail TEXT);
     """)
