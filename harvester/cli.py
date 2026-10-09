@@ -834,6 +834,34 @@ def _emit_report(report: str, args) -> None:
         print(report, end="")
 
 
+def cmd_export_analysis(args) -> int:
+    """export-analysis 统一导出器（P1-4）：五类分析产物，md/JSON 同源。"""
+    from .export_analysis import build_analysis, to_json
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    sids = [s for s in (args.sids or "").split(",") if s] or None
+    try:
+        obj, md = build_analysis(
+            dbp, args.kind, days=args.days, sids=sids,
+            min_count=args.min_count, top=args.top,
+            cards_root=Path(args.cards_root) if args.cards_root else None)
+    except (ValueError, KeyError) as e:
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    text = to_json(obj) if args.format == "json" else md
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"已写入 {out}（kind={args.kind} format={args.format}）")
+    else:
+        print(text, end="")
+    return 0
+
+
 def main(argv=None) -> int:
     # Windows 原版解释器默认 cp936，report 输出含 emoji/特殊 Unicode 标题重定向
     # 到文件/管道时会 UnicodeEncodeError——统一 UTF-8（DSH 等已全局 UTF-8 则无感）。
@@ -1109,6 +1137,30 @@ def main(argv=None) -> int:
                      help="高信号会话条数（默认 10）")
     ptt.add_argument("--out", help="队列输出路径（缺省打印到 stdout）")
     ptt.set_defaults(func=cmd_triage)
+
+    pea = sub.add_parser(
+        "export-analysis",
+        help="统一分析导出器（P1-4）：sessions/tools/errors/skills/triage，"
+             "md/JSON 同源同口径（去重键=normalize_error）")
+    pea.add_argument("--kind", required=True,
+                     choices=["sessions", "tools", "errors", "skills",
+                              "triage"],  # 与 export_analysis.KINDS 同步
+                     help="导出类别")
+    pea.add_argument("--format", default="md", choices=["md", "json"],
+                     help="出口格式（同源双出口，默认 md）")
+    pea.add_argument("--db", default="harvester.db", help="索引库路径")
+    pea.add_argument("--days", type=float, default=None,
+                     help="只统计最近 N 天（缺省全库）")
+    pea.add_argument("--sids",
+                     help="sessions kind：逗号分隔会话 sid 清单"
+                          "（缺省=全库含错误步骤的会话）")
+    pea.add_argument("--min-count", type=int, default=2,
+                     help="triage kind：pattern 入队最小次数（默认 2）")
+    pea.add_argument("--top", type=int, default=10,
+                     help="triage kind：高信号会话条数（默认 10）")
+    pea.add_argument("--cards-root", help="triage kind：既有卡片目录")
+    pea.add_argument("--out", help="输出路径（缺省打印到 stdout）")
+    pea.set_defaults(func=cmd_export_analysis)
 
     pdr = sub.add_parser(
         "draft",
