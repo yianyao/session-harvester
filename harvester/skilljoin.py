@@ -12,6 +12,13 @@ chain 时间线锚点（stage → {sid, turn} 节点）× skill 调用锚点
 2. 时间窗 join：非成员会话的调用，ts 落在 stage span（含尾日，即
    尾日+1天为界）+ margin 天内 → 归该 stage。
 
+**margin 的方向与语义（v0.23 修正）**：margin **只向后放宽**（stage 结束之后
+的 N 天），用于接住"阶段收尾后仍在进行的工具化延续"。因此落在
+(span 终点, span 终点+margin] 区间的调用会带 `_after` 后缀
+（kind = `temporal_after` / `member_span_after`），与阶段**之内**的调用
+（`temporal` / `member_span`）显式区分——否则读者会把"阶段结束后 80 天"
+的调用误读成"阶段之内的贡献"。判据为 `day > span_end`。
+
 通用性（用户红线）：本模块对任意 chain × 任意 skill 通用，不写死
 任何主题名/会话/skill 名——chain 与 skill 全部由 CLI 参数传入。
 T4 开工探查（仅实测示例）：「叙事节奏」55 成员全为导出型源，成员内
@@ -100,10 +107,24 @@ def build_cross(chain_path: Path, db_path: Path, skill: str | None = None,
         {"stage": st["stage"], "span": st.get("span", ""), "rows": []}
         for st, _s, _e in stage_windows]
 
-    def _row(inv: dict, kind: str, turn: int | None) -> dict:
+    def _row(inv: dict, kind: str, turn: int | None,
+             span_end: date | None = None) -> dict:
+        """kind 带 `_after` 后缀 = 该调用落在 stage 结束之后。
+
+        判据 `day > span_end`，**三条归组路径一律适用**（含 member 节点精确
+        匹配）——节点匹配只保证"这条调用属该主题的这个 turn"，不保证它的
+        日期在 stage 之内（一个会话可跨数月，turn 号随之增大）。margin 只向后
+        放宽，落在其间的调用必须与阶段内调用分开，否则会被误读为"阶段之内的
+        贡献"；真实库实测过阶段结束 80 天仍被算进阶段七的情形。
+        """
+        day = (inv["ts"] or "")[:10]
+        after = bool(span_end and day and day > span_end.isoformat())
+        if after and not kind.endswith("_after"):
+            kind = f"{kind}_after"
         return {"sid": inv["sid"], "seq": inv["seq"],
                 "anchor": f"{inv['sid']}#{inv['seq']}",
                 "turn": turn, "kind": kind, "ts": inv["ts"] or "",
+                "after_stage": after,
                 "status": inv["status"], "args": inv["args"] or "",
                 "skill": inv["skill"], "title": titles.get(inv["sid"], "")}
 
@@ -124,7 +145,7 @@ def build_cross(chain_path: Path, db_path: Path, skill: str | None = None,
                 idx = stage_windows.index(
                     next(w for w in stage_windows if w[0] is hit))
                 stages_out[idx]["rows"].append(
-                    _row(inv, "member", turn))
+                    _row(inv, "member", turn, span_end=stage_windows[idx][2]))
                 assigned_ids.add(key)
                 continue
             # 时间窗兜底（成员会话但该 turn 不在节点上）
@@ -134,7 +155,7 @@ def build_cross(chain_path: Path, db_path: Path, skill: str | None = None,
                     if s and e and s.isoformat() <= inv["ts"][:10] <= \
                             (e + margin).isoformat():
                         stages_out[wi]["rows"].append(
-                            _row(inv, "member_span", turn))
+                            _row(inv, "member_span", turn, span_end=e))
                         assigned_ids.add(key)
                         placed = True
                         break
@@ -151,26 +172,37 @@ def build_cross(chain_path: Path, db_path: Path, skill: str | None = None,
         day = inv["ts"][:10]
         for wi, (st, s, e) in enumerate(stage_windows):
             if s and e and s.isoformat() <= day <= (e + margin).isoformat():
-                stages_out[wi]["rows"].append(_row(inv, "temporal", None))
+                stages_out[wi]["rows"].append(
+                    _row(inv, "temporal", None, span_end=e))
                 assigned_ids.add(key)
                 break
     unassigned = [_row(i, "unassigned", None) for i in rest
                   if (i["sid"], i["seq"]) not in assigned_ids]
+    n_after = sum(1 for st in stages_out for r in st["rows"]
+                  if r["after_stage"])
     return {"skill": skill or "(全部)", "topic": fm.get("topic", ""),
             "members": len(members), "stages": stages_out,
-            "unassigned": unassigned,
+            "unassigned": unassigned, "after_stage": n_after,
             "total": len(invs), "joined": len(assigned_ids)}
 
 
 def render_cross(d: dict, title: str | None = None) -> str:
     title = title or f"skill 进化 join 交叉表（{d['skill']}）"
+    n_after = d.get("after_stage", 0)
     lines = [f"# {title}", "",
              f"- 主题: {d['topic']} | 成员: {d['members']} 个"
              f" | 命中: {d['joined']}/{d['total']} 次调用", ""]
+    if n_after:
+        lines += [
+            f"- ⚠ **其中 {n_after} 次落在 stage 结束之后**（margin 区，"
+            f"kind 带 `_after` 后缀）——这些是\"阶段收尾后的工具化延续\"，"
+            f"**不是阶段之内的贡献**，语义判定时勿混算。", ""]
     for st in d["stages"]:
         if not st["rows"]:
             continue
-        lines += [f"## {st['stage']}（{st['span']}）", "",
+        n_st_after = sum(1 for r in st["rows"] if r["after_stage"])
+        suffix = (f"；⚠ {n_st_after} 次在阶段结束之后" if n_st_after else "")
+        lines += [f"## {st['stage']}（{st['span']}{suffix}）", "",
                   "| 调用锚点 | turn | 方式 | 状态 | 会话标题 | ts |",
                   "|---|---|---|---|---|---|"]
         for r in st["rows"]:

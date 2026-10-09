@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "session-harvester"
+version = "0.23.0"
+description = "AI 会话历史提取·检索·蒸馏套件（本地、只读、零依赖核心）"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+# 核心零第三方依赖——与 README「依赖边界（诚实声明）」一致。
+dependencies = []
+
+[project.optional-dependencies]
+# T3 主题思维链（topic chain / chain-validate）。**故意不提供降级解析**：
+# 缺 PyYAML 时这两条命令与 23 个相关测试会明确报错，而非静默误读块结构。
+yaml = ["PyYAML>=6.0"]
+# DSH 会话日志为 zstd 多帧压缩；Python 3.14+ 可用标准库 compression.zstd，
+# 3.10–3.13 走本可选依赖（adapter 另有 zstd.exe / node 分层降级）。
+dsh = ["zstandard>=0.22"]
+# weblogin prepare 打开自动化浏览器由用户手动完成登录（兜底通道）。
+web = ["playwright>=1.40"]
+# verify/ 采集脚本用（独立 venv 运行，不污染包本体）。
+verify = ["requests>=2.31", "websocket-client>=1.7"]
+all = ["PyYAML>=6.0", "zstandard>=0.22", "playwright>=1.40",
+       "requests>=2.31", "websocket-client>=1.7"]
+
+[project.scripts]
+# run() 而非 main()：console script 包装器不把返回值当退出码，
+# 直接挂 main 会让非零退出码静默变 0。见 cli.run 的 docstring。
+harvester = "harvester.cli:run"
+
+[tool.setuptools]
+packages = ["harvester", "harvester.adapters"]

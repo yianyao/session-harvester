@@ -1316,5 +1316,15 @@ def main(argv=None) -> int:
     return args.func(args)
 
 
+def run() -> None:
+    """console_scripts 入口（pyproject [project.scripts]）。
+
+    `main()` 返回 int，而 console script 包装器**不会**把返回值当退出码
+    （只调函数、不 sys.exit）——直接用 `harvester.cli:main` 会让所有非零
+    退出码静默变成 0。故这里显式 sys.exit。
+    """
+    sys.exit(main())
+
+
 if __name__ == "__main__":
     sys.exit(main())
