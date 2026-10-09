@@ -6,16 +6,17 @@
 
 ---
 
-## 0. 最新状态（2026-10-09，P1-2/P1-4 收官后）
+## 0. 最新状态（2026-10-09，P1-3 收官后）
 
 | 项 | 值 |
 |---|---|
 | 后端 head | `a1da498`（P1-4），已推送；测试基线 **398 例全绿**（377 + P1-4 21） |
 | 前端 head | `621d43e`（P1-4 view），已推送；render_smoke + view 测试全绿 |
-| PLAN §3 队列 | **全部收官**（P0/P1-1/P1-2/P1-4/T0-T5/P2-1/P2-2），仅剩 P1-3 |
+| PLAN §3 队列 | **全部收官**（P0/P1-1/P1-2/P1-3/P1-4/T0-T5/P2-1/P2-2） |
 | 待用户复核 | ①chain-叙事节奏-draft 定稿 ②pdf-text-extractor 报告（margin 90 天裁决）③117 候选簇判定 |
 | P1-2 | `439dfe7`：同根因建议合并（H15 验收 9→8 条，Edit 前置 130+13-3=140）+ triage A 节根因分组（24 pattern→2 组 9 归并）+ cards new 查重 + raw[:100] 放开 |
 | P1-4 | `a1da498`/`621d43e`：export-analysis 统一导出器（5 kind × md/json 同源）+ /api/export-analysis + view 六按钮改调（端只做下载）+ 代理透传 text/markdown |
+| P1-3 | 见 H45：交叉表 class × harness × model（collect_errors additive model 键 + cross_stats + /api/reports/errors `cross` 字段 + render_report 交叉表节） |
 
 ## 1. 当前状态（截至 2026-10-08 17:55，head=`9e8ce9b`）
 
@@ -71,6 +72,8 @@
 | H42 | **P1-2 落地**（`439dfe7`）：同根因合并=pattern 集交集的连通分量（agent_suggest._merge_overlapping + root_key_assign 并查集）；计数按并集相加不重复计；title 取自身 total 最高者（并集扩充前定格）；triage _mark 加 templates 字段（additive）；clean_error_sample 共享口径（回显清理+单行+缺省不截断）；cards scaffold_card 加 dupe_warnings（normalize_error 唯一键+宽松子串比对） | 真实库 9→8 条建议；triage A 节 24→2 组+15 独立 |
 | H43 | **P1-4 落地**（`a1da498`/`621d43e`）：export_analysis.build_analysis 同源双出口（json=machineWrap 头 kind/generated_at/db_fingerprint/dedup/hint + data；md=复用 render_errors/tools/skill/triage + render_sessions_md）；sessions 的 patterns_dedup=v2.3 view 口径下沉；toolstats.tool_rows 自 apiserve._tool_rows 迁入；/api/export-analysis additive；view 六按钮 exportAnalysis() 化，代理 proxy_get 放行 text/markdown（三元组透传 ctype）；agents/cards 报告保留本地 mdReport/machineWrap | 5 kind × md/json 端到端 200 |
 | H44 | **运维教训（复犯）**：后台起 api-serve/view 时接 `\| head -N` 会在 N 行后破管道——Python print 失败 → handler 全部静默死亡（端口仍 LISTEN 但不响应，RemoteDisconnected）；且 Windows 允许同端口重复绑定（SO_REUSEADDR），新起实例"成功"但请求全打到僵尸。**后台服务命令绝不接 head；起服务前 netstat 查重；同端口双 LISTEN 先 taskkill** | 本次冒烟双服务同时中招 |
+| H45 | **P1-3 落地**：交叉表 class × harness(source) × model——collect_errors_from_db SELECT 补 `s.model`（errors 项 additive `model` 键，NULL 归"（未知）"与 facets 口径一致）+ `errstats.cross_stats(errors)` 纯聚合（行含 source/model/四类计数/total，total 降序，首行=最多坑组合）+ /api/reports/errors additive `cross` 字段（SOP-P1-3"或并入 reports/errors"选项）+ render_report 新增"数据源 × model × 错误类别交叉表"节（CLI report-errors 自动生效）。分类仍单点 classify_error，禁第二套。真实库验收：10 行，sum(total)==error_count==by_class 合计=290，首行 dsh×deepseek-flash 126 条以 tool_interface 为主（三列非全零） | tests/test_v22_p1_3_cross.py 8 例；真库对账实测 |
+| H46 | **fixture 旧 schema 教训**：test_v10/test_v13 手写 sessions DDL 缺 model 列（v0.15 前旧态）→ P1-3 给 collect_errors_from_db 加 SELECT s.model 后全量回归 8 例 no such column。修复=补齐 fixture DDL 对齐冻结 schema（test_v13 位置插入同步补 NULL 列）；**不做运行时 schema 嗅探降级**（fail loud 纪律）。新增消费 sessions 列的代码时，先 grep tests 里 `CREATE TABLE sessions` 手写 schema 是否同步 | 全量回归 406 例复跑 |
 
 ## 3. T3 开工要点（下一任务）
 
