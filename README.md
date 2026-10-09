@@ -102,6 +102,77 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 - 批量注册场景（117 簇级别）参考 `scripts/register_candidates_20261009.py`
   ——解析候选报告后逐簇调 `topics.register_topic` + `add_members`。
 
+## 全命令速查表
+
+> `python -m harvester <命令> --help` 看完整参数。默认都读当前目录
+> `harvester.db`；分析口径统一用 `messages.raw`。
+
+### 采集与同步
+
+| 命令 | 用途 |
+|---|---|
+| `probe` | 固化探测：扫描本机数据源签名并生成 sources.json |
+| `adapters` | 显示各数据源探测状态（OK/STUB/MISSING） |
+| `scan` | 扫描数据源并生成可导出会话纲要 |
+| `export` | 按纲要序号导出会话（`--select`/`--all`） |
+| `sync` | 一键同步（全量）：收件箱收割 → 导出 → 重建索引，幂等；对账/rebuild 基线 |
+| `update` | 一键同步（增量）：只导出新 sid/updated_at 变化的会话；日常更新用这条 |
+| `weblogin check` | 探测各网页 Chat 产品浏览器登录态 |
+| `weblogin init-config` | 生成账号密码配置模板（预留接口） |
+| `weblogin prepare <产品>` | 打开自动化浏览器完成人工登录 |
+
+### 索引与检索
+
+| 命令 | 用途 |
+|---|---|
+| `index` | 构建 FTS5 全文索引 |
+| `search` | 全文检索历史会话 |
+| `read` | 按纲要序号读会话（`--turn` 下钻） |
+| `pack` | 产出跨 agent 上下文交接包 |
+| `mcp-serve` | MCP stdio server：Agent 直查历史 |
+
+### 分析报告（消费索引库）
+
+| 命令 | 用途 |
+|---|---|
+| `report-tools` | 工具调用/失败率统计 |
+| `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表） |
+| `report-chains` | 工具链失败翼报告（长回合/连击/循环/空转） |
+| `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
+| `report-skill` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
+| `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4） |
+| `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db） |
+| `suggest-agents` | 从错误模式生成 AGENTS.md 候选条目（建议池，不直改） |
+| `suggest-status` | 建议池状态落库（pending/adopted/rejected） |
+| `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
+
+### 蒸馏与知识库
+
+| 命令 | 用途 |
+|---|---|
+| `aggregate` | 聚合会话为语料（蒸馏喂料） |
+| `triage` | 蒸馏队列：新错误 pattern/旧坑重现/Skill 行为链/高信号会话 |
+| `draft` | 蒸馏包：会话原文+卡片规范+指令 → 自包含 md 喂 Agent |
+| `artifacts` | 产物提取：Write/Edit args 回源 → artifacts_meta.db |
+| `cards validate` | 校验卡片目录（§8 规范 + 锚点真实命中索引库） |
+| `cards new` | 从索引库会话生成卡片脚手架（evidence 留白） |
+| `kb-init` | 建知识库骨架（幂等） |
+| `kb-stats` | 知识库盘点 |
+
+### 主题注册（T 轨）
+
+| 命令 | 用途 |
+|---|---|
+| `topic-candidates` | 自动聚类候选推荐：只产候选簇报告，不改注册表 |
+| `topic register/add/remove/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab） |
+| `chain-validate` | topic-chain 长文独立校验（frontmatter + 锚点可回溯） |
+
+### 服务
+
+| 命令 | 用途 |
+|---|---|
+| `api-serve` | 只读 HTTP JSON API（默认 127.0.0.1:8765；非回环 host 必须 --token；`--topics-meta/--cards-root/...` 启用对应端点） |
+
 ## 套件结构
 
 ```text
