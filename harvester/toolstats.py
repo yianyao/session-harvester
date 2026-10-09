@@ -23,6 +23,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from .errstats import clean_error_sample
+
 _CALL_RE = re.compile(r"^\[tool_call\]\s+([^\s:]+):")
 _RESULT_RE = re.compile(r"^\[tool_result\]\s+([^\s:]+):\s+(\S+)\s*(.*)$")
 
@@ -450,14 +452,9 @@ def render_report(stats: dict[str, ToolStats], title: str = "工具调用统计"
         for tool, st in err_tools:
             lines.append(f"### {tool}")
             for g in aggregate_error_roots(st.errors):
-                sample = re.sub(r"\s+", " ", g["sample"])
-                # 截掉工具回显的用户输入（Edit 失败时把 old_string 前 N 字
-                # 附在错误文本尾部——「七步骨架/批次 8」类污染即来源于此）
-                for marker in ("String:", "old_string was", "Input:"):
-                    if marker in sample:
-                        sample = sample.split(marker)[0].rstrip()
-                        break
-                sample = sample[:120]
+                # 回显清理 + 截断收口到 errstats.clean_error_sample
+                # （P1-2 共享口径；截 120 属表格展示宽度，非数据截断）
+                sample = clean_error_sample(g["sample"], max_len=120)
                 lines.append(f"- x{g['count']} [{g['class']}] `{g['pattern']}`")
                 if sample:
                     lines.append(f"      - 例：{sample}")

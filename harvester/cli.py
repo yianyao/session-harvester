@@ -611,13 +611,16 @@ def cmd_cards_new(args) -> int:
               file=sys.stderr)
         return 2
     try:
+        dupes: list[str] = []
         path = scaffold_card(dbp, args.sid, Path(args.root),
                              ctype=args.type, title=args.title,
-                             turn=args.turn)
+                             turn=args.turn, dupe_warnings=dupes)
     except (KeyError, ValueError) as e:
         print(f"错误: {e}", file=sys.stderr)
         return 2
     print(f"脚手架已生成: {path}")
+    for w in dupes:
+        print(f"⚠️ {w}")
     print("下一步: 补全 evidence（原会话证据原文）与正文，然后 "
           "cards validate --root ... --db ...")
     return 0

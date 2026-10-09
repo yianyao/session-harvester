@@ -8,8 +8,10 @@
 - 只产出建议文件，**绝不直接修改 AGENTS.md**——人工审阅后自行并入；
   AGENTS.md 的权威定义是"真实踩过的坑"，机器建议必须过人眼；
 - 每条建议必须附锚点（sid#seq）与错误原文，脱离证据的条目视为缺陷；
-- 聚合口径：按**模板**聚合（一个模板吞并所有命中它的错误模式），
-  模板总次数达到 --min-count 才出条目；
+- 聚合口径（P1-2 修订）：先按**模板**收集（一个模板吞并所有命中它的
+  错误模式），再把 pattern 集有交集的模板条目**按根因合并**（计数按
+  并集相加、samples 合并去重、title 取 calls 最高者）——同根因全局只出
+  一条主建议（H15）；合并后总次数达 --min-count 才出条目；
 - 未命中任何模板的模式进"待人工归因"节——给证据不给结论。
 
 条目格式对齐 AGENTS.md 现有风格：编号 + 加粗规则句 +（实测次数与锚点）。
@@ -19,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from .errstats import pattern_stats
+from .errstats import clean_error_sample, pattern_stats
 
 # 模板表：正则（对归一模式或错误原文匹配）→ (规则句, 做法说明, owner)。
 # 每条模板都源自本库 steps 表真实踩过的错误，不是通用建议。
@@ -91,6 +93,87 @@ def _hits(creg: re.Pattern, pattern: str, samples: list) -> bool:
     return any(creg.search(raw[:200]) for _sid, _seq, raw in samples)
 
 
+def _collect_template_groups(
+        stats: dict[str, dict]) -> list[dict]:
+    """每模板收集命中 patterns：[{tpl, title, body, owner, pats: {pat: d}}]。
+
+    pats 值为 pattern_stats 的条目（count/given_up/samples）。
+    """
+    groups = []
+    for ti, (reg, title, body, owner) in enumerate(_TEMPLATES):
+        creg = re.compile(reg, re.IGNORECASE)
+        pats = {pat: d for pat, d in stats.items()
+                if _hits(creg, pat, d["samples"])}
+        if pats:
+            groups.append({"tpl": ti, "title": title, "body": body,
+                           "owner": owner, "pats": pats})
+    return groups
+
+
+def _merge_overlapping(groups: list[dict]) -> list[dict]:
+    """同根因合并（P1-2，SOP-P1-2 第 2 条）：
+
+    两模板条目覆盖的 pattern 集有交集即视为同一根因，连通分量式合并
+    （A∩B、B∩C → A/B/C 一组；防"同根因多条建议"，H15）。
+    合并组：pats 取并集（计数按并集相加，每 pattern 只计一次，不重复
+    计）；title/body/owner 取组内自身 total 最高的成员（"title 取 calls
+    最高者"；自身 total 于扩充并集前定格，同数按模板声明序 tie-break，
+    确定性）。
+    """
+    out: list[dict] = []
+    for g in groups:
+        overlap = [m for m in out if set(m["pats"]) & set(g["pats"])]
+        if not overlap:
+            out.append(dict(g))
+            continue
+        # 成员自身 total 在并集扩充前定格（base 随后要承载并集）
+        members = overlap + [g]
+        best = max(members,
+                   key=lambda m: (sum(d["count"] for d in m["pats"].values()),
+                                  -m["tpl"]))
+        base = overlap[0]
+        for m in overlap[1:]:
+            for pat, d in m["pats"].items():
+                base["pats"].setdefault(pat, d)
+            out.remove(m)
+        for pat, d in g["pats"].items():
+            base["pats"].setdefault(pat, d)
+        base["title"], base["body"], base["owner"] = (
+            best["title"], best["body"], best["owner"])
+        base["tpl"] = best["tpl"]
+    return out
+
+
+def root_key_assign(pairs: list[tuple[str, list[int]]]) -> dict[str, int | None]:
+    """把 (pattern, 命中模板 id 列表) 分配到根因组（P1-2，triage A 节用）。
+
+    命中同一 pattern 的多个模板经并查集连通 → 同组，组 id = 组内最小
+    模板 id；未命中任何模板的 pattern 组 id = None（各自独立，互不同组）。
+    返回 {pattern: group_id}。
+    """
+    parent: dict[int, int] = {}
+
+    def find(x: int) -> int:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]  # 路径压缩
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            lo, hi = sorted((ra, rb))
+            parent[hi] = lo  # 小 id 作根 → 组 id 恒为分量内最小模板 id
+
+    hit_map = {pat: hits for pat, hits in pairs if hits}
+    for hits in hit_map.values():
+        for t in hits:
+            find(t)
+        for t in hits[1:]:
+            union(hits[0], t)
+    return {pat: (find(hits[0]) if hits else None) for pat, hits in pairs}
+
+
 def build_suggestion_entries(errors: list[dict], min_count: int = 3,
                              max_items: int = 15,
                              statuses: dict[str, str] | None = None) -> dict:
@@ -98,6 +181,10 @@ def build_suggestion_entries(errors: list[dict], min_count: int = 3,
 
     statuses（v0.19 additive，可选）：{key: status} 映射（key=title，
     来自独立 meta 库 suggestion_status 表）；缺省/未记录 → "pending"。
+    P1-2（v0.22）：同根因模板条目合并——pattern 集有交集的条目合并为
+    一条（计数按并集相加不重复计、samples 合并去重、title 取 calls 最高
+    者），min_count 在合并后判定；H15 验收 = "Edit 前置"根因全局只出
+    1 条主建议。
     返回 {"entries": [...], "leftover": [...], "min_count": n}：
     - entries 每项 {title, body, total, owner, unresolved_count,
       samples: [(sid, seq, raw)]}；按 unresolved_count 降序、再按 total
@@ -109,22 +196,26 @@ def build_suggestion_entries(errors: list[dict], min_count: int = 3,
       节与前端报告页均消费此结构。
     """
     stats = pattern_stats(errors)
-    entries: list[dict] = []
+    groups = _merge_overlapping(_collect_template_groups(stats))
     consumed: set[str] = set()
-    for reg, title, body, owner in _TEMPLATES:
-        creg = re.compile(reg, re.IGNORECASE)
-        total, unresolved, samples = 0, 0, []
-        for pat, d in stats.items():
-            if _hits(creg, pat, d["samples"]):
-                total += d["count"]
-                unresolved += d.get("given_up", 0)
-                consumed.add(pat)
-                samples += d["samples"]
-        if total >= min_count and samples:
-            entries.append({"title": title, "body": body, "total": total,
-                            "owner": owner, "unresolved_count": unresolved,
-                            "status": (statuses or {}).get(title, "pending"),
-                            "samples": samples})
+    entries: list[dict] = []
+    for g in groups:
+        consumed |= set(g["pats"])
+        total = sum(d["count"] for d in g["pats"].values())
+        unresolved = sum(d.get("given_up", 0) for d in g["pats"].values())
+        if total < min_count:
+            continue
+        samples, seen = [], set()
+        for d in g["pats"].values():
+            for s in d["samples"]:
+                if s not in seen:
+                    seen.add(s)
+                    samples.append(s)
+        entries.append({"title": g["title"], "body": g["body"],
+                        "total": total, "owner": g["owner"],
+                        "unresolved_count": unresolved, "samples": samples})
+    for e in entries:
+        e["status"] = (statuses or {}).get(e["title"], "pending")
     entries.sort(key=lambda e: (-e["unresolved_count"], -e["total"]))
     entries = entries[:max_items]
     leftover = [(pat, d) for pat, d in stats.items() if pat not in consumed]
@@ -158,7 +249,7 @@ def build_suggestions(errors: list[dict], min_count: int = 3,
         lines += [f"（无：所有达标条目均已自愈。）", ""]
     for i, e in enumerate(todo, 1):
         sid, seq, raw = e["samples"][0]
-        raw_short = raw[:100].replace("\n", " ").replace("`", "'")
+        raw_short = clean_error_sample(raw)
         lines += [
             f"{i}. **{e['title']}**（owner: {e['owner']}"
             f"｜status: {e['status']}）",
@@ -172,7 +263,7 @@ def build_suggestions(errors: list[dict], min_count: int = 3,
         lines += ["（无。）", ""]
     for i, e in enumerate(watch, 1):
         sid, seq, raw = e["samples"][0]
-        raw_short = raw[:100].replace("\n", " ").replace("`", "'")
+        raw_short = clean_error_sample(raw)
         lines += [
             f"{i}. **{e['title']}**（owner: {e['owner']}）",
             f"   实测 {e['total']} 次｜未解决 0 次，"
