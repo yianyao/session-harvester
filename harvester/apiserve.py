@@ -57,8 +57,8 @@ from .export_analysis import build_analysis
 from .indexing import search
 from .reader import split_turns
 from .suggestmeta import load_statuses
-from .toolstats import (aggregate_error_roots, collect_source_stats,
-                        collect_stats_from_db, tool_rows)
+from .toolstats import (collect_source_stats, collect_stats_from_db,
+                        tool_rows)
 from .triage import collect_triage
 
 API_VERSION = 1

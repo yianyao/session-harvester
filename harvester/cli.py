@@ -668,8 +668,7 @@ def cmd_cards_new(args) -> int:
 def cmd_topic(args) -> int:
     """主题注册表（T1 MVP，v0.22）：独立 meta 库 topics_meta.db。"""
     from .topics import (add_members, list_topics, register_topic,
-                         remove_member, render_title_chain, show_topic,
-                         title_chain)
+                         remove_member, show_topic, title_chain)
     meta = Path(args.meta)
     if args.cmd == "register":
         kws = [k.strip() for k in (args.keywords or "").split(",")

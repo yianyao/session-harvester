@@ -10,8 +10,8 @@
 
 | 项 | 值 |
 |---|---|
-| 后端 head | `261200c` + update 增量同步（见 H47），已推送；测试基线 **411 例全绿**（406 + update 5） |
-| 前端 head | `6d7876f`（G2 交叉表渲染），已推送；render_smoke + view 测试全绿 |
+| 后端 head | `261200c` + update 增量同步（见 H47）+ 复查三修（见 H48），**测试基线 417 例全绿** |
+| 前端 head | `6d7876f`（G2 交叉表渲染）；**view 测试基线 24 例全绿**（H48 修 encoding 前实为 23/24） |
 | PLAN §3 队列 | **全部收官**（P0/P1-1..4/T0-T5/P2-1/P2-2） |
 | 用户裁决 2026-10-09 | ①chain 定稿（校验器通过）②margin 90 天认可 ③117 簇已注册（主题 10→127）④AutoClaw 排查**不开** |
 | 数据更新双轨 | `update` = 日常增量（库即水位，只导新 sid/updated_at 变化）；`sync` = 全量对账基线（语义不变） |
@@ -77,6 +77,7 @@
 | H45 | **P1-3 落地**：交叉表 class × harness(source) × model——collect_errors_from_db SELECT 补 `s.model`（errors 项 additive `model` 键，NULL 归"（未知）"与 facets 口径一致）+ `errstats.cross_stats(errors)` 纯聚合（行含 source/model/四类计数/total，total 降序，首行=最多坑组合）+ /api/reports/errors additive `cross` 字段（SOP-P1-3"或并入 reports/errors"选项）+ render_report 新增"数据源 × model × 错误类别交叉表"节（CLI report-errors 自动生效）。分类仍单点 classify_error，禁第二套。真实库验收：10 行，sum(total)==error_count==by_class 合计=290，首行 dsh×deepseek-flash 126 条以 tool_interface 为主（三列非全零） | tests/test_v22_p1_3_cross.py 8 例；真库对账实测 |
 | H46 | **fixture 旧 schema 教训**：test_v10/test_v13 手写 sessions DDL 缺 model 列（v0.15 前旧态）→ P1-3 给 collect_errors_from_db 加 SELECT s.model 后全量回归 8 例 no such column。修复=补齐 fixture DDL 对齐冻结 schema（test_v13 位置插入同步补 NULL 列）；**不做运行时 schema 嗅探降级**（fail loud 纪律）。新增消费 sessions 列的代码时，先 grep tests 里 `CREATE TABLE sessions` 手写 schema 是否同步 | 全量回归 406 例复跑 |
 | H47 | **update 增量同步 + adapter sid 契约修复**：①新增 `run_update`/CLI `update`——收件箱收割 → 库水位对比（`sessions(sid, updated_at)`，**库即状态**无独立水位文件）→ 仅导出新 sid/updated_at 变化（export 新增 `select_sids` 参数，sid 为库口径 `{source}:{session_id}`）→ 整库重建索引；sync 保持全量作对账基线。②H47 教训：vscode-copilot `load_session` 用裸 sid 作 `rec.session_id` 而 `list_sessions` 给 `db::/empty::/ws::` 前缀形态——**list 与 load 的 session_id 不一致**导致对比 sid≠入库 sid，增量对该源永远判新（全量模式靠文件名幂等掩盖）。修复=rec.session_id 用完整入参（base 契约隐含要求，实为既有 bug）；迁移=删 exports 旧 vscode-copilot 文件 24 个 + 重导（topics_meta 无该源引用，安全）。真机验收：二跑新增 0/跳过 1963 收敛；活跃会话 updated_at 变化重导=续聊语义正确。用户裁决：AI CHAT 维持收件箱协议（官方导出包丢 inbox），不自动抓网页平台 | tests/test_v22_update.py 5 例 |
+| H48 | **第三方全量复查（2026-10-09）三处修复 + 一处自我更正**：①`test_v24_render.py` 的 `subprocess.run` 缺 `encoding="utf-8"` → Windows locale=cp936 解码 node 的 UTF-8 中文输出抛 UnicodeDecodeError、stdout 变 None、assertIn 抛 TypeError；**view 测试基线因此实际是 23/24 而非"全绿"**。修复后 24 例 OK。②`topics.py:217/401` 写 `f"- 库快照：{fingerprint_line(fp)}"` 而 `fingerprint_line` 已自带前缀 → 产物出现"库快照：库快照："；新增 `dbmeta.FINGERPRINT_PREFIX` 单一来源，两处改 `f"- {fingerprint_line(fp)}"`。③**P2-2 排序口径修正**：`freq` 是"单条文本内出现次数×条数"累加，故长会话里反复出现的人名压过真主题词（真库实测「丁樾」freq=50577 而全库仅 6723 条消息）。新增 `doc_freq` 列（= 含该 gram 的消息条数），排序改 doc_freq 优先；真库复测「丁樾」doc_freq=1421 居首暴露停用词需求。旧 meta 库（缺列）：读时显式提示重跑、写时就地重建。④**自我更正**：我上一轮报告称 `candidates.task_signature` 是死函数——**错**，我的扫描只覆盖 `harvester/` 未覆盖 `tests/`，实为测试用 API（`test_v22_t5_candidates` 3 处引用）。已恢复该函数并补 docstring（单会话口径，批量走 `_load_features` 避 N+1）。真正死代码只有 2 处 import，已清 | test_v23_docfreq.py 6 例；后端 417 例 / view 24 例全绿 |
 
 ## 3. T3 开工要点（下一任务）
 

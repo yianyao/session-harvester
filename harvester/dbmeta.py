@@ -50,8 +50,17 @@ def db_fingerprint(db: Path, con: sqlite3.Connection | None = None) -> dict:
             "generated_at": _fmt_ts(time.time())}
 
 
+#: 库快照前缀的唯一来源——调用方一律用本常量拼接，禁止再写字面量。
+#: 历史缺陷：topics.py 曾写 f"- 库快照：{fingerprint_line(fp)}"，
+#: 而 fingerprint_line 已自带前缀 → 产物出现"库快照：库快照："。
+FINGERPRINT_PREFIX = "库快照："
+
+
 def fingerprint_line(fp: dict) -> str:
-    """指纹 → 单行产物头（Markdown blockquote 内容，CLI 报告首行用）。"""
-    return (f"库快照：{fp['sessions']} 会话 / {fp['steps']} 步骤 / "
+    """指纹 → 单行产物头（Markdown blockquote 内容，CLI 报告首行用）。
+
+    返回值**含** FINGERPRINT_PREFIX；调用方直接使用，勿再补前缀。
+    """
+    return (f"{FINGERPRINT_PREFIX}{fp['sessions']} 会话 / {fp['steps']} 步骤 / "
             f"{fp['errors']} 错误 @ {fp['db_mtime']}"
             f"（生成于 {fp['generated_at']}）")

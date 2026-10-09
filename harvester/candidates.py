@@ -51,7 +51,11 @@ def _jaccard(a: set, b: set) -> float:
 
 
 def task_signature(db: Path, sid: str, top_tools: int = 3) -> dict:
-    """单会话任务签名：首条 user raw 归一 + 工具序列 top-k。"""
+    """单会话任务签名：首条 user raw 归一 + 工具序列 top-k。
+
+    单会话口径（测试与调试用）；批量路径见 `_load_features`（一次查询取全会话，
+    避免逐 sid 建连的 N+1）。
+    """
     con = sqlite3.connect(f"file:{Path(db)}?mode=ro", uri=True)
     try:
         row = con.execute(

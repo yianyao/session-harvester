@@ -214,7 +214,7 @@ def render_title_chain(chain: dict) -> str:
     fp = chain.get("db_fingerprint")
     if fp:
         from .dbmeta import fingerprint_line
-        lines.append(f"- 库快照：{fingerprint_line(fp)}")
+        lines.append(f"- {fingerprint_line(fp)}")
     lines += ["", "## 标题演进链（时间序去重，每标题带首现时间）", ""]
     for i, r in enumerate(chain["rows"], 1):
         lines.append(f"{i}. `{r['first_seen'][:10]}` {r['title']}（{r['sid']}）")
@@ -398,10 +398,9 @@ def render_timeline(d: dict) -> str:
     fp = d.get("db_fingerprint")
     if fp:
         from .dbmeta import fingerprint_line
-        head.append(f"- 库快照：{fingerprint_line(fp)}")
+        head.append(f"- {fingerprint_line(fp)}")
     tail: list[str] = []
     if level == "title":
-        from .dbmeta import fingerprint_line as _fl  # noqa: F401
         return render_title_chain(d)
     budget = d.get("budget")
     if level == "coarse":

@@ -40,8 +40,13 @@ CREATE TABLE IF NOT EXISTS keyword_stats(
   n INTEGER NOT NULL,
   gram TEXT NOT NULL,
   freq INTEGER NOT NULL,
+  doc_freq INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(run_id, n, gram));
 """
+
+#: keyword_stats 期望列——doc_freq 为 v0.23 additive（P2-2 排序口径修正）。
+#: 旧 meta 库缺该列 → 读时显式报错要求重跑，不静默按 freq 排序（口径漂移更危险）。
+_STATS_COLUMNS = ("run_id", "n", "gram", "freq", "doc_freq")
 
 
 def extract_grams(text: str, n: int) -> list[str]:
@@ -114,13 +119,18 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
         if scope:
             sql += f" AND sid IN ({','.join('?' * len(scope))})"
             args += scope
-        counters = {n: Counter() for n in ns}
+        counters = {n: Counter() for n in ns}    # 词频：gram 在该条文本内的出现次数
+        doccounters = {n: Counter() for n in ns}  # 文档频：含该 gram 的文本条数
         total_msgs = 0
         for (raw,) in con.execute(sql, args):
             total_msgs += 1
             for n in ns:
-                counters[n].update(g for g in extract_grams(raw, n)
-                                   if g not in stop)
+                grams = [g for g in extract_grams(raw, n) if g not in stop]
+                if not grams:
+                    continue
+                counters[n].update(grams)
+                # 单条文本内同一 gram 只记一次（doc_freq 的语义）
+                doccounters[n].update(set(grams))
     finally:
         con.close()
 
@@ -137,6 +147,16 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
     meta.parent.mkdir(parents=True, exist_ok=True)
     mcon = sqlite3.connect(meta)
     try:
+        # 旧 schema 迁移（v0.23）：CREATE IF NOT EXISTS 不会给已存在的表补列，
+        # 故先探列；缺 doc_freq 则重建该表（run 历史同表，一并重置——统计
+        # 产物可重生成，口径正确优先于保留旧 run）。
+        try:
+            existing = {r[1] for r in mcon.execute(
+                "PRAGMA table_info(keyword_stats)")}
+        except sqlite3.DatabaseError:
+            existing = set()
+        if existing and not set(_STATS_COLUMNS) <= existing:
+            mcon.execute("DROP TABLE keyword_stats")
         mcon.executescript(SCHEMA)
         cur = mcon.execute(
             "INSERT INTO keyword_runs(generated_at, params, db_fingerprint)"
@@ -144,16 +164,22 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
             (now, json.dumps(params, ensure_ascii=False), fp_json))
         run_id = cur.lastrowid
         for n in ns:
+            # 排序口径：doc_freq 优先（"在多少条会话文本里被提到"），freq 次之
+            # （提得多）。旧实现按 freq 排 → 长会话里反复出现的人名压过真主题词。
+            ordered = sorted(counters[n].items(),
+                             key=lambda kv: (-doccounters[n][kv[0]], -kv[1], kv[0]))
             mcon.executemany(
-                "INSERT OR REPLACE INTO keyword_stats(run_id, n, gram, freq)"
-                " VALUES (?,?,?,?)",
-                [(run_id, n, g, f) for g, f in counters[n].most_common()])
+                "INSERT OR REPLACE INTO keyword_stats"
+                "(run_id, n, gram, freq, doc_freq) VALUES (?,?,?,?,?)",
+                [(run_id, n, g, f, doccounters[n][g]) for g, f in ordered])
         mcon.commit()
     finally:
         mcon.close()
 
-    rows = [{"n": n, "gram": g, "freq": f}
-            for n in ns for g, f in counters[n].most_common()]
+    rows = [{"n": n, "gram": g, "freq": f, "doc_freq": doccounters[n][g]}
+            for n in ns for g, f in sorted(
+                counters[n].items(),
+                key=lambda kv: (-doccounters[n][kv[0]], -kv[1], kv[0]))]
     return {"generated_at": now, "db_fingerprint": fp, "params": params,
             "total_msgs": total_msgs, "rows": rows}
 
@@ -171,15 +197,23 @@ def load_stats(meta: Path | None, n: int = 2, limit: int = 50) -> dict:
             "SELECT name FROM sqlite_master WHERE type='table'")}
         if not {"keyword_runs", "keyword_stats"} <= tables:
             return {"rows": [], "hint": "keywords_meta 缺表（重新生成）"}
+        cols = {r[1] for r in con.execute("PRAGMA table_info(keyword_stats)")}
+        if not set(_STATS_COLUMNS) <= cols:
+            missing = sorted(set(_STATS_COLUMNS) - cols)
+            return {"rows": [],
+                    "hint": f"keywords_meta 为旧 schema（缺 {','.join(missing)}）"
+                            "——请重跑 harvester keywords 重建"}
         run = con.execute(
             "SELECT id, generated_at, params, db_fingerprint FROM "
             "keyword_runs ORDER BY id DESC LIMIT 1").fetchone()
         if run is None:
             return {"rows": [], "hint": "keywords_meta 无 run 记录"}
-        rows = [{"gram": r["gram"], "freq": r["freq"]} for r in con.execute(
-            "SELECT gram, freq FROM keyword_stats WHERE run_id=? AND n=?"
-            " ORDER BY freq DESC, gram LIMIT ?",
-            (run["id"], int(n), int(limit)))]
+        rows = [{"gram": r["gram"], "freq": r["freq"], "doc_freq": r["doc_freq"]}
+                for r in con.execute(
+                    "SELECT gram, freq, doc_freq FROM keyword_stats "
+                    "WHERE run_id=? AND n=? "
+                    "ORDER BY doc_freq DESC, freq DESC, gram LIMIT ?",
+                    (run["id"], int(n), int(limit)))]
         return {"run": {"id": run["id"], "generated_at": run["generated_at"],
                         "params": json.loads(run["params"]),
                         "db_fingerprint": run["db_fingerprint"]},
@@ -205,7 +239,15 @@ def render_report(summary: dict, top: int = 50) -> str:
     for n in ns:
         rows = [r for r in summary["rows"] if r["n"] == n][:top]
         lines += [f"## {n}-gram Top {len(rows)}", "",
-                  "| gram | freq |", "|---|---|"]
-        lines += [f"| {r['gram']} | {r['freq']} |" for r in rows]
+                  "| gram | doc_freq | freq |", "|---|---:|---:|"]
+        lines += [f"| {r['gram']} | {r.get('doc_freq', 0)} | {r['freq']} |"
+                  for r in rows]
         lines.append("")
+    lines += [
+        "",
+        "- 排序口径（v0.23）：**doc_freq 优先**——doc_freq = 含该 gram 的消息条数"
+        "（\"在多少条会话文本里被提到\"），freq = 出现总次数。",
+        "- 旧实现按 freq 排序：长会话里反复出现的人名（如主角名）会压过真正的"
+        "主题词；现 rank 用 doc_freq。人名/专名仍建议写入停用词文件（--stopwords）。",
+    ]
     return "\n".join(lines)
