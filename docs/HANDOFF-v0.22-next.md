@@ -3,10 +3,19 @@
 > **本文件是 `HANDOFF-v0.22-execution.md` 的增量续篇**：该文件的事实台账
 > H1–H23、红线 §5、环境 §2 全部仍然有效，本文件不重抄，只记增量。
 > 配套阅读顺序：PLAN-v0.22-unified → 旧 HANDOFF（H1–H23）→ 本文件 → SOP-T3 节。
-> 交接原因：执行会话上下文已近满（T2 完成后估算），T3 是产出最重环节
-> （长文创作 + 校验器 + API + view），中途压缩会劣化创作质量——故落盘交接。
 
 ---
+
+## 0. 最新状态（2026-10-09，P1-2/P1-4 收官后）
+
+| 项 | 值 |
+|---|---|
+| 后端 head | `a1da498`（P1-4），已推送；测试基线 **398 例全绿**（377 + P1-4 21） |
+| 前端 head | `621d43e`（P1-4 view），已推送；render_smoke + view 测试全绿 |
+| PLAN §3 队列 | **全部收官**（P0/P1-1/P1-2/P1-4/T0-T5/P2-1/P2-2），仅剩 P1-3 |
+| 待用户复核 | ①chain-叙事节奏-draft 定稿 ②pdf-text-extractor 报告（margin 90 天裁决）③117 候选簇判定 |
+| P1-2 | `439dfe7`：同根因建议合并（H15 验收 9→8 条，Edit 前置 130+13-3=140）+ triage A 节根因分组（24 pattern→2 组 9 归并）+ cards new 查重 + raw[:100] 放开 |
+| P1-4 | `a1da498`/`621d43e`：export-analysis 统一导出器（5 kind × md/json 同源）+ /api/export-analysis + view 六按钮改调（端只做下载）+ 代理透传 text/markdown |
 
 ## 1. 当前状态（截至 2026-10-08 17:55，head=`9e8ce9b`）
 
@@ -59,6 +68,9 @@
 | H39 | **复核裁决①②**（chain 证据口径，用户 2026-10-08 采信）：标题与 turn 摘录可作证据但必须带 {sid,turn} 锚点可链接打开会话；artifact 档无数据时以 user 消息粘贴文本片段佐证演进 | chain 草稿"复核裁决"节 |
 | H40 | **复核裁决③（去重口径）**：会话级 user-raw 字符 bigram Jaccard ≥0.90 判重复（实测 12 对全为同稿重贴/跨端重发），7 簇 10 个重复并入最早代表，55→45；0.80–0.90 边界带 34 对=同阶段迭代，保留；轮级同稿多轮只采首末差异。锚点不迁移（2 个锚点在重复会话上仍可回溯），计数归代表。分析底稿 docs/reports/dedupe-叙事节奏.md（gitignore 本地） | t3_dedupe.py 实测 |
 | H41 | T3 全闭环：chain 草稿（55 members/7 阶段/30 锚点，fm 含 dedup 块）校验通过、正式位 `~/.workbuddy/knowledge/topics/chain-叙事节奏.md` 已同步；view「主题」tab 主题列表**数据驱动**（/api/topics 返回什么渲染什么，绝不写死主题名——用户红线）；链路验收 10 主题/30 节点/404 透传全过 | 端到端冒烟实测 |
+| H42 | **P1-2 落地**（`439dfe7`）：同根因合并=pattern 集交集的连通分量（agent_suggest._merge_overlapping + root_key_assign 并查集）；计数按并集相加不重复计；title 取自身 total 最高者（并集扩充前定格）；triage _mark 加 templates 字段（additive）；clean_error_sample 共享口径（回显清理+单行+缺省不截断）；cards scaffold_card 加 dupe_warnings（normalize_error 唯一键+宽松子串比对） | 真实库 9→8 条建议；triage A 节 24→2 组+15 独立 |
+| H43 | **P1-4 落地**（`a1da498`/`621d43e`）：export_analysis.build_analysis 同源双出口（json=machineWrap 头 kind/generated_at/db_fingerprint/dedup/hint + data；md=复用 render_errors/tools/skill/triage + render_sessions_md）；sessions 的 patterns_dedup=v2.3 view 口径下沉；toolstats.tool_rows 自 apiserve._tool_rows 迁入；/api/export-analysis additive；view 六按钮 exportAnalysis() 化，代理 proxy_get 放行 text/markdown（三元组透传 ctype）；agents/cards 报告保留本地 mdReport/machineWrap | 5 kind × md/json 端到端 200 |
+| H44 | **运维教训（复犯）**：后台起 api-serve/view 时接 `\| head -N` 会在 N 行后破管道——Python print 失败 → handler 全部静默死亡（端口仍 LISTEN 但不响应，RemoteDisconnected）；且 Windows 允许同端口重复绑定（SO_REUSEADDR），新起实例"成功"但请求全打到僵尸。**后台服务命令绝不接 head；起服务前 netstat 查重；同端口双 LISTEN 先 taskkill** | 本次冒烟双服务同时中招 |
 
 ## 3. T3 开工要点（下一任务）
 
