@@ -150,7 +150,8 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
     """从 steps 表取全部错误步骤并归类。
 
     返回 (errors, meta)：errors 每项含 sid/seq/ts/tool/error/class/pattern/
-    bucket/resolved；meta = {"total_steps": n, "error_count": n, "sessions": n,
+    bucket/resolved/model（P1-3 additive：model NULL 归"（未知）"）；
+    meta = {"total_steps": n, "error_count": n, "sessions": n,
     "since": cutoff 或 None}。resolved（v0.19 additive）：该错误之后同会话
     同工具是否有再次调用（True=重试/自愈候选，False=放弃/未解决），口径见
     模块 docstring。
@@ -171,7 +172,8 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
     try:
         if cutoff:
             rows = con.execute(
-                "SELECT st.sid, st.seq, st.ts, st.tool, st.error, s.source "
+                "SELECT st.sid, st.seq, st.ts, st.tool, st.error, s.source, "
+                "s.model "
                 "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid "
                 "WHERE st.status=? AND st.ts>=? ORDER BY st.sid, st.seq",
                 ("error", cutoff)).fetchall()
@@ -182,7 +184,8 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
                 "ORDER BY sid, seq", (cutoff,)).fetchall()
         else:
             rows = con.execute(
-                "SELECT st.sid, st.seq, st.ts, st.tool, st.error, s.source "
+                "SELECT st.sid, st.seq, st.ts, st.tool, st.error, s.source, "
+                "s.model "
                 "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid "
                 "WHERE st.status=? ORDER BY st.sid, st.seq", ("error",)).fetchall()
             total = con.execute("SELECT COUNT(*) FROM steps").fetchone()[0]
@@ -220,6 +223,8 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
             "sid": r["sid"], "seq": r["seq"], "ts": r["ts"],
             "tool": r["tool"], "error": r["error"] or "",
             "source": r["source"] or "?",
+            # P1-3：model 列（NULL 归"（未知）"，与 facets 口径一致）
+            "model": r["model"] or "（未知）",
             "class": classify_error(r["error"] or ""),
             "pattern": normalize_error(r["error"] or ""),
             "bucket": _bucket(ratio),
@@ -247,6 +252,25 @@ def pattern_stats(errors: list[dict]) -> dict[str, dict]:
         if len(p["samples"]) < 3:
             p["samples"].append((e["sid"], e["seq"], e["error"]))
     return out
+
+
+def cross_stats(errors: list[dict]) -> list[dict]:
+    """P1-3 交叉表：数据源（harness）× model × 错误类别 → 计数行。
+
+    输入为 collect_errors_from_db 产出的 errors（class 已由 classify_error
+    单点口径归类，本函数不再二次分类）。每行含 source/model/四类计数/total，
+    按 total 降序、source/model 升序排列——首行即"哪个 harness 的哪类坑
+    最多"。聚合与 by_class/by_source 对账恒等（消费方应校验 sum(total)）。
+    """
+    agg: dict[tuple[str, str], dict[str, int]] = {}
+    for e in errors:
+        key = (e["source"], e.get("model") or "（未知）")
+        row = agg.setdefault(key, {c: 0 for c in CLASSES})
+        row[e["class"]] += 1
+    rows = [{"source": src, "model": model, **counts, "total": sum(counts.values())}
+            for (src, model), counts in agg.items()]
+    rows.sort(key=lambda r: (-r["total"], r["source"], r["model"]))
+    return rows
 
 
 def render_report(errors: list[dict], meta: dict,
@@ -312,6 +336,27 @@ def render_report(errors: list[dict], meta: dict,
             "- 说明：数据源即 Agent Harness 身份（如 workbuddy-transcript=WorkBuddy、"
             "dsh=DSH、autoclaw、vscode-copilot）；Chat 平台会话无工具遥测，不产生错误步骤。",
         ]
+    # P1-3 交叉表：数据源（harness）× model × 错误类别
+    cross = cross_stats(errors)
+    lines += [
+        "",
+        "## 数据源 × model × 错误类别交叉表",
+        "",
+        "| 数据源 | model | env | tool_interface | context | unclassified | 合计 |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for r in cross:
+        lines.append("| %s | %s | %d | %d | %d | %d | %d |" % (
+            r["source"], r["model"], r["env"], r["tool_interface"],
+            r["context"], r["unclassified"], r["total"]))
+    top = cross[0]
+    worst_cls = max(CLASSES, key=lambda c: top[c])
+    lines += [
+        "",
+        f"- 最多坑组合：**{top['source']} × {top['model']}**（{top['total']} 条，"
+        f"以 {worst_cls} 为主）；model 列\"（未知）\"= 会话未携带模型信息"
+        "（导出型源范围外，见 H29 口径）。",
+    ]
     # 模式明细，按 class 分组、count 降序
     stats = pattern_stats(errors)
     order = sorted(stats.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
