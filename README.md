@@ -72,6 +72,36 @@ python -m harvester sync      # 收件箱收割 -> 全量导出 -> 整库重建�
 **默认包含**（note 角色），蒸馏与 2.2/2.3 分析依赖这些证据，勿关闭；
 确需纯对话加 `--no-with-notes`。
 
+### B++. 日常增量（推荐）：update
+
+```bash
+python -m harvester update    # 收件箱收割 -> 只导出新增/变更会话 -> 整库重建索引
+```
+
+- **增量口径**（2026-10-09 用户裁决）：不全量重取历史轨迹，只获取未获取的
+  ——新 sid 导出；`updated_at` 变化（续聊）重导该会话；其余跳过。
+- **库即水位**：高水位 = 索引库 `sessions(sid, updated_at)`，无独立状态
+  文件；首跑无库 = 天然全量。
+- `sync` 保持全量语义，作为对账/rebuild 基线（怀疑漏数据时跑一次 sync 对账）。
+
+### 主题注册（T 轨）：发现簇 → 注册 → 页面出现
+
+主题**不是固定清单**：由聚合数据中发现簇后注册进 meta 库，注册即出现在
+view「主题」tab；代码零写死主题名。三个命令：
+
+```bash
+python -m harvester topic-candidates --db harvester.db --out docs/reports/   # 聚类推荐候选簇（只产候选，不改注册表）
+python -m harvester topic register --meta topics_meta.db --name "主题名" --keywords "k1,k2"   # 认可后注册
+python -m harvester topic add --meta topics_meta.db --id <tp-id> --sids "<sid1>,<sid2>" --evidence "出处"   # 挂成员
+python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
+```
+
+- 注册库默认读 `topics_meta.db`（与 harvester.db 同目录）；**view 的
+  「主题」tab 需要 api-serve 启动时带 `--topics-meta <topics_meta.db>`**
+  （`start.cmd` 已内置），未配置时该 tab 空表并提示 hint，不炸。
+- 批量注册场景（117 簇级别）参考 `scripts/register_candidates_20261009.py`
+  ——解析候选报告后逐簇调 `topics.register_topic` + `add_members`。
+
 ## 套件结构
 
 ```text
