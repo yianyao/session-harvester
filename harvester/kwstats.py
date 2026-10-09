@@ -50,10 +50,21 @@ _STATS_COLUMNS = ("run_id", "n", "gram", "freq", "doc_freq")
 
 
 def extract_grams(text: str, n: int) -> list[str]:
-    """单条文本的 n-gram：按词字符段滑窗，空白/标点为硬边界。"""
+    """单条文本的 n-gram：按词字符段滑窗，空白/标点为硬边界。
+
+    **ASCII 段不切片（v0.23 修正）**：纯 ASCII 段（英文单词、标识符）作为
+    整体返回，不再逐字滑窗。原因：英文靠空格分词，对 "will"/"content" 这类
+    词做 2 字滑窗只会产出 "il"/"ll"/"nt" 等无意义片段——doc_freq 口径上线后
+    真实库前 30 名被这类片段占据（il/ll/es/or/er/en/se/sk/nt/in/on/ki…）。
+    CJK 段仍滑窗（中文无空格，bigram 是既定的近似分词法）。
+    """
     out: list[str] = []
     for seg in _WORD.findall(text or ""):
         if len(seg) < n:
+            continue
+        # 纯 ASCII 段：整词作为一个 gram（长度 >= n 时）
+        if seg.isascii():
+            out.append(seg)
             continue
         for i in range(len(seg) - n + 1):
             out.append(seg[i:i + n])
@@ -69,6 +80,20 @@ def load_stopwords(path: Path | None) -> set[str]:
         if line and not line.startswith("#"):
             words.add(line)
     return words
+
+
+#: 随包分发的通用停用词表（只含通用虚词；人名/专名由用户私有表叠加）。
+#: 红线：该表不得含具体作品的人名/主题词——见文件头注释与
+#: tests/test_v23_stopwords.py 的"无三字以上 CJK 词条"护栏断言。
+DEFAULT_STOPWORDS = Path(__file__).resolve().parent / "data" / "stopwords_zh.txt"
+
+
+def load_stopwords_multi(paths: list[Path] | None) -> set[str]:
+    """多表叠加（用户私有表 + 默认表）。路径不存在者静默跳过。"""
+    out: set[str] = set()
+    for p in paths or []:
+        out |= load_stopwords(p)
+    return out
 
 
 def expand_topic_sids(topic_ids: list[str],
@@ -98,13 +123,21 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
                 role: str = "user", sids: list[str] | None = None,
                 topic_ids: list[str] | None = None,
                 topics_meta: Path | None = None,
-                stopwords_path: Path | None = None) -> dict:
+                stopwords_path: Path | None = None,
+                stopwords_paths: list[Path] | None = None) -> dict:
     """统计 messages.raw 的 n-gram 词频并写入 meta 库（新 run）。
 
-    返回 summary（含 rows=全部 gram 按 freq 降序），供报告与端点消费。
+    `stopwords_paths`（v0.23）为多表叠加入口；`stopwords_path` 为旧单表
+    入口（保持兼容，二者会合并）。默认表的启用与否由 **CLI 层**决定
+    （见 cmd_keywords），本函数不做隐式默认——保持纯函数可测。
+
+    返回 summary（含 rows=全部 gram 按 doc_freq 降序），供报告与端点消费。
     """
     ns = sorted({int(x) for x in (ns or [2, 3])})
-    stop = load_stopwords(stopwords_path)
+    paths = list(stopwords_paths or [])
+    if stopwords_path:
+        paths.append(stopwords_path)
+    stop = load_stopwords_multi(paths)
     scope = list(sids or []) + expand_topic_sids(topic_ids or [],
                                                  topics_meta)
     scope = list(dict.fromkeys(scope))  # 去重保序

@@ -546,6 +546,22 @@ def cmd_topic_candidates(args) -> int:
     return 0
 
 
+def _kw_stopword_paths(args) -> list[Path]:
+    """keywords 的停用词表链（v0.23）。
+
+    默认启用随包分发的通用表（`kwstats.DEFAULT_STOPWORDS`），用户用
+    `--stopwords PATH`（可多次）叠加私有表；`--no-stopwords` 完全关闭。
+    返回顺序：默认表在前、用户表在后（叠加语义，与顺序无关）。
+    """
+    from .kwstats import DEFAULT_STOPWORDS
+    paths: list[Path] = []
+    if not getattr(args, "no_stopwords", False):
+        paths.append(DEFAULT_STOPWORDS)
+    for p in (getattr(args, "stopwords", None) or []):
+        paths.append(Path(p))
+    return paths
+
+
 def cmd_keywords(args) -> int:
     """P2-2 n-gram 关键词统计：只统计 messages.raw（H3 契约/H38），
     落 keywords_meta.db（runs+stats），可出报告。范围 --sid/--topic
@@ -567,8 +583,7 @@ def cmd_keywords(args) -> int:
                     topic_ids=list(args.topic) if args.topic else None,
                     topics_meta=Path(args.topics_meta)
                     if args.topics_meta else None,
-                    stopwords_path=Path(args.stopwords)
-                    if args.stopwords else None)
+                    stopwords_paths=_kw_stopword_paths(args))
     print(f"统计完成: 消息 {s['total_msgs']} 条 → "
           f"{args.meta}（run 追加）")
     _emit_report(render_report(s, top=args.top), args)
@@ -1056,8 +1071,13 @@ def main(argv=None) -> int:
                          "展开成员，与 --sid 合并去重）")
     pk.add_argument("--topics-meta", dest="topics_meta", default=None,
                     help="主题注册库路径（--topic 展开成员用）")
-    pk.add_argument("--stopwords", default=None,
-                    help="停用词文件（每行一词，# 注释）")
+    pk.add_argument("--stopwords", action="append", default=None,
+                    metavar="PATH",
+                    help="追加停用词文件（每行一词，# 注释；可多次）。"
+                         "默认已启用随包通用表，本项用于叠加私有表"
+                         "（如作品人名，由使用者自备）")
+    pk.add_argument("--no-stopwords", action="store_true",
+                    help="关闭停用词过滤（含默认表），用于复现历史口径")
     pk.add_argument("--top", type=int, default=50,
                     help="报告每档 Top N（默认 50）")
     pk.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")

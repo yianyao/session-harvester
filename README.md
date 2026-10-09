@@ -150,7 +150,7 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
 | `report-skill` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
 | `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |
-| `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db）。**排序口径 doc_freq 优先**（= 含该词的消息条数），freq 为出现总次数；人名/专名请走 `--stopwords` |
+| `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db）。**排序口径 doc_freq 优先**（= 含该词的消息条数），freq 为出现总次数。默认启用随包通用停用词表（`harvester/data/stopwords_zh.txt`，只含通用虚词）；人名/专名请用 `--stopwords PATH` 叠加私有表（可多次），`--no-stopwords` 关闭过滤。**ASCII 段按整词统计**（英文切片片段已消除）；CJK 段为 2/3 字滑窗，跨词边界的片段（如「上的」）属无分词器的固有代价 |
 | `suggest-agents` | 从错误模式生成 AGENTS.md 候选条目（建议池，不直改） |
 | `suggest-status` | 建议池状态落库（pending/adopted/rejected） |
 | `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
