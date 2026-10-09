@@ -67,8 +67,25 @@ class TestExtractGrams(unittest.TestCase):
         # 标点/空白切断：不产跨标点 n-gram
         self.assertEqual(extract_grams("节奏， 技法", 2),
                          ["节奏", "技法"])
-        self.assertEqual(extract_grams("abc def", 2),
-                         ["ab", "bc", "de", "ef"])
+        # v0.23 口径修正：纯 ASCII 段整体返回，不再逐字滑窗。
+        # 原断言 ["ab","bc","de","ef"] 是英文被误当 CJK 切片的产物，
+        # doc_freq 排序上线后这类片段（il/ll/es/or…）占据真实库前列，
+        # 故改为整词。详见 kwstats.extract_grams docstring。
+        self.assertEqual(extract_grams("abc def", 2), ["abc", "def"])
+
+    def test_ascii_not_sliced_but_cjk_is(self):
+        """ASCII 整词、CJK 滑窗——两种分词策略并存的回归保护。"""
+        self.assertEqual(extract_grams("will content", 2),
+                         ["will", "content"])
+        self.assertEqual(extract_grams("叙事节奏", 2),
+                         ["叙事", "事节", "节奏"])
+        # 混排：ASCII 整词 + CJK 滑窗，互不干扰。
+        # 注意 `_` 不在 _WORD 字符类内 → 标识符按下划线切分（read_file →
+        # read / file 两个整词），这是既有分词边界语义，非本次改动引入。
+        self.assertEqual(extract_grams("用 read_file 读", 2),
+                         ["read", "file"])
+        # 纯 CJK 段仍滑窗
+        self.assertEqual(extract_grams("用 读", 2), [])
 
     def test_short_segment(self):
         self.assertEqual(extract_grams("节", 2), [])

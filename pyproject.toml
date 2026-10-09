@@ -32,3 +32,8 @@ harvester = "harvester.cli:run"
 
 [tool.setuptools]
 packages = ["harvester", "harvester.adapters"]
+
+[tool.setuptools.package-data]
+# 随包分发的通用停用词表（keywords 默认启用）。缺此声明会导致装包后
+# 默认表丢失 → 停用词静默失效。
+harvester = ["data/*.txt"]

@@ -16,7 +16,7 @@
   以真机为准）
 - speechesV2[]: {speechType, content[]}；speechType 实测：
   text / search_with_text / deep_search / deep_search_agent / multimodal
-- content[] 块 type 实测（10 种）：
+- content[] 块 type 实测（12 种，v0.23 全量 1223 个 detail 复核）：
     text            正文 {msg}（human 附件+正文同轮时 pdf 块在前）
     searchGuid      联网搜索引用 {title:"引用 N 篇资料…", docs:[{index,docId,title,uri?}]}
     deepSearch      深度思考 {title:"已深度思考(用时7秒)", contents:[{type:'text',msg}]}
@@ -27,7 +27,12 @@
     prompt_url_card 分享卡片 {desc, coverUrl, iconUrl}
     link_card       链接卡片 {url, content, source, coverUrl, iconUrl}
     step            执行步骤 {msg, subMsg, stage, status}
-    （未知类型防御式跳过并警告，绝不臆测）
+    drawWithSearchGuid  AI 出图提示词 {prompt, botPrompt, title, ...}
+                    —— v0.23 补入，属创作内容，转 note（[draw] 前缀）
+    doc_percent     系统通知 {content:"超出字数限制，元宝已阅读93%", fileNumber}
+                    —— v0.23 补入，转 note（[notice] 前缀），不参与正文提炼
+    （白名单外的类型防御式跳过并警告，绝不臆测；白名单内但无解析分支的
+      类型单独告警——那是实现缺口，与源端新增类型成因不同）
 
 解析策略：
 - text 块按序拼接为该轮正文；其余块降为 note 消息（[search]/[think]/[file]/…），
@@ -50,11 +55,24 @@ HOW_TO_HARVEST = [
     "在 sources.json 中配置: {\"yuanbao-raw\": {\"paths\": [\"C:/path/to/yuanbao_raw\"]}}",
 ]
 
-#: 已核验的 content 块类型（其余类型防御式跳过+警告）
-_KNOWN_BLOCK_TYPES = {
+#: 已核验的 content 块类型（其余类型防御式跳过+警告）。
+#: v0.23：全量实测 1223 个 detail 文件后补入两种实际产出但原先漏列的类型
+#: （用户 2026-10-09 裁决）：
+#:   drawWithSearchGuid —— AI 出图的完整绘图提示词（prompt/botPrompt），
+#:                        属**创作内容**，纳入并转 note，不得丢弃；
+#:   doc_percent        —— 系统通知（如"超出字数限制，元宝已阅读93%"），
+#:                        纳入白名单但按 notice 处理，不参与正文提炼。
+KNOWN_BLOCK_TYPES = {
     "text", "searchGuid", "deepSearch", "deepSearchAgent",
     "pdf", "image", "prompt_url_card", "link_card", "step",
+    "drawWithSearchGuid", "doc_percent",
 }
+
+#: 兼容旧名（此前该集合无引用，属"注释承诺但未实现"；现为唯一来源）。
+_KNOWN_BLOCK_TYPES = KNOWN_BLOCK_TYPES
+
+#: 白名单内但**不产出正文**的系统通知类块（显式记录，避免被误当内容）。
+_NOTICE_BLOCK_TYPES = {"doc_percent"}
 
 
 def _norm_time(v) -> str | None:
@@ -158,6 +176,31 @@ def _conv_blocks(conv: dict) -> tuple[list[Message], list[str]]:
                 out.append(Message(role="note", text=normalize_text(
                     f"[step] {b.get('msg')}{sub} ({b.get('status')})"),
                     timestamp=ts, raw={"kind": "note"}))
+            elif btype == "drawWithSearchGuid":
+                # AI 出图提示词（创作内容）：prompt 优先，botPrompt 兜底。
+                pr = (b.get("prompt") or b.get("botPrompt") or "").strip()
+                if pr:
+                    out.append(Message(
+                        role="note",
+                        text=normalize_text(
+                            f"[draw] {b.get('title') or 'AI 出图提示词'}\n{pr}"),
+                        timestamp=ts, raw={"kind": "note"}))
+                else:
+                    warns.append(f"drawWithSearchGuid 无 prompt/botPrompt"
+                                 f"（conv id={conv.get('id')}）")
+            elif btype == "doc_percent":
+                # 系统通知（非用户内容）：显式成 note 并标注，不参与正文提炼。
+                c = (b.get("content") or "").strip()
+                if c:
+                    out.append(Message(
+                        role="note",
+                        text=normalize_text(f"[notice] {c}"),
+                        timestamp=ts, raw={"kind": "notice"}))
+            elif btype in KNOWN_BLOCK_TYPES:
+                # 白名单内但本版无专用分支：显式告警（而非静默落入"未知块"，
+                # 二者成因不同——这里是实现缺口，不是源端新增类型）。
+                warns.append(f"白名单块 type={btype!r} 尚无解析分支"
+                             f"（conv id={conv.get('id')}）")
             else:
                 warns.append(
                     f"未知块 type={btype!r}（conv id={conv.get('id')}），"
