@@ -24,6 +24,8 @@ v2 端点（仍然 api_version=1，只增不改）：
 - GET /api/reports/skills?days=           G4 Skill 行为画像（skill_summary 口径）
 - GET /api/reports/agents?days=&min_count=&max_items=  G2 建议条目（结构化）
 - GET /api/cards                          G3 卡片校验（需 --cards-root）
+- GET /api/export-analysis?kind=&format=md|json&sids=  统一分析导出（P1-4，
+  五类 kind，md/JSON 同源双出口；format=md 时响应 text/markdown）
 
 cards_root 仅来自启动参数（--cards-root）：访问面在启动时钉死，
 不接受 URL 参数指定任意目录——与"只读 + 白名单"同一安全哲学。
@@ -51,11 +53,12 @@ from .cards import validate_cards
 from .dbmeta import db_fingerprint
 from .errstats import (classify_error, collect_errors_from_db,
                        normalize_error, pattern_stats)
+from .export_analysis import build_analysis
 from .indexing import search
 from .reader import split_turns
 from .suggestmeta import load_statuses
 from .toolstats import (aggregate_error_roots, collect_source_stats,
-                        collect_stats_from_db)
+                        collect_stats_from_db, tool_rows)
 from .triage import collect_triage
 
 API_VERSION = 1
@@ -397,26 +400,6 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
             "db_fingerprint": db_fingerprint(db, con=con)}
 
 
-def _tool_rows(stats: dict, min_calls: int = 0) -> list[dict]:
-    """ToolStats 字典 → 排序后的 JSON 行（失败率优先，与 render_report 同序）。
-    v0.19 additive：given_up/retried（per-tool 失败后续行为）、raw_tools
-    （归一前的原始写法，可追溯）、low_sample（min_calls>0 且 calls<阈值）。
-    v0.21 P0-2 additive：roots（aggregate_error_roots 根因聚合，view G1
-    优先渲染；原 errors 明细字段保留）。
-    """
-    order = sorted(stats.items(),
-                   key=lambda kv: (-kv[1].fail_rate, -kv[1].calls, kv[0]))
-    return [{"tool": t, "calls": st.calls, "success": st.success,
-             "error": st.error, "fail_rate": round(st.fail_rate, 4),
-             "given_up": st.given_up, "retried": st.retried,
-             "raw_tools": sorted(st.raw_names),
-             "low_sample": bool(min_calls > 0 and st.calls < min_calls),
-             "roots": aggregate_error_roots(st.errors),
-             "errors": [{"detail": d, "count": n} for d, n in
-                        sorted(st.errors.items(), key=lambda kv: -kv[1])]}
-            for t, st in order]
-
-
 def api_reports_tools(con: sqlite3.Connection, db: Path,
                       params: dict) -> dict:
     """G1 工具统计：总表 + 重试/放弃 + 按源分布（工具名已归一）。
@@ -430,10 +413,10 @@ def api_reports_tools(con: sqlite3.Connection, db: Path,
         src_out[src] = {
             "calls": sum(st.calls for st in tm.values()),
             "errors": sum(st.error for st in tm.values()),
-            "tools": _tool_rows(dict(tm), min_calls=min_calls),
+            "tools": tool_rows(dict(tm), min_calls=min_calls),
         }
     return {"api_version": API_VERSION,
-            "tools": _tool_rows(stats, min_calls=min_calls),
+            "tools": tool_rows(stats, min_calls=min_calls),
             "flow": flow, "by_source": src_out, "min_calls": min_calls,
             "db_fingerprint": db_fingerprint(db, con=con)}
 
@@ -609,6 +592,28 @@ def api_keywords(con: sqlite3.Connection, db: Path,
     return r
 
 
+def api_export_analysis(con: sqlite3.Connection, db: Path,
+                        cards_root: Path | None,
+                        params: dict) -> tuple[dict, str]:
+    """P1-4 统一导出端点（/api/export-analysis）：返回 (json_obj, md)。
+
+    kind=sessions|tools|errors|skills|triage；format 由路由层选择出口
+    （json→json_obj / md→md）。同源双出口 = export_analysis.build_analysis，
+    与 CLI 完全同一实现（禁第二套口径）。sessions 的 sid 不存在 → KeyError
+    （HTTP 404）；kind 非法 / sids 超限 → ValueError（HTTP 400）。
+    """
+    kind = str(params.get("kind") or "").strip().lower()
+    sids_raw = str(params.get("sids") or "")
+    sids = [s for s in sids_raw.split(",") if s] or None
+    min_count = _int_param(params, "min_count", 2, 1, 100)
+    top = _int_param(params, "top", 10, 1, 50)
+    obj, md = build_analysis(db, kind, con=con, days=_since_days(params),
+                             sids=sids, min_count=min_count, top=top,
+                             cards_root=cards_root)
+    obj["api_version"] = API_VERSION
+    return obj, md
+
+
 def make_handler(db: Path, token: str | None,
                  cards_root: Path | None = None,
                  suggestions_meta: Path | None = None,
@@ -630,6 +635,14 @@ def make_handler(db: Path, token: str | None,
             self.send_response(status)
             self.send_header("Content-Type",
                              "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _text(self, text: str, status: int = 200) -> None:
+            body = text.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -699,6 +712,20 @@ def make_handler(db: Path, token: str | None,
                         self._json(doc)
                 elif path == "/api/keywords":
                     self._json(api_keywords(con, db, keywords_meta, qs))
+                elif path == "/api/export-analysis":
+                    try:
+                        obj, md = api_export_analysis(con, db, cards_root, qs)
+                    except ValueError as e:
+                        self._json({"error": str(e)}, 400)
+                        return
+                    except KeyError as e:
+                        self._json({"error": f"sid 不存在: {e}"}, 404)
+                        return
+                    fmt = str(qs.get("format") or "md").lower()
+                    if fmt == "json":
+                        self._json(obj)
+                    else:
+                        self._text(md)
                 elif path == "/api/cards":
                     try:
                         self._json(api_cards(con, db, cards_root, qs))
