@@ -8,14 +8,12 @@ cards 均传入 con）；suggestmeta 是独立 meta 库，允许自开连接（�
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from harvester import apiserve
-from harvester.agent_suggest import build_suggestion_entries
 from harvester.cards import validate_cards
 from harvester.dbmeta import db_fingerprint, fingerprint_line
 from harvester.indexing import SCHEMA, index_session

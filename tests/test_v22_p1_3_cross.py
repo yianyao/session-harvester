@@ -11,7 +11,6 @@ SOP-P1-3：一条 SQL 取 source/model，分类复用 errstats.classify_error
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 import tempfile
 import unittest

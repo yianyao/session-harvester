@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 from harvester.noisetriage import (INCOHERENT_BELOW, classify, coherence,
-                                   intent_of, render_triage, triage)
+                                   render_triage, triage)
 from harvester.consolidate import register_noise
 from harvester.indexing import SCHEMA, index_session
 from harvester.models import Message, SessionRecord
