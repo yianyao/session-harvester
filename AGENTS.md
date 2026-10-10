@@ -10,24 +10,24 @@
 
   | 项 | 值 |
   |---|---|
-  | 后端 head | v0.33 系列收尾提交见 `git log -1`（`a76f19c` 分诊落地 / `8c0d013` topic md / `2718731` ③ 集成门搬家 / v0.34 分诊尾部） |
-  | 后端测试基线 | **551 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | `Ran 542 / FAILED (errors=54)`（设计行为：9 个 chain 类测试各显式报错） |
+  | 后端 head | v0.33 系列 + v0.34/v0.35，**收尾提交见 `git log -1`**（`a76f19c` 分诊落地 / `8c0d013` topic md / `2718731` ③ 集成门 / `74af173` 分诊尾部 / `0902f19` plan-seed 工具化） |
+  | 后端测试基线 | **564 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | `Ran 555 / FAILED (errors=59)`（设计行为；**须 0 failures**——failures 说明有人把"缺依赖"写成了断言） |
   | 前端 | 仓库 `..\harvester-view`，head `533a18d`（本轮：集成门搬进 tests/），**25 例全绿**，已 push |
   | 主题注册表 | **14 个主题**：小说 `010`=**378**、素材库 `005`=**185**、采集 `004`=188、心理 `003`=53；零散登记 **139 条** |
   | 分诊池 | **534 条**（substantive 503 / noise_maybe 30 / noise_high 1；**topic_hint 与 craft_material 已归零**） |
   | 沙箱策略 | **每次会话都可能不同**（v0.33 中途从"只可写本项目"变为全访问）→ 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H74** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H75** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
-  1. `noise_maybe` **30 条**逐条复核后二分（**不自动登记**，精度约 2/3）；
-  2. `make-plan` 的机械部分工具化（`--plan-seed` 形态，见交接 §0 表）；
-  3. 后端侧剩余一次性脚本 `docs/reports/check-api-chain.py` → 移进 `harvester/tests/`；
-  4. M1 宽关键词是否收紧（**待用户裁决**：保留则下轮继续人工复核）。
+  1. `noise_maybe` **30 条**逐条复核后二分（**不自动登记**，用 `--triage-brief` + `--plan-seed`）；
+  2. 后端侧剩余一次性脚本 `docs/reports/check-api-chain.py` → 移进 `harvester/tests/`；
+  3. M1 宽关键词是否收紧（**待用户裁决**：保留则下轮继续人工复核）；
+  4. 继续审 `docs/reports/` 其余一次性脚本（判定口径：下轮还会重跑 → 进工具本体）。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\docs\reports"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **551 例 OK**。
+  `& $venv -m unittest discover -s tests` → 预期 **564 例 OK**。
 
 - **收尾纪律**：交接正文写进仓库并**提交**（必要时 push）+ 更新本段快照 +
   同轮 `read` 读回验证后再声称"已生成"（`$DSH_HOME/AGENTS.md` §六 17/18 条）。

@@ -14,9 +14,9 @@
 
 | 项 | 值（2026-10-10 实测） |
 |---|---|
-| 后端 head | v0.33 系列：`a76f19c`（分诊落地）/ `8c0d013`（topic md）/ `2718731`（③ 集成门搬家 + 文档同步）；**收尾提交见 `git log -1`** |
-| 后端测试基线 | **551 例全绿**（venv，**须带沙箱补丁**，见 §2） |
-| 无 PyYAML 门禁 | `Ran 542 / FAILED (errors=54)`（**设计行为**，不是坏了：新增 9 个 chain 类测试各显式报错） |
+| 后端 head | v0.33 系列 + v0.34/v0.35：`a76f19c` 分诊落地 / `8c0d013` topic md / `2718731` ③ 集成门搬家 / `74af173` 分诊尾部 / `0902f19` **plan-seed 工具化**；**收尾提交见 `git log -1`** |
+| 后端测试基线 | **564 例全绿**（venv，须带沙箱补丁，见 §2） |
+| 无 PyYAML 门禁 | `Ran 555 / FAILED (errors=59)`（设计行为；**须 0 failures**——出现 failures 说明有人把"环境缺依赖"写成了断言） |
 | 前端仓库 | `..\harvester-view`，head `533a18d`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
 | 主题注册表 | **14 个主题**：小说 `tp-20261008-010`=**378**、素材库 `tp-20261010-005`=**185**、采集 `tp-20261010-004`=188、心理 `tp-20261010-003`=53；零散登记 **139 条** |
 | 分诊池 | 尾部复核后再降：**534 条**（substantive 503 / noise_maybe 30 / noise_high 1；**topic_hint 与 craft_material 均已归零**） |
@@ -36,10 +36,10 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 
 | # | 事项 | 为什么 | 做法 |
 |---|---|---|---|
-| 1 | `noise_maybe` **30 条**仍未处理 | 用户已裁决**不自动登记**（精度约 2/3），但可以像 v0.33 那 41 条与 v0.34 那 28 条那样**逐条复核**后二分 | 先出 `--triage-json`，逐条判"纯取信息 / 有写作指向"，再写 plan（**别一刀切登记**） |
-| 2 | `make-plan` 的机械部分工具化 | `docs/reports/make-plan-v033.py` / `v034.py` 干的活（分诊 JSON → plan 草稿 + 硬校验清单）**每轮都要重做**，按项目铁律应进工具本体 | 建议形态：`topic-consolidate --plan-seed <triage.json> --out plan.yaml [--judgment <yaml>]`：机械映射 + 显式判断文件；两个脚本里的清单就是 `--judgment` 的样例 |
-| 3 | 后端侧剩余的一次性脚本 | `docs/reports/check-api-chain.py`（API 链端点形状检查）每改一次 API 都该跑，但它属**后端**的测试而非 view 的 | 移进 `harvester/tests/`（或并入既有 API 测试），完成后删除原件 |
-| 4 | M1 关键词是否收紧（待你裁决） | M1 的宽关键词（描写/动作/语气…）会**改变整个语料的分诊结果**（H71）：v0.33 后新命中 28 条，其中 23 条命中是对的、5 条是小说正文（已改判） | 保留则下轮继续人工复核；收紧则改 `topic keywords`，但会失去"素材检索"的自动提示 |
+| 1 | `noise_maybe` **30 条**仍未处理 | 用户已裁决**不自动登记**（精度约 2/3），但可以像 v0.33 那 41 条与 v0.34 那 28 条那样**逐条复核**后二分 | 用 `--triage-json` + `--triage-brief noise_maybe` 看全量 → 写 `judgment.yaml`（overrides/noise/skip）→ `--plan-seed --require-covered noise_maybe` → `--apply`（缺省 dry-run）。**判断不写脚本**（v0.35 已把机械部分工具化） |
+| 2 | 后端侧剩余的一次性脚本 | `docs/reports/check-api-chain.py`（API 链端点形状检查）每改一次 API 都该跑，但它属**后端**的测试而非 view 的 | 移进 `harvester/tests/`（或并入既有 API 测试），完成后删除原件 |
+| 3 | M1 关键词是否收紧（待你裁决） | M1 的宽关键词（描写/动作/语气…）会**改变整个语料的分诊结果**（H71）：v0.33 后新命中 28 条，其中 23 条命中是对的、5 条是小说正文（已改判） | 保留则下轮继续人工复核；收紧则改 `topic keywords`，但会失去"素材检索"的自动提示 |
+| 4 | 其余仍躺在 `docs/reports/` 的一次性脚本 | 按用户 2026-10-10 第 1 点要求（第二轮强调）逐个审：`resolve-members.py` / `move-039-to-T9.py` / `register-topics.py` / `topic-overlap.py` / `commit-msg-*.txt` 等 | 判定口径：这个动作**下次采集/起草还会不会重跑**？会 → 进 `harvester/`（配 CLI + 测试 + README）；纯回放历史 → 保持一次性并在本节备案 |
 
 ---
 
@@ -53,8 +53,9 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | `topic md`（v0.32 交接 ②） | 人读一页：是什么/跨多久/关键转折/结论与未决；两条纪律（不列成员、不臆造结论）见 **H72** |
 | **前端集成门搬家**（v0.32 交接 ③） | 移进 `harvester-view/tests/`（`check_real_payload.py` + `render_real.js` + 套件接线），view head `533a18d`，**25 例全绿**；断言改成**从载荷推导**，原件已删。详见 **H73** |
 | **分诊尾部 28 条归位**（v0.34） | H71 的新命中：**23 条确实该进素材库 M1**（问近义词/动作怎么描写/用词判断），**5 条对象是具体文本**（点评/润色/改写/讨论小说正文）→ 改判小说主题。判定口径"对象是具体文本 → 010；问词/动作本身 → M1"。详见 **H74** |
-| 测试 | 后端 +22 例：`test_v33_triagejson` 8、`test_v33_triagebatch` 4、`test_v33_topicmd` 9、`test_v22_topics` +1；view +1 门。**后端 551 / view 25 全绿** |
-| 事实台账 | H67–H74 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
+| **分诊 → plan 工具化**（v0.35） | 用户第 1 点要求的落实：v0.33/v0.34 靠 `docs/reports/make-plan-*.py` 一次性脚本干的活进了工具本体（`harvester/planseed.py` + `--plan-seed` / `--judgment` / `--require-covered`；顺带收回 `--triage-brief`）。**真库逐条复现**了那两份已落库 plan 后才删的旧脚本。详见 **H75** |
+| 测试 | 后端 +35 例（v0.33：22；v0.35：13）：`test_v33_triagejson` 8、`test_v33_triagebatch` 4、`test_v33_topicmd` 9、`test_v22_topics` +1、`test_v35_planseed` 13；view +1 门。**后端 564 / view 25 全绿** |
+| 事实台账 | H67–H75 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
 
 ## §2 环境速查（沿用；本轮无变化）
 
@@ -133,7 +134,8 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | noise_high 复核四分 | 19 / 20 / 1 / 1 | 登记零散 / 归 M1 / 归 003 / 保持现状 |
 | 成员对账 | 010: 324→**373**、003: 27→**53**、002: 36→**38**、004: 29→**40**、M1: 0→**162** | 注册表成员数（apply 输出） |
 | `triage()` 耗时 | **529 秒 → 2 秒** | 同机同库，1964 会话 / 62899 消息；输出逐项一致 |
-| 测试 | **551 例 OK**（venv）/ 542 errors=54（无 PyYAML） | `unittest discover -s tests` |
+| 测试 | **564 例 OK**（venv）/ 555 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
+| plan-seed 等价性 | v0.33：assign 272 / keep 2 / noise 19 / skip 1 **全一致**；v0.34：assign 28 / keep 12 / noise 0 **全一致** | 与两份已落库 plan 做语义比对（`docs/reports/verify-planseed-*.py`） |
 | view 测试 | **25 例 OK**（24 + 真实载荷集成门） | `harvester-view`：`unittest discover -s tests` |
 | 真实载荷门 | `ok 12 / n/a 0 / FAIL 0` | 真库 14 主题；多链主题 `tp-20261008-010` 2 条链 |
 | `topic md` 体量 | 2037 字符（无链主题）/ 约 6K（有链主题） | 一页；不列成员 |
