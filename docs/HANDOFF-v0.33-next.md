@@ -14,14 +14,14 @@
 
 | 项 | 值（2026-10-10 实测） |
 |---|---|
-| 后端 head | v0.33 系列 + v0.34/v0.35：`a76f19c` 分诊落地 / `8c0d013` topic md / `2718731` ③ 集成门搬家 / `74af173` 分诊尾部 / `0902f19` **plan-seed 工具化**；**收尾提交见 `git log -1`** |
-| 后端测试基线 | **564 例全绿**（venv，须带沙箱补丁，见 §2） |
-| 无 PyYAML 门禁 | `Ran 555 / FAILED (errors=59)`（设计行为；**须 0 failures**——出现 failures 说明有人把"环境缺依赖"写成了断言） |
+| 后端 head | v0.33 → **v0.36**（`a76f19c` 分诊落地 / `8c0d013` topic md / `2718731` ③ 集成门 / `74af173` 分诊尾部 / `0902f19` plan-seed 工具化 / v0.36 M1 收紧 + 池清空 + 文档清账）；**收尾提交见 `git log -1`** |
+| 后端测试基线 | **565 例全绿**（venv，须带沙箱补丁，见 §2） |
+| 无 PyYAML 门禁 | `Ran 556 / FAILED (errors=59)`（设计行为；**须 0 failures**——出现 failures 说明有人把"环境缺依赖"写成了断言） |
 | 前端仓库 | `..\harvester-view`，head `533a18d`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
-| 主题注册表 | **14 个主题**：小说 `tp-20261008-010`=**378**、素材库 `tp-20261010-005`=**185**、采集 `tp-20261010-004`=188、心理 `tp-20261010-003`=53；零散登记 **139 条** |
-| 分诊池 | 尾部复核后再降：**534 条**（substantive 503 / noise_maybe 30 / noise_high 1；**topic_hint 与 craft_material 均已归零**） |
+| 主题注册表 | **14 个主题**：小说 `tp-20261008-010`=**378**、素材库 `tp-20261010-005`=**195**（关键词已收紧为 `用词`/`措辞`/`微表情`）、采集 `004`=188、心理 `tp-20261010-003`=**57**、SKILL `tp-20261008-001`=**9**；零散登记 **153 条** |
+| 分诊池 | **505 条**（substantive 503 / noise_maybe **1** / noise_high **1**；**topic_hint 与 craft_material 均已归零**） |
 | 库规模 | 1964 会话 / 62899 消息 / 36647 步骤 / 294 错误（`2026-10-09 10:17:07` 时点） |
-| 已发布 chain | 3 条（叙事节奏 / 吾好梦中救人 / Skill 自学习进化），在 `~/.workbuddy/knowledge/topics/` |
+| 已发布 chain | 3 条（叙事节奏 / 吾好梦中救人 / Skill 自学习进化），在 `~/.workbuddy/knowledge/topics/`；Skill 链正文的对照工具引用已更新为 `chain-audit`（**过两道门后**才同步，两份逐字节一致） |
 | **沙箱策略** | 本轮**中途变化**：开始时只对 `session-harvester/` 可写（实测写 `..\harvester-view` 被拒 → ③ 一度判"未执行"），后段放开为全访问才完成 ③。**每次会话都可能不同：跨仓库任务先探一次写权限**（`Set-Content` 一个探针文件即可），别凭上一轮的印象决定做不做 |
 
 **基线自查（先做，否则会误判"项目坏了"）**：
@@ -29,17 +29,17 @@
 ```powershell
 $venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
-& $venv -X utf8 -m unittest discover -s tests     # 预期 551 例 OK
+& $venv -X utf8 -m unittest discover -s tests     # 预期 565 例 OK
 ```
 
 **下一件事（按优先级，均已写成可执行形态）**：
 
 | # | 事项 | 为什么 | 做法 |
 |---|---|---|---|
-| 1 | `noise_maybe` **30 条**仍未处理 | 用户已裁决**不自动登记**（精度约 2/3），但可以像 v0.33 那 41 条与 v0.34 那 28 条那样**逐条复核**后二分 | 用 `--triage-json` + `--triage-brief noise_maybe` 看全量 → 写 `judgment.yaml`（overrides/noise/skip）→ `--plan-seed --require-covered noise_maybe` → `--apply`（缺省 dry-run）。**判断不写脚本**（v0.35 已把机械部分工具化） |
-| 2 | 后端侧剩余的一次性脚本 | `docs/reports/check-api-chain.py`（API 链端点形状检查）每改一次 API 都该跑，但它属**后端**的测试而非 view 的 | 移进 `harvester/tests/`（或并入既有 API 测试），完成后删除原件 |
-| 3 | M1 关键词是否收紧（待你裁决） | M1 的宽关键词（描写/动作/语气…）会**改变整个语料的分诊结果**（H71）：v0.33 后新命中 28 条，其中 23 条命中是对的、5 条是小说正文（已改判） | 保留则下轮继续人工复核；收紧则改 `topic keywords`，但会失去"素材检索"的自动提示 |
-| 4 | 其余仍躺在 `docs/reports/` 的一次性脚本 | 按用户 2026-10-10 第 1 点要求（第二轮强调）逐个审：`resolve-members.py` / `move-039-to-T9.py` / `register-topics.py` / `topic-overlap.py` / `commit-msg-*.txt` 等 | 判定口径：这个动作**下次采集/起草还会不会重跑**？会 → 进 `harvester/`（配 CLI + 测试 + README）；纯回放历史 → 保持一次性并在本节备案 |
+| 1 | `docs/reports/check-api-chain.py` → `harvester/tests/` | 每改一次 API 都该跑，但它属**后端**的测试而非 view 的 | 移进 `harvester/tests/`（或并入既有 API 测试），完成后删除原件 |
+| 2 | `docs/reports/deadcode-scan.py` → **工具化** | 全局记忆 §四 12 是"每轮收尾固定动作"，真会重跑；**本轮它当场抓出 2 处残留**（我新加的未用常量 + 一处遗留未用 import） | 进 `harvester/`（配 CLI + 测试 + README），或做成套件里的一例断言 |
+| 3 | 其余一次性脚本再审 | 用户第 1 点要求逐个审：`resolve-members.py` / `topic-overlap.py` / `probe-*.py` / `run_tests.py` / `sitecustomize.py` | 判定口径：下轮还会重跑 → 进工具本体；**`sitecustomize.py` 是沙箱补丁（不是一次性），该写进 README**；探查类保留为报告 |
+| 4 | 池里剩 2 条"设备原型机"线索 | `004352fc`（工程机/原型机区别）+ `46886828`（原型机下一步）同源；2 条太薄，故 v0.33/v0.36 都判两可 | **待你裁决**：单独立主题 / 登记零散 / 继续挂着 |
 
 ---
 
@@ -54,8 +54,10 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | **前端集成门搬家**（v0.32 交接 ③） | 移进 `harvester-view/tests/`（`check_real_payload.py` + `render_real.js` + 套件接线），view head `533a18d`，**25 例全绿**；断言改成**从载荷推导**，原件已删。详见 **H73** |
 | **分诊尾部 28 条归位**（v0.34） | H71 的新命中：**23 条确实该进素材库 M1**（问近义词/动作怎么描写/用词判断），**5 条对象是具体文本**（点评/润色/改写/讨论小说正文）→ 改判小说主题。判定口径"对象是具体文本 → 010；问词/动作本身 → M1"。详见 **H74** |
 | **分诊 → plan 工具化**（v0.35） | 用户第 1 点要求的落实：v0.33/v0.34 靠 `docs/reports/make-plan-*.py` 一次性脚本干的活进了工具本体（`harvester/planseed.py` + `--plan-seed` / `--judgment` / `--require-covered`；顺带收回 `--triage-brief`）。**真库逐条复现**了那两份已落库 plan 后才删的旧脚本。详见 **H75** |
-| 测试 | 后端 +35 例（v0.33：22；v0.35：13）：`test_v33_triagejson` 8、`test_v33_triagebatch` 4、`test_v33_topicmd` 9、`test_v22_topics` +1、`test_v35_planseed` 13；view +1 门。**后端 564 / view 25 全绿** |
-| 事实台账 | H67–H75 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
+| **M1 关键词收紧**（v0.36，用户裁决） | 先量后改：宽词的真危害是**把 4 条含整合诉求的真工作抢成素材候选**；关键词 10 → 3（用词/措辞/微表情），并把 `动作` 补进 `CRAFT_WORDS`（否则那类写作找料会掉进兜底档、从报告里消失）。详见 **H76** |
+| **池子清空 + 文档清账**（v0.36） | 30 条 `noise_maybe` 用新工具归位（10→005 / 4→003 / 1→001 / 14 登记零散 / 1 skip），池 534→**505**；已删脚本的引用从全部文档与源码清掉（含已发布 chain 的对照工具引用，过 `chain-audit` 两道门后同步）。详见 **H77/H78** |
+| 测试 | 后端 +36 例（累计 565）：`test_v33_*` 21、`test_v35_planseed` 13、`test_v30` +2；view +1 门。**后端 565 / view 25 全绿** |
+| 事实台账 | H67–H78 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
 
 ## §2 环境速查（沿用；本轮无变化）
 
@@ -79,12 +81,12 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 - **未完成**：§0 表里的四件（`noise_maybe` 30 条 / `check-api-chain.py` 搬家 /
   M1 关键词裁决 / 继续审一次性脚本）。
 - **`docs/reports/` 一次性脚本清账**（按用户 2026-10-10 第 1 点要求逐个体检；判定
-  口径：**这个动作下次采集/起草还会不会重跑**）——本轮**已删 12 个被工具取代的**：
-  `anchor-audit.py`/`check-quotes.py` → `chain-audit`；`dedupe-topic.py` → `topic dedupe`；
-  `turn-index.py`/`dump-user-turns-raw.py` → `topic turns`；`run-triage.py`/
-  `make-noise-plan.py` → `topic-consolidate`；`consolidate-topics.py`/
-  `finalize-keywords.py`/`fix-keywords.py`/`register-topics.py`/`move-039-to-T9.py`
-  → `topic-consolidate` 的 plan 与 `topic keywords`。**留下的都有理由**：
+  口径：**这个动作下次采集/起草还会不会重跑**）——本轮**已把被工具取代的那批删除**
+  （本轮收尾提交一并处置）。**映射关系（结论，不列旧文件名）**：引文逐字门与锚点语义门
+  → `chain-audit`；会话级去重 → `topic dedupe`；回合索引 / raw 全文导出 → `topic turns`；
+  分诊出 plan 与主题梳理 → `topic-consolidate` 的梳理包与 plan（含 `--triage-*`、
+  `--plan-seed`）；关键词定稿 → `topic keywords`；主题注册与归位 → `topic register` +
+  `topic-consolidate` 的 plan。**留下的都有理由**：
 
   | 留下的 | 为什么 |
   |---|---|
@@ -94,11 +96,11 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
   | `run_tests.py` | 文档里的备用跑法（HANDOFF-v0.24 环境节） |
   | `probe-*.py` / `resolve-members.py` / `topic-overlap.py` | 一次性**探查**（回答当时的具体问题），属报告；**别再当工具用** |
   | `verify-planseed-*.py` / `judgment-v0*.yaml` | 本轮迁移验证 + **逐轮判断文件**（允许保留的一次性形态） |
-- **③ 前端集成门搬家（本轮已完成，`harvester-view` 提交 `533a18d`）**：
-  1. `docs/reports/check-view-real.py` → `harvester-view/tests/check_real_payload.py`
-     （取数逻辑改为**选链最多的主题**而非写死 `tp-20261008-010`；新增退出码 **3 =
+- **③ 前端集成门搬家（本轮已完成，`harvester-view` 提交 `533a18d`）**：把两份真实载荷探针
+  移进 `harvester-view/tests/`：
+  1. `check_real_payload.py`（取数逻辑改为**选链最多的主题**而非写死 `tp-20261008-010`；新增退出码 **3 =
      未执行**：后端仓库/库不在时不让调用方误当成通过）；
-  2. `docs/reports/view-real-render-check.js` → `harvester-view/tests/render_real.js`；
+  2. `render_real.js`；
   3. **断言全部改成从载荷推导**（主题数、chains_count、首阶段互斥、锚点节点数 =
      载荷里 anchors 的 nodes 总数、首个关键词可见）——原脚本写死"324 成员 / 50 节点 /
      作品本体主线"，一次性用没问题，**变成每轮都跑的门就会假红**；"载荷里根本没有
@@ -106,8 +108,8 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
   4. 接入 view 套件：`tests/test_v33_real_payload.py`（node 缺失 → skip；脚本报 3 →
      skip 且理由写明"未执行：…"；断言失败 → 失败）；
   5. 验证：`ok 12 / n/a 0 / FAIL 0`、view **25 例 OK**；后端两份原件已删（避免两份）；
-  6. 后端仓库文档里的历史引用（台账 H60、HANDOFF-v0.24 §7.4）保留原文，**迁移事实由
-     H73 记录**——不追改历史条目。
+  6. 后端仓库文档里的历史引用（台账 H60、HANDOFF-v0.24 §7.4）已去掉已删脚本的文件名，
+     **迁移事实由 H73 记录**——不改动其时间/结论/数字。
 - **明确不做**（用户裁决）：不改 `D:\Data\AI\Skills\`（路线图 R1–R6 由用户那边开工）；
   工具不调用任何 Agent/模型（确定性、离线是设计特性）；不自动登记任何"疑似零散"
   （精度约 2/3 —— 本轮 41 条逐条复核再次证实：约 1/3 是创作素材）。
@@ -143,13 +145,15 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 |---|---|---|
 | 分诊扫描 | 853 → **562** → **534** | 非任何主题成员、非零散登记、user 回合 ≤ 3；853 归置前 / 562 归置 272+19 后 / 534 再归置尾部 28 条后 |
 | 尾部 28 条归位 | M1 **23** 条 / 010 **5** 条 | 判定口径：对象是具体文本 → 010；问词/动作本身 → M1 |
-| 主题成员（终值） | 010: **378**、M1: **185**、004: 188、003: 53、002: 38 | `topic list`（apply 输出对账：373+5、162+23） |
+| 主题成员（v0.36 终值） | 010: **378**、005: **195**、004: 188、003: **57**、002: 38、001: **9** | `topic list`（v0.36 对账：185+10、53+4、8+1） |
 | assign | **272** 条 / 12 个目标 | plan `assign` 段；含新建 M1 的 162 条 |
 | noise 登记 | **19** 条（120 → **139**） | 41 条 noise_high 逐条复核后的"纯取信息"部分 |
 | noise_high 复核四分 | 19 / 20 / 1 / 1 | 登记零散 / 归 M1 / 归 003 / 保持现状 |
 | 成员对账 | 010: 324→**373**、003: 27→**53**、002: 36→**38**、004: 29→**40**、M1: 0→**162** | 注册表成员数（apply 输出） |
 | `triage()` 耗时 | **529 秒 → 2 秒** | 同机同库，1964 会话 / 62899 消息；输出逐项一致 |
-| 测试 | **564 例 OK**（venv）/ 555 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
+| 测试 | **565 例 OK**（venv）/ 556 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
+| M1 关键词收紧 | 10 → **3**（用词/措辞/微表情）；28 条旧命中里仍命中 7，跌破 21（4 条含整合诉求的真工作 / 14 条兜底档 / 3 条纯查询） | `docs/reports/probe-m1-keywords.py` + 重跑分诊 |
+| 零散登记 | 139 → **153**（v0.36 复核 30 条 `noise_maybe`，登记 14 条） | `--noise-list` |
 | plan-seed 等价性 | v0.33：assign 272 / keep 2 / noise 19 / skip 1 **全一致**；v0.34：assign 28 / keep 12 / noise 0 **全一致** | 与两份已落库 plan 做语义比对（`docs/reports/verify-planseed-*.py`） |
 | view 测试 | **25 例 OK**（24 + 真实载荷集成门） | `harvester-view`：`unittest discover -s tests` |
 | 真实载荷门 | `ok 12 / n/a 0 / FAIL 0` | 真库 14 主题；多链主题 `tp-20261008-010` 2 条链 |

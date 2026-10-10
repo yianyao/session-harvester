@@ -37,8 +37,8 @@
 | 门 | 命令 | 判据 | 结果 |
 |---|---|---|---|
 | 结构 | `chain-validate <f> --db harvester.db --meta topics_meta.db` | `errors=0`；锚点 sid ∈ members、turn 不越界 | A/B 均通过 |
-| 逐字 | `docs/reports/check-quotes.py <f>` | `「」` 引文与成员 `raw`/`title` 逐字一致，`未命中 0` | A 52/52、B 59/59 |
-| 语义 | `docs/reports/anchor-audit.py <f>` | 每个节点的 `note` 与其 `turn` 的 raw 对应 | 人工逐条核对，错配已清（见 §5.2） |
+| 逐字 | `chain-audit <f> --db harvester.db --no-anchors` | `「」` 引文与成员 `raw`/`title` 逐字一致，`未命中 0` | A 52/52、B 59/59 |
+| 语义 | `chain-audit <f> --db harvester.db --no-quotes` | 每个节点的 `note` 与其 `turn` 的 raw 对应 | 人工逐条核对，错配已清（见 §5.2） |
 
 - **主题 B 是按用户裁决合并出来的**：`tp-20261009-054`（skill自学习扩展准备）
   + `tp-20261009-084`（自学习功能扩展与跨平台设计）
@@ -86,10 +86,10 @@
 |---|---|---|
 | ~~0~~ | ~~发布两条 chain 到正式位~~ | **本轮已完成**：`~/.workbuddy/knowledge/topics/` 现有 3 条 chain（叙事节奏 + 本轮 2 条）；发布后用 `chain-validate` 就地复校通过。**view 数据通路已在进程内验证**（不起服务）：`/api/topics` 返回 126 主题，`/api/topic/tp-20261010-001/chain` 与 `…-002/chain` 均 200（7 阶段/50 节点、6 阶段/36 节点），脚本 `docs/reports/check-api-chain.py` |
 | 12 | 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点） | **未做**。本轮两条新 chain 全部给到 turn 级（A 50 节点 / B 36 节点），可作口径参照 |
-| 11 | `regress` 端到端回归语料 | **未做**（CLI 仍无该子命令）。本轮新增的 `docs/reports/check-quotes.py`、`deadcode-scan.py` 是"可判定探针"的又一例，可并入 `regress` 的 checker 集 |
+| 11 | `regress` 端到端回归语料 | **未做**（CLI 仍无该子命令）。本轮新增的引文逐字门（现为 `chain-audit` 的默认内容门）、`deadcode-scan.py` 是"可判定探针"的又一例，可并入 `regress` 的 checker 集 |
 | 13 | T4 多例（现仅 `pdf-text-extractor` 1 例） | **本轮两个新主题都不可用**：A 成员全为导出型源（无 skill 遥测）；B 的 14 成员 `steps` 里 **0 次 Skill 类调用**（只有 Read/Edit/Grep/Bash/Write/Glob/present_files/Task*）。要出 T4 多例，**必须另选成员含 autoclaw / workbuddy-transcript skill 调用的主题**（候选实测：`workbuddy-transcript:…/2026-09-29-10-54-23/e565bccf….jsonl`，80 steps 且含 Skill 调用） |
 | 9 | chain 元结论回写 `~/.dsh/AGENTS.md` | **未做**（走 `suggest-status` 落 adopted；key = 建议句原文含句号，H31） |
-| 10 | 117 个自动聚类候选主题的关键词碎片 | **部分**：本轮只定稿了合并后新主题的关键词（把 13 个 bigram 碎片换成 7 个语义词，脚本 `docs/reports/fix-keywords.py`）。**工具不代做语义去噪**（红线），其余 124 个主题的关键词仍待用户裁决 |
+| 10 | 117 个自动聚类候选主题的关键词碎片 | **部分**：本轮只定稿了合并后新主题的关键词（把 13 个 bigram 碎片换成 7 个语义词，用 `topic keywords` 定稿，当时还是一次性定稿处理）。**工具不代做语义去噪**（红线），其余 124 个主题的关键词仍待用户裁决 |
 | — | 路线图 R1–R6 | 属**用户侧工程**（`D:\Data\AI\Skills\`），不是本项目待办；本项目只提供证据与探针 |
 
 ---
@@ -124,7 +124,7 @@
 | meta 库（均 gitignore） | `topics_meta.db` / `suggestions_meta.db` / `artifacts_meta.db` / `keywords_meta.db`；本轮备份 `topics_meta.db.bak-20261010` |
 | 卡片主库 / chain 正式位 | `~/.workbuddy/knowledge/cards/`、`~/.workbuddy/knowledge/topics/`（**均在工作区外，写入需批准**） |
 | 提交信息 | **用 `-F 文件`**，勿用 PowerShell here-string（AGENTS.md 第 1 条） |
-| 探针/底稿目录 | `docs/reports/`（gitignore；本轮新增 `probe-*.py`、`turn-index.py`、`dedupe-topic.py`、`check-quotes.py`、`dump-user-turns-raw.py`、`deadcode-scan.py`、`register-topics.py`、`CHAIN-AUTHOR-SPEC.md`） |
+| 探针/底稿目录 | `docs/reports/`（gitignore；本轮新增 `probe-*.py`、`deadcode-scan.py`、`CHAIN-AUTHOR-SPEC.md`；当时的一次性回合索引 / 去重 / raw 全文导出脚本、主题注册脚本与两道 chain 内容门脚本此后已被工具取代并删除） |
 
 **测试数变化时必须同步三处**：`README.md`（依赖边界段）、本文件、`HANDOFF-v0.22-next.md` §0。
 
@@ -141,10 +141,10 @@
 2. **子代理产物必须机械验收，且一道门不够**：`chain-validate` 只验结构（sid 在成员内、
    turn 不越界、stage 有节点），**验不了引文真伪，也验不了"这个 turn 是否真说了这句 note"**。
    本轮因此新增两道独立门：
-   - `docs/reports/check-quotes.py`：抽取正文所有 `「」`，与成员 `raw`/`title`（归一空白与
+   - `chain-audit`（不跳引文门；`--no-quotes` 可单跑锚点门）：抽取正文所有 `「」`，与成员 `raw`/`title`（归一空白与
      Markdown 强调标记）比对，`未命中 > 0` 即退出码 1。基线：A `70 条 / 48 命中`、
      B `95 条 / 55 命中` → 修后两端 **未命中 0**（B 还因此把一处锚点从 turn 1 修正为 turn 2）。
-   - `docs/reports/anchor-audit.py`：把每个节点的 `note` 与其 `turn` 的 raw 原文并排打印。
+   - `chain-audit --no-quotes`（单跑锚点门）：把每个节点的 `note` 与其 `turn` 的 raw 原文并排打印。
      人工抽查即在 A 抓到 **5 类 note↔turn 错配**（turn 13 应为 8；note 里的"五十章"不在该
      user 原文里、真身在另一会话的 T23；「设置陷阱」的真身**整个挂错了 sid**——
      在 `e47c814f` T25 而非 `f8883387` T25；一条 note 描述的是同会话另一回合；一处 span
@@ -221,10 +221,10 @@
 
 | 优先 | 脚本 | 为什么该进工具 | 建议形态 |
 |---|---|---|---|
-| 1 | `dedupe-topic.py`（H40 会话级去重，bigram Jaccard≥0.90） | 每写一条 chain 都要出去重报告，是 chain frontmatter 的必填口径 | `topic dedupe --id <tp> --db --out`，配测试 |
-| 2 | `turn-index.py` / `dump-user-turns-raw.py` | 起草 chain 的锚点唯一来源（回合号 + raw 全文），每轮都要 | `topic turns --id <tp> [--format index\|raw]` |
-| 3 | `check-api-chain.py` / `view-real-render-check.js` | "真实载荷渲染检查"是可复用的集成门 | 移进 `harvester-view/tests/` |
-| — | `consolidate-topics.py` / `finalize-keywords.py` / `make-noise-plan.py` | **属一次性数据操作**：通用形态已进 `topic-consolidate` 的 plan 流水线；定稿名单是用户数据 | 保持本地（可留档） |
+| 1 | 会话级去重（H40 口径，bigram Jaccard≥0.90） | 每写一条 chain 都要出去重报告，是 chain frontmatter 的必填口径 | ✅ 已是工具：`topic dedupe --id <tp> --db --out`，配测试（H40） |
+| 2 | 回合索引 / user 回合 raw 全文导出 | 起草 chain 的锚点唯一来源（回合号 + raw 全文），每轮都要 | ✅ 已是工具：`topic turns --id <tp> [--full]` |
+| 3 | 真实载荷渲染检查（后端侧 API 链形状探针 + 前端渲染探针） | "真实载荷渲染检查"是可复用的集成门 | 后端侧仍待搬（`docs/reports/check-api-chain.py`，见 §0 表）；前端侧已移进 `harvester-view/tests/` |
+| — | 主题梳理 / 关键词定稿 / 分诊出 plan 三类一次性数据操作 | **属一次性数据操作**：通用形态已进 `topic-consolidate` 的 plan 流水线（后由 `--plan-seed` 补全）；定稿名单是用户数据 | 能力已进工具（`topic-consolidate` 的 plan、`topic keywords`），一次性脚本已删 |
 | — | `run_tests.py` / `sitecustomize.py` | 沙箱环境适配，不是功能 | 保持本地（H53） |
 
 ### 7.2 本轮新增的环境事实

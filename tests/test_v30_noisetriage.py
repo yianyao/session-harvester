@@ -63,6 +63,21 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(v["verdict"], "noise_maybe")
         self.assertEqual(v["turns"], 3)
 
+    def test_action_material_is_craft_not_catch_all(self):
+        """v0.36：`动作` 类写作找料必须进 craft_material，别掉进"非查询型表述"。
+
+        背景：收紧 M1 宽关键词后实测「擦眼镜的动作过程」「感谢时简单而轻微的动作」
+        这类提问**既不含别的 CRAFT 词、也不含查询词** → 落进 `substantive/非查询型
+        表述` 兜底档，而分诊报告根本不列 substantive → **从视野里消失**。
+        断言两件事：判定是 craft_material；且不是 noise_high（craft 仍须排在零散前）。
+        """
+        for text in ("擦眼镜的动作过程",
+                     "表示感谢时的简单而轻微的动作，如点头示意，此外还有哪些",
+                     "人在尴尬犹豫时的某些习惯性的小动作"):
+            v = classify(text, [text])
+            self.assertEqual(v["verdict"], "craft_material", text)
+            self.assertTrue(v["craft"], text)
+
     def test_broad_words_do_not_leak_into_craft(self):
         """「表达/表现/形容」这类泛词曾把"英文表达"误判成创作素材——
         词表收紧后，纯词义查询必须仍判零散（测试当场抓到这个串味）。"""

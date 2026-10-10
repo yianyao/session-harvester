@@ -35,7 +35,7 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 |---|---|---|---|
 | 1 | **语义分诊**：109 条 `topic_hint` + 142 条 `craft_material` + 41 条 `noise_high` | 这是"以后采集的数据怎么归位"的实测样本；`assign` 已就绪但没有真实使用过 | 读 `docs/reports/triage-report.md` 与 `topic-consolidate --triage` 输出 → 写 plan（`assign:` 归主题 / `noise:` 登记零散）→ `--apply`（缺省 dry-run） |
 | 2 | V3 剩余产物：**给人读的 `topic.md`** | 给机器的 `topic.json` 已完成（`topic export`）；人读那半还没做 | 复用 `topicexport.topic_bundle`，渲染成一页：是什么/跨多久/关键转折/结论/未决 |
-| 3 | 前端集成门搬家 | `check-view-real.py` + `view-real-render-check.js` 仍在 `docs/reports/`（一次性脚本），但它每改一次 view 都该跑 | 移进 `harvester-view/tests/` 并接入 view 的 24 例 |
+| 3 | 前端集成门搬家 | 真实载荷渲染的两份探针仍在 `docs/reports/`（一次性脚本），但它每改一次 view 都该跑 | 移进 `harvester-view/tests/` 并接入 view 的 24 例 |
 
 ---
 
@@ -68,9 +68,8 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
   dedupe/turns`、`topic-consolidate`（出包/执行/零散登记/分诊）、`chain-audit`
   （引文逐字门 + 锚点语义门）、`noisetriage`、`topicexport`、多链 API、
   view 多链渲染与人读形态。
-- **未完成**：§0 表里的三件；`docs/reports/` 下仍有 `consolidate-topics.py` /
-  `finalize-keywords.py` / `make-noise-plan.py` 属**一次性数据操作**（通用形态已进
-  `topic-consolidate`，不必再工具化）。
+- **未完成**：§0 表里的三件；`docs/reports/` 下的主题梳理 / 关键词定稿 / 分诊出 plan 三类脚本属
+  **一次性数据操作**（通用形态已进 `topic-consolidate`，不必再工具化）。
 - **明确不做**（用户裁决）：不改 `D:\Data\AI\Skills\`（路线图 R1–R6 由用户那边开工）；
   工具不调用任何 Agent/模型（确定性、离线是设计特性，语义判断收敛到"Agent 读包填
   plan"这一个点）；不自动登记任何"疑似零散"（分诊精度约 2/3）。

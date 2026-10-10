@@ -40,10 +40,6 @@ from pathlib import Path
 from .consolidate import PLAN_VERSION, validate_plan
 from .topics import list_topics
 
-#: 判定类 → 缺省去处。`topic_hint` 走"命中主题名 → id"，`craft_material` 走
-#: judgment 的 craft_topic；其余（substantive / noise_maybe）缺省**不动**。
-DEFAULT_UNHANDLED = ("substantive", "noise_maybe")
-
 
 def load_triage(path: Path) -> dict:
     """读 `--triage-json` 产物。结构不对时 fail loud（别静默产出空 plan）。"""

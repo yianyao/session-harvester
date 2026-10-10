@@ -288,9 +288,10 @@ skill 有无必要"**`{deepseek-export:e1a7ddea…, turn 4}` / `{qianwen-raw:8c7
    JSON 报告"形态做。
 3. **缺口扫描可确定性化**：本文 G1–G10 是用"声明关键词扫描 + 逐条实读"找出来的，
    与 AGENTS.md 的过期文本扫描同源，可做成 `grep + 断言` 的常驻探针。
-   本轮另新增两道对"语义交付物"的门，形态可直接移植到 skill-authoring 的评测层：
-   `check-quotes.py`（引文逐字可回溯，`未命中>0` 即红）与 `anchor-audit.py`
-   （结论与证据并排，供人工抽查）——**对应到本体系的对应物就是"B 类行为评测"**
+   本轮另新增两道对"语义交付物"的门（现已是 `chain-audit` 的两道门，形态可直接
+   移植到 skill-authoring 的评测层）：`chain-audit` 的引文逐字门（引文逐字可回溯，
+   `未命中>0` 即红）与 `chain-audit --no-quotes` 的锚点语义门（结论与证据并排，
+   供人工抽查）——**对应到本体系的对应物就是"B 类行为评测"**
    （当前 `cases: []`，见 G6）。
 4. **主题 B 的成员没有 skill 遥测**：14 个成员全是导出型源（deepseek-export / qianwen-raw /
    yuanbao-raw / workbuddy-transcript），`steps` 里 **0 次 Skill 类调用**——
