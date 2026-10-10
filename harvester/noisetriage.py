@@ -28,6 +28,13 @@
 高置信只保留最稳的一条：单轮 + 纯查询 + 非素材 + 无主题。
 
 **工具只产判定与理由，登记与否由 plan 决定**（红线：语义判断不落进代码）。
+
+两条出口，不要混用：
+
+- `render_triage` → **人读报告**，每类最多 60 条（长了没人看）；
+- `dump_triage`   → **机器读全量**（`topic-consolidate --triage-json`），
+  供 Agent 填 plan。**分诊报告是截断的，照它填 plan 必漏尾部条目**
+  （而且漏了没人发现——报告只写"另有 N 条"）。
 """
 from __future__ import annotations
 
@@ -176,19 +183,29 @@ def triage(db_path: Path, meta_path: Path | None = None,
     con.row_factory = sqlite3.Row
     rows: list[dict] = []
     try:
-        # 先按"user 回合数"预筛（轻量），再只取候选会话的正文——
-        # 全库 GROUP_CONCAT 会把几十 MB 正文拉进内存（首版实测跑不动）
+        # ① **一次**全扫描统计各会话的 user 回合数。
+        #    上一版是 `SELECT ... (SELECT COUNT(*) FROM messages m WHERE
+        #    m.sid=s.sid AND m.role='user') nu FROM sessions s`：**每个会话一次
+        #    相关子查询**，而 messages 是 FTS5 虚拟表、sid 是 UNINDEXED（没有可用
+        #    索引）→ 每个会话都整表扫一遍 FTS5。真库实测 1964 个会话让分诊跑到
+        #    **529 秒**（v0.33 实测）；改成一次扫描后见 `docs/HANDOFF-v0.33-next.md`。
+        nu_by_sid: dict[str, int] = {}
+        for r in con.execute("SELECT sid FROM messages WHERE role='user'"):
+            nu_by_sid[r["sid"]] = nu_by_sid.get(r["sid"], 0) + 1
         cand = [r for r in con.execute(
-            "SELECT s.sid, s.source, s.title, s.created_at, "
-            "(SELECT COUNT(*) FROM messages m WHERE m.sid=s.sid "
-            " AND m.role='user') nu FROM sessions s")
-            if 1 <= (r["nu"] or 0) <= max_turns
+            "SELECT sid, source, title, created_at FROM sessions")
+            if 1 <= nu_by_sid.get(r["sid"], 0) <= max_turns
             and r["sid"] not in known and r["sid"] not in only]
+        # ② 正文只取**候选会话**的，且分块 IN——不把全库 user 正文拉进内存
+        #    （`sid` 无索引，IN 仍是全扫描，但分块后只扫 1~2 遍）
         by_sid: dict[str, list[str]] = {}
-        for r in con.execute(
-                "SELECT sid, raw FROM messages WHERE role='user' "
-                "ORDER BY sid, rowid"):
-            if r["sid"] in {c["sid"] for c in cand}:
+        sids = sorted(c["sid"] for c in cand)
+        for i in range(0, len(sids), 400):
+            chunk = sids[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in con.execute(
+                    f"SELECT sid, raw FROM messages WHERE role='user' "
+                    f"AND sid IN ({marks}) ORDER BY sid, rowid", chunk):
                 by_sid.setdefault(r["sid"], []).append(r["raw"] or "")
         for r in cand:
             turns = [t for t in by_sid.get(r["sid"], []) if t.strip()]
@@ -204,6 +221,10 @@ def triage(db_path: Path, meta_path: Path | None = None,
             rows.append({"sid": r["sid"], "source": r["source"],
                          "title": (r["title"] or "")[:44],
                          "created_at": (r["created_at"] or "")[:10],
+                         # 首条 user 原文（截断）：机械关键词提示会误命中，
+                         # 末尾填 plan 的人/Agent 需要原文才能复核（尤其是
+                         # 标题看不出内容的那些）
+                         "first_user": turns[0][:200],
                          **v})
     finally:
         con.close()
@@ -239,3 +260,15 @@ def render_triage(t: dict) -> str:
             L.append(f"- …另有 {len(sub) - 60} 条")
         L.append("")
     return "\n".join(L)
+
+
+def dump_triage(t: dict) -> dict:
+    """分诊结果 → JSON 可序列化结构（**全量 rows，绝不截断**）。
+
+    为什么必须另开一个出口：`render_triage` 每类只印 60 条，而"Agent 读包填
+    plan"要看到**每一条** sid —— 照人读报告填 plan 的唯一后果是尾部条目静默
+    漏掉（报告里只留一句"另有 N 条"），且漏掉的不会报错。
+    """
+    return {"scanned": t["scanned"], "max_turns": t["max_turns"],
+            "counts": dict(t["counts"]),
+            "rows": [dict(r) for r in t["rows"]]}

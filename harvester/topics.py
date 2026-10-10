@@ -62,9 +62,18 @@ def register_topic(meta_path: Path, name: str, keywords: list[str] | None = None
         if row:
             return row["id"]
         today = time.strftime("%Y%m%d")
-        n = con.execute("SELECT COUNT(*) FROM topics WHERE id LIKE ?",
-                        (f"tp-{today}-%",)).fetchone()[0]
-        tid = f"tp-{today}-{n + 1:03d}"
+        # 取**当日最大序号 +1**，不是 COUNT(*)+1：同日只要发生过删除
+        # （merge/discard 都会删源主题）就会留缺口，COUNT+1 会撞上已存在的
+        # id → `IntegrityError: UNIQUE constraint failed: topics.id`。
+        # 真库复现：2026-10-10 已有 002/003/004（001 缺），新建第 1 个主题即
+        # 生成 004 撞车；测试库因为从不删主题所以一直是绿的（v0.33 修）。
+        mx = 0
+        for r in con.execute("SELECT id FROM topics WHERE id LIKE ?",
+                             (f"tp-{today}-%",)):
+            tail = r["id"].rsplit("-", 1)[-1]
+            if tail.isdigit():
+                mx = max(mx, int(tail))
+        tid = f"tp-{today}-{mx + 1:03d}"
         con.execute(
             "INSERT INTO topics (id, name, keywords, members, created) "
             "VALUES (?,?,?,?,?)",
