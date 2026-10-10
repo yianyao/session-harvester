@@ -15,9 +15,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
+import yaml  # noqa: F401 —— 本测试**依赖 PyYAML**：缺它就该在导入期显式失败（H9），
+# 而不是悄悄跳过（`chain-audit` 的两道门都要读 chain frontmatter）
 
-from harvester.chainaudit import audit_chain, audit_quotes, render_audit
+from harvester.chainaudit import audit_chain, render_audit
 from harvester.indexing import SCHEMA, index_session
 from harvester.models import Message, SessionRecord
 from harvester.topics import ensure_topics_db

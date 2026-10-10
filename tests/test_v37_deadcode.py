@@ -188,18 +188,23 @@ class TestScan(unittest.TestCase):
 
 
 class TestRealRepoIsClean(unittest.TestCase):
-    """把"每轮收尾的死代码扫描"钉进套件：`harvester/` 必须 0 条。
+    """把"每轮收尾的死代码扫描"钉进套件：**两个根都必须 0 条**。
 
-    这条红的时候怎么做：真死 → 删；是给别人用的公开 API 或探测性 import →
-    在该行加 `# noqa`（说明为什么留着）。
+    v0.39 之前只查 `harvester/`（工具默认的 `report_root`），于是 `tests/` 那一角
+    **从没被查过**——补查一次就捞出 9 条未用 import。所以这里两个根都断言，
+    否则同样会长回来。
+
+    这条红的时候怎么做：真死 → 删；是给别人用的公开 API、或依赖标记（如
+    `import yaml` 表示"缺 PyYAML 就该导入期失败"，H9）→ 在该行加 `# noqa` 并说明理由。
     """
 
-    def test_harvester_package_has_no_dead_code(self):
-        r = scan(base=REPO, report_root="harvester")
-        self.assertEqual(
-            found_total(r), 0,
-            "harvester/ 出现死代码（删掉，或在该行加 `# noqa` 说明保留理由）：\n"
-            + render_deadcode(r))
+    def test_harvester_and_tests_have_no_dead_code(self):
+        for root in ("harvester", "tests"):
+            r = scan(base=REPO, report_root=root)
+            self.assertEqual(
+                found_total(r), 0,
+                f"{root}/ 出现死代码（删掉，或在该行加 `# noqa` 说明保留理由）：\n"
+                + render_deadcode(r))
 
 
 class TestDeadcodeCli(unittest.TestCase):

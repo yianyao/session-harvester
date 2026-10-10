@@ -124,7 +124,7 @@
 | meta 库（均 gitignore） | `topics_meta.db` / `suggestions_meta.db` / `artifacts_meta.db` / `keywords_meta.db`；本轮备份 `topics_meta.db.bak-20261010` |
 | 卡片主库 / chain 正式位 | `~/.workbuddy/knowledge/cards/`、`~/.workbuddy/knowledge/topics/`（**均在工作区外，写入需批准**） |
 | 提交信息 | **用 `-F 文件`**，勿用 PowerShell here-string（AGENTS.md 第 1 条） |
-| 探针/底稿目录 | `docs/reports/`（gitignore；本轮新增 `probe-*.py`、`CHAIN-AUTHOR-SPEC.md`；当时的一次性回合索引 / 去重 / raw 全文导出脚本、主题注册脚本、两道 chain 内容门脚本与死代码扫描此后**已被工具取代并删除**：`topic dedupe` / `topic turns` / `chain-audit` / `deadcode-scan`） |
+| 探针/底稿目录 | `docs/reports/`（gitignore；本轮新增 `probe-*.py`；`CHAIN-AUTHOR-SPEC.md` 已在 v0.39 移进 `docs/`，因为它是**写 chain 的规范**、新 clone 的作者必须拿得到；当时的一次性回合索引 / 去重 / raw 全文导出脚本、主题注册脚本、两道 chain 内容门脚本与死代码扫描此后**已被工具取代并删除**：`topic dedupe` / `topic turns` / `chain-audit` / `deadcode-scan`） |
 
 **测试数变化时必须同步三处**：`README.md`（依赖边界段）、本文件、`HANDOFF-v0.22-next.md` §0。
 
