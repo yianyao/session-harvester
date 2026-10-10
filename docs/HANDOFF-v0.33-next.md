@@ -14,14 +14,14 @@
 
 | 项 | 值（2026-10-10 实测） |
 |---|---|
-| 后端 head | v0.33 → **v0.39**（分诊落地 / topic md / ③ 集成门 / 分诊尾部 / plan-seed 工具化 / M1 收紧 + 池清空 + 文档清账 / 死代码扫描工具化 / 沙箱补丁进版本库 / **深会话单列两类**）；**收尾提交见 `git log -1`** |
-| 后端测试基线 | **626 例全绿**（venv，须带沙箱补丁，见 §2） |
-| 无 PyYAML 门禁 | `Ran 598 / FAILED (errors=60)`（设计行为；**须 0 failures**）。已固化：`& $venv -X utf8 scripts\gate_no_yaml.py`（v0.43） |
+| 后端 head | v0.33 → **v0.45**（分诊落地 / topic md / ③ 集成门 / 分诊尾部 / plan-seed 工具化 / M1 收紧 + 池清空 + 文档清账 / 死代码扫描工具化 / 沙箱补丁进版本库 / **深会话单列两类** / `regress` / 文档漂移门 / **chain 证据覆盖 + chain-audit 三门**）；**收尾提交见 `git log -1`** |
+| 后端测试基线 | **640 例全绿**（venv，须带沙箱补丁，见 §2） |
+| 无 PyYAML 门禁 | `Ran 602 / FAILED (errors=60)`（设计行为；**须 0 failures**）。已固化：`& $venv -X utf8 scripts\gate_no_yaml.py`（v0.43） |
 | 前端仓库 | `..\harvester-view`，head `c1c2c06`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
 | 主题注册表 | **14 个主题**（成员总数 938 → 1001 → **997**，v0.42 舍弃 4 条成员后）：小说 `tp-20261008-010`=**411**、素材库 `tp-20261010-005`=**199**、采集 `tp-20261010-004`=**191**、心理 `tp-20261010-003`=**69**、本机工具环境 `004-08`=**43**、SKILL `001`=**10**、`003`=**8**、`007`=**8**、`002`=**39**；零散登记 **163 条** |
 | 分诊池 | **794 条** = substantive **502** + 深会话 `deep_unassigned` **292**（`--triage-deep`）；**noise_high / noise_maybe / deep_topic_hint 均已归零**（v0.42 用户裁决把 9 条舍弃进零散） |
 | 库规模 | 1964 会话 / 62899 消息 / 36647 步骤 / 294 错误（`2026-10-09 10:17:07` 时点） |
-| 已发布 chain | 3 条（叙事节奏 / 吾好梦中救人 / Skill 自学习进化），在 `~/.workbuddy/knowledge/topics/`；Skill 链正文的对照工具引用已更新为 `chain-audit`（**过两道门后**才同步，两份逐字节一致） |
+| 已发布 chain | 3 条（叙事节奏 / 吾好梦中救人 / Skill 自学习进化），在 `~/.workbuddy/knowledge/topics/`。**叙事节奏链 v0.45 证据覆盖补做**：52 节点、有锚点成员 **39/55**、8 个标题级代表逐条标注；`chain-validate` errors 0、`chain-audit --quotes-ascii` 引文 75/75 + 锚点告警 0（详见 §1 与台账 H92） |
 | **沙箱策略** | 本轮**中途变化**：开始时只对 `session-harvester/` 可写（实测写 `..\harvester-view` 被拒 → ③ 一度判"未执行"），后段放开为全访问才完成 ③。**每次会话都可能不同：跨仓库任务先探一次写权限**（`Set-Content` 一个探针文件即可），别凭上一轮的印象决定做不做 |
 
 **基线自查（先做，否则会误判"项目坏了"）**：
@@ -29,7 +29,7 @@
 ```powershell
 $venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
-& $venv -X utf8 -m unittest discover -s tests     # 预期 574 例 OK
+& $venv -X utf8 -m unittest discover -s tests     # 预期 640 例 OK
 ```
 
 **下一件事（按优先级，均已写成可执行形态）**：
@@ -38,10 +38,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 |---|---|---|---|
 | 1 | ✅ **`tests/` 的 9 条未用 import 已清（v0.39）** | 8 条是普通死 import（`test_v19` 的 `json`/`build_suggestion_entries`、`test_v22_p1_3_cross` 与 `test_v22_t5_candidates` 的 `json`、`test_v22_t4_skilljoin` 的 `timedelta`、`test_v23_yuanbao_blockguard` 的 `tempfile`、`test_v30_noisetriage` 的 `intent_of`、`test_v31_chainaudit` 的 `audit_quotes`）；`test_v31` 的 `import yaml` 是**依赖标记**（H9） | 已做：8 删 + `import yaml` 加 `# noqa`；并把套件的 `test_harvester_and_tests_have_no_dead_code` **扩到两个根**（否则还会长回来） |
 | 2 | ✅ **`CHAIN-AUTHOR-SPEC.md` 已移进 `docs/`（v0.39）** | 它原先只在 gitignore 的 `docs/reports/` 里——与 H82 的 `sitecustomize.py` 同类：**写 chain 的规范文档，新 clone 的作者拿不到** | 已做；顺带确认 `docs/reports/` 里其余都是允许保留的一次性报告 |
-| 3 | **复核 65 条 `deep_topic_hint`**（v0.39 新捞出来的） | 机械命中不等于判对（v0.33/v0.34 的经验：命中率约 8 成，小说正文会被"梦境"类词抢走） | `--triage-deep --triage-json` → `--triage-brief deep_topic_hint` 看全量 → 写 `judgment.yaml`（overrides/noise/skip）→ `--plan-seed --require-covered deep_topic_hint` → `--apply`；**293 条 `deep_unassigned` 缺省不动**（要看就 `--triage-brief deep_unassigned`） |
-| 4 | "原型机"线索 = **4 条同源会话**（2 浅 + 2 深，产品/硬件研发语境） | 4 条都不在任何主题、也没登记零散 | **待你裁决**：立主题「硬件产品原型与量产」则 `topic register` + `assign` |
-| 5 | 长期未做项（v0.24 §7 仍标"未做"的） | ① `regress` 端到端回归语料（CLI 无该子命令）；② 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点）；③ chain 元结论回写全局记忆（走 `suggest-status`）；④ V3 的"卡片校验与主题打通"那半**仍未设计** | ②③ 关系链质量；① 取决于要不要建 `regress`；④ 需一轮专门设计 |
-| 6 | 两处"检查没做成/未定位" | ① "README 是否漏文档化子命令"的抽取脚本返回 0（结论不可用，**未执行**）；② 沙箱迁移后首跑 1 例 flake **未定位** | ① 换个稳的抽取方式重做；② 复现时留 `-v` 输出定位——**别当"已知 flaky"糊过去** |
+| 3 | ✅ **65 条 `deep_topic_hint` 已复核归位（v0.39–v0.42）** | 机械命中不等于判对（命中率约 8 成） | 已做；详见 H84–H88 |
+| 4 | ✅ **「原型机」4 条同源会话已由用户裁决（v0.42）** | 4 条都不在任何主题、也没登记零散 | 用户裁决：4 条原型机 + 5 条最不确定者**舍弃进零散登记** |
+| 5 | ✅ **长期未做项已清（v0.43–v0.45）** | ① `regress`（v0.43）② 叙事节奏 chain 证据覆盖（v0.45）④ V3 卡片校验↔主题打通（v0.43）。**③ chain 元结论回写全局记忆：仍建议不做**（领域内容，放进代理工作记忆是噪声） | 见 §1 与 H90/H92 |
+| 6 | **仅剩 1 项"没做成"** | ① README 漂移检查 ✅ v0.44 已补做；② **沙箱迁移后首跑那 1 例 flake 仍未定位** | 复现时留 `-v` 输出定位——**别当"已知 flaky"糊过去**；已知排除项：并发子代理期间的假红（v0.43 已归因） |
+| 7 | **可选净化（非必须）** | 叙事节奏 chain 正文用 ASCII `"…"`（212 处）而非规范要求的 `「」`；v0.45 已用 `--quotes-ascii` 逐字核过 75/75，**内容无误**，但每次核都要带开关 | 若要净化：把该链正文引号整体换成 `「」`（引用）＋加粗（术语），再跑 `chain-audit` 两道门；**不改也不算欠账** |
 
 ---
 
@@ -62,6 +63,8 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 | 测试 | 后端 +36 例（累计 565）：`test_v33_*` 21、`test_v35_planseed` 13、`test_v30` +2；view +1 门。**后端 565 / view 25 全绿** |
 | **沙箱补丁进版本库 + view 侧审计**（v0.38） | `sitecustomize.py` 移进 `scripts/sandbox/`（原在 gitignore 目录 → 新 clone 上套件的前置条件不存在，文档却教人直接跑）；`deadcode-scan` 修掉"兄弟根静默跳过却宣称覆盖"，并用它对 view 审计抓到 **1 条真死 import**（view `c1c2c06`，25 例仍全绿）。详见 **H81/H82** |
 | 事实台账 | H67–H82 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
+| **chain 证据覆盖 + `chain-audit` 三门**（v0.45） | 长期挂账的最后一项落地：`chain-audit` 新增**证据覆盖**（无锚点成员按 H40 现算去重 → 分开"重复会话"与"独立代表"）、**正文锚点↔frontmatter 双向对账**（含简写归属）、**引文门空转显式化 + `--quotes-ascii`**；锚点门重叠判据含会话标题；`chain-audit` 由 16.4s → **3.7s**（批量取数）。叙事节奏链 30→**52 节点**、有锚点成员 27/55→**39/55**，8 个标题级代表逐条标注；改正两处锚点归属（"不要太 AI 化"首次出现 2025-07-15；笛卡尔定稿措辞在 c503406a t5 而非 t4）。详见 **H92** |
+| 测试 | 后端 **640 例全绿**（v0.45；+10 例 `test_v31_chainaudit`）；无 PyYAML 门禁 `Ran 602 / errors=60 / 0 failures`；死代码两根 0/0/0 |
 
 ## §2 环境速查（沿用；本轮无变化）
 
@@ -155,7 +158,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 | 成员对账 | 010: 324→**373**、003: 27→**53**、002: 36→**38**、004: 29→**40**、M1: 0→**162** | 注册表成员数（apply 输出） |
 | `triage()` 耗时 | **529 秒 → 2 秒** | 同机同库，1964 会话 / 62899 消息；输出逐项一致 |
 | 深会话口径（v0.39） | `--triage-deep` → 863 条 = 浅 505 + **deep_topic_hint 65** + deep_unassigned 293；`--plan-seed --require-covered deep_topic_hint` 产出 assign **65** 条、dry-run 接受 | `--triage-deep --triage-json` |
-| 测试 | **580 例 OK**（venv）/ 571 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
+| 测试 | **640 例 OK**（venv）/ 602 errors=60（无 PyYAML，0 failures） | `unittest discover -s tests` |
 | 死代码扫描 | `harvester/` **0/0/0**（工具化后第一次跑抓到旧扫描漏掉的 3 条：2 条真死已删 + 1 条可用性探测改为 `noqa` 豁免） | `python -m harvester deadcode-scan`；套件 `test_harvester_package_has_no_dead_code` |
 | M1 关键词收紧 | 10 → **3**（用词/措辞/微表情）；28 条旧命中里仍命中 7，跌破 21（4 条含整合诉求的真工作 / 14 条兜底档 / 3 条纯查询） | `docs/reports/probe-m1-keywords.py` + 重跑分诊 |
 | 零散登记 | 139 → **153**（v0.36 复核 30 条 `noise_maybe`，登记 14 条） | `--noise-list` |

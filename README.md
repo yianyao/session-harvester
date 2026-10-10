@@ -212,24 +212,41 @@ python -m harvester topic export --meta topics_meta.db --db harvester.db --id <t
 python -m harvester topic md --meta topics_meta.db --db harvester.db --id <tp-id> \
     --chain-root ~/.workbuddy/knowledge/topics --out docs/reports/topic-<tp-id>.md        # 给人读的一页速览
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
-python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # chain 内容审计（引文逐字 + 锚点语义）
+python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # chain 内容审计（引文逐字 + 锚点语义 + 证据覆盖）
+python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db --quotes-ascii --list-limit 0   # 连 ASCII 引号一起核、明细不限条数
 ```
 
 ### 4.1 chain 内容审计（写完 chain 必跑）
 
 `chain-validate` 只管**结构**（sid 在成员内、turn 是否越界），**管不了引文真伪，
-也管不了"这个 turn 是否真说了这句 note"**。`chain-audit` 补两道内容门：
+也管不了"这个 turn 是否真说了这句 note"，更不管"有多少成员根本没被引到"**。
+`chain-audit` 补三道内容门：
 
 - **引文逐字门**（硬门）：正文所有 `「」` 必须能在成员会话 `raw` 或标题里逐字找到
   （自动归一空白与 Markdown 加粗标记；`……` 多段省略引用逐段比对）。**未命中即
   退出码 1**。实测价值：起草 Agent 曾把检索列 bigram 当原文、引文经"还原"后并非
   逐字；也有把原话压缩改写的（漏掉半句）。
-- **锚点语义门**（启发式）：逐节点把 `note` 与该回合 `raw` 并排列出，并对
-  **note 的 CJK 2-gram 与原文零重叠**的节点告警。实测价值：抓到过"整条挂错
-  sid/turn"（note 写"王德荣与沈望的剧组旧交"，而该 turn 在讲"锚点的心理学依据"）。
-  **已知误报类别**：note 写的是**跨会话关系**（"同日第三处重发""同一疑问跨端
-  复问"）时本就不与本回合有交集——这类已排除；锚点门默认**不影响退出码**
+  **空转会显式报出**：若正文 `「」` 为 0 条而 ASCII `"…"` 引用不为 0，报告写
+  `本门空转`——"0 未命中"不等于"已核过"。加 `--quotes-ascii` 把 ASCII 引号
+  一起逐字核（同样计入硬门）；引文按**成对**扫描，短引用不会让后续引用错位。
+  （实测：真库首条 chain 写于规范 §5 之前，212 个 ASCII 引号从未被核过，
+  补核后清掉 39 处以引号承载的自造术语 + 4 处不逐字的引文。）
+- **锚点语义门**（启发式）：逐节点把 `note` 与该回合 `raw`（**含会话标题**）
+  并排列出，并对 **note 的 CJK 2-gram 与原文零重叠**的节点告警。实测价值：
+  抓到过"整条挂错 sid/turn"（note 写"王德荣与沈望的剧组旧交"，而该 turn 在讲
+  "锚点的心理学依据"）。**已知误报类别**：note 写的是**跨会话关系**（"同日第三处
+  重发""同一疑问跨端复问"）时本就不与本回合有交集——这类已排除；note 写**标题级**
+  依据（如"肯定性标题：节奏把控佳"）也不算错配。锚点门默认**不影响退出码**
   （要它判失败加 `--strict`）。
+- **证据覆盖**（v0.45，informational）：量出**有多少成员根本没有 turn 级锚点**
+  （只有标题级），并把"无锚点的**重复会话**"与"无锚点的**独立代表**"分开——
+  后者才是真缺口（H40：锚点不迁移，重复会话无须各自挂）。同时做
+  **正文锚点 ↔ frontmatter 双向对账**：正文引了却未登记的 `{sid, turn}`
+  （view 里不可点、覆盖统计也漏）与登记了却在正文用不到的节点都会列出；
+  简写 `（同会话 turn N）` 按**同一行最近的前置完整锚点**归属。
+  实测价值：真库首条 chain 55 成员里只有 27 个有锚点，且 10 个正文锚点没进
+  frontmatter（30→52 节点、覆盖 27/55 → 39/55，剩下 8 个独立代表逐条标注为标题级）。
+  `--list-limit 0` 看全量明细（缺省 20 条，超出会显式印"另有 N 条"）。
 
 ### 5. 主题结构化导出（给 Agent 用）
 
