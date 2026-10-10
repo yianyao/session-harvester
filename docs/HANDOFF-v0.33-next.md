@@ -36,10 +36,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 
 | # | 事项 | 为什么 | 做法 |
 |---|---|---|---|
-| 1 | 其余一次性脚本再审 | 用户第 1 点要求逐个审：`resolve-members.py` / `topic-overlap.py` / `probe-*.py` / `run_tests.py` / `sitecustomize.py` | 判定口径：下轮还会重跑 → 进工具本体；**`sitecustomize.py` 是沙箱补丁（不是一次性），该写进 README**；探查类保留为报告 |
-| 2 | 池里剩 2 条"设备原型机"线索 | `004352fc`（工程机/原型机区别）+ `46886828`（原型机下一步）同源；2 条太薄，故 v0.33/v0.36 都判两可 | **待你裁决**：单独立主题 / 登记零散 / 继续挂着 |
-| 3 | `harvester-view` 侧还有什么该进工具 | view 只有 3 个测试文件；它自己的 `README` 已记集成门，但**启动脚本**（`start.cmd`/`start-system.cmd`）与 `view.py` 的边界值得再审一轮 | 判定口径同上：下次改 view 还会不会重跑 |
-| 4 | 分诊池剩下的 substantive 503 条 | 它们**不是**待清对象（属"非查询/含整合诉求"，设计上不动）；但若你想找新主题，可从 `topic-candidates` 走 | 建议先看 `topic list` 的 14 个主题是否还缺类目，再决定要不要挖 |
+| 1 | **深会话（>3 回合）从未归位**（v0.38 实测：分诊池 505 → 放宽到 ≤12 回合 **821**，多出 **316** 条，其中 **53 条已机械命中现有主题**、36 素材型、24 待定） | `noisetriage.triage` 的 `max_turns` 缺省 3 是**为噪声判定设的**（避免把多轮打磨误判成零散），但它同时让**深会话永远进不了归位视野**——下面那 2 条原型机会话就是活例 | 建议**给深会话单列一类**（如 `deep_unassigned`）而不是改默认值：只提示、不参与零散判定；仍用 `--plan-seed` + `judgment.yaml` 走同一套判断流程 |
+| 2 | "原型机"线索 = **同一条产品研发线索的 4 条会话**：浅的 2 条（`004352fc` 工程机/原型机区别、`qianwen-raw:46886828` 原型机做出来之后下一步）在池里；深的 2 条（`yuanbao-raw:0OXlcMKFZpQ` 原型机定义与核心特征、`0OXlcMKFZpR` 电子产品原型机到量产流程，正文在问"能不能叫下线"）在 ≤12 回合口径下才可见 | 4 条**都不在任何主题、也没登记零散**；语境是**产品/硬件研发**而非词典查询（`search 原型机` 可见） | **待你裁决**：立主题「硬件产品原型与量产」则 `topic register` + `assign` 4 条；不立则 2 条浅的登记零散、深的留着 |
+| 3 | `docs/reports/` 探查脚本：**保留，不再审**（用户 2026-10-10 裁决） | `probe-*.py` / `resolve-members.py` / `topic-overlap.py` 回答的是"当时那个问题"，不是可复用能力；`run_tests.py` 是文档里的备用跑法 | 它们属**允许保留的一次性报告**（该目录本就 gitignore）；`sitecustomize.py` 已单独移进 `scripts/sandbox/` |
+| 4 | 长期未做项（v0.24 §7 表里仍标"未做"的） | ① `regress` 端到端回归语料（CLI 仍无该子命令）；② 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点）；③ chain 元结论回写全局记忆（走 `suggest-status`）；④ V3 的"卡片校验与主题打通"那半**仍未设计** | 按价值排：②③ 关系链质量，① 取决于要不要建 `regress`，④ 需一轮专门设计 |
+| 5 | 沙箱迁移后**首跑 1 例 flake 未定位** | 首跑出现、随后连跑两次 574 全绿 | 复现时留 `-v` 输出定位；**别当"已知 flaky"糊过去**（H82 已如实备案） |
 
 ---
 
@@ -156,6 +157,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 | 死代码扫描 | `harvester/` **0/0/0**（工具化后第一次跑抓到旧扫描漏掉的 3 条：2 条真死已删 + 1 条可用性探测改为 `noqa` 豁免） | `python -m harvester deadcode-scan`；套件 `test_harvester_package_has_no_dead_code` |
 | M1 关键词收紧 | 10 → **3**（用词/措辞/微表情）；28 条旧命中里仍命中 7，跌破 21（4 条含整合诉求的真工作 / 14 条兜底档 / 3 条纯查询） | `docs/reports/probe-m1-keywords.py` + 重跑分诊 |
 | 零散登记 | 139 → **153**（v0.36 复核 30 条 `noise_maybe`，登记 14 条） | `--noise-list` |
+| **深会话口径边界** | ≤3 回合池 **505** → ≤12 回合池 **821**（+316：topic_hint **53** / craft 36 / noise_maybe 24 / substantive 707） | `--triage-max-turns`（v0.38 实测） |
 | plan-seed 等价性 | v0.33：assign 272 / keep 2 / noise 19 / skip 1 **全一致**；v0.34：assign 28 / keep 12 / noise 0 **全一致** | 与两份已落库 plan 做语义比对（`docs/reports/verify-planseed-*.py`） |
 | view 测试 | **25 例 OK**（24 + 真实载荷集成门） | `harvester-view`：`unittest discover -s tests` |
 | 真实载荷门 | `ok 12 / n/a 0 / FAIL 0` | 真库 14 主题；多链主题 `tp-20261008-010` 2 条链 |
