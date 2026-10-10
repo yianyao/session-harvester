@@ -527,6 +527,59 @@ def cmd_report_skill_join(args) -> int:
     return 0
 
 
+def cmd_topic_consolidate(args) -> int:
+    """主题梳理流水线（v0.26）：出梳理包 / 执行 plan / 看零散登记。
+
+    确定性一半 + Agent 一半：工具只按显式规则缩小候选范围并确定性执行，
+    语义归组一律来自人填的 plan（不写死主题）。
+    """
+    from .consolidate import (apply_plan, build_plan_packet, list_noise,
+                              load_plan)
+    meta = Path(args.meta)
+    if args.noise_list:
+        rows = list_noise(meta)
+        print(f"零散会话登记 {len(rows)} 条（meta 库 sessions_noise）")
+        for r in rows:
+            print(f"- {r['sid']}  {r['created']}  {r['reason']}")
+        return 0
+    if args.apply:
+        plan = load_plan(Path(args.apply))
+        r = apply_plan(meta, plan, dry_run=not args.yes,
+                       snap_dir=Path(args.snap_dir) if args.snap_dir else None)
+        if not r["ok"]:
+            for e in r["errors"]:
+                print(f"[错误] {e}", file=sys.stderr)
+            return 2
+        if not r["applied"]:
+            print("[dry-run] 校验通过，未写库。加 --yes 执行。")
+            p = r["preview"]
+            print(f"  将新建 {p['new_topics']} 个类目、改名 {p['renames']} 个、"
+                  f"并入 {len(p['groups'])} 组、舍弃 {p['discard']} 个、"
+                  f"零散登记 {p['noise']} 条、保留 {p['keep']} 个")
+            for g in p["groups"]:
+                print(f"    {g['target']} ← {g['from']} 个源")
+            return 0
+        print(f"[topic-consolidate] 已执行；备份 {r['backup']}")
+        print(f"[topic-consolidate] 主题数 {r['topics_after']}；"
+              f"新增零散登记 {r['noise_added']} 条")
+        for t in r["topics"]:
+            print(f"  {t['id']} 成员{t['members']:>4}  {t['name']}")
+        return 0
+    # 缺省：出梳理包
+    dbp = Path(args.db) if args.db else None
+    root = Path(args.chain_root) if args.chain_root else None
+    packet = build_plan_packet(meta, db_path=dbp, chain_root=root)
+    if args.plan_out:
+        out = Path(args.plan_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(packet, encoding="utf-8", newline="\n")
+        print(f"[topic-consolidate] 梳理包已写入: {out}"
+              f"（{len(packet)} 字符）", file=sys.stderr)
+    else:
+        print(packet)
+    return 0
+
+
 def cmd_topic_candidates(args) -> int:
     """T5 自动聚类候选推荐器：标题 n-gram + 任务签名产候选。
 
@@ -1093,6 +1146,28 @@ def main(argv=None) -> int:
                      help="任务签名的工具序列 top-k（默认 3）")
     ptc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     ptc.set_defaults(func=cmd_topic_candidates)
+
+    pcon = sub.add_parser(
+        "topic-consolidate",
+        help="主题梳理流水线（v0.26）：出梳理包（信号表+零散候选+模板）/ "
+             "执行人填的 plan（完整性校验 + 文件级原子）/ 看零散登记")
+    pcon.add_argument("--meta", default="topics_meta.db",
+                      help="主题 meta 库路径（默认 topics_meta.db）")
+    pcon.add_argument("--db", default="harvester.db",
+                      help="索引库（只读；出梳理包时用于取成员标题与零散候选）")
+    pcon.add_argument("--chain-root", dest="chain_root", default=None,
+                      help="chain 正式位目录（统计每主题已有几条链）")
+    pcon.add_argument("--plan-out", dest="plan_out", default=None,
+                      help="梳理包输出路径（缺省打印到 stdout）")
+    pcon.add_argument("--apply", default=None,
+                      help="执行指定的 plan.yaml（缺省 dry-run，加 --yes 才写库）")
+    pcon.add_argument("--yes", action="store_true",
+                      help="真的写库（缺省只校验并打印预览）")
+    pcon.add_argument("--snap-dir", dest="snap_dir", default=None,
+                      help="被舍弃主题的快照输出目录")
+    pcon.add_argument("--noise-list", dest="noise_list", action="store_true",
+                      help="列出已登记的零散会话")
+    pcon.set_defaults(func=cmd_topic_consolidate)
 
     pk = sub.add_parser("keywords",
                         help="n-gram 关键词统计（只统计 messages.raw，"
