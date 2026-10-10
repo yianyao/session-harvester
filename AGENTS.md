@@ -22,7 +22,7 @@
   | 已发布 chain | 3 条；**叙事节奏链 v0.45 补做 + 引号已净化**：52 节点、有锚点成员 **39/55**、8 个标题级代表逐条标注；引号按规范统一（术语加粗、数据引文 `「」`）后**默认引文门真实生效**（`chain-audit` 不带 `--quotes-ascii`：`「」` 62 条全部逐字命中、锚点告警 0） |
   | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（A 一行级 / B Agent 消费面 / C 质量欠账 / D 待裁决；含对第三方检查文档的逐条实测核对——其中 `regress` 那条**已过期**） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H98** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H99** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
   | MCP 工具 | **10 个**（会话面 4 + 进化数据面 6：`topic_list`/`topic_export`/`chain_read`/`suggest_list`/`cards_list`/`artifacts_list`）；漂移门 `tests/test_v45_mcp_tools.py` 从 `apiserve.py` 源码 AST 抽 `/api/*` 双向核对 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
@@ -35,7 +35,7 @@
   7. ✅ **C1/C2/C5 已完成（v0.45 第五批，H96）**：C1 `keywords-gc --keep-runs/--vacuum`（真库 40.2→**18.4 MB**；22 MB 是空闲页，只有 VACUUM 回收）；C2 `suggest-agents --coverage`（真库：建议 8/台账 8 看着相等，实际**已裁决 6、待裁决 2、陈旧 2**）；C5 `regress` 变异补证（3 处破坏全部变红，补上 H90 的欠证）；
   8. ✅ **C3 已完成（v0.45 第六批，H97）**：DSH schema 守卫（声明版本 + 消费字段形态双判据；不匹配 → `detect` STUB / `load_session` **lossy 空消息**，不半解析）；真机 **33 会话全部通过**、指纹 `d75532e18dc4`；顺带修掉 `_files()` 写死 `v4` 导致"上游改名伪装成 MISSING"的诊断缺陷；
   9. **D3 定期蒸馏 SOP 已落地（SOP §5）**：三触发 + 八步 + 每步记数字；**不含 chain 再生成**（D1 暂缓）；D2 暂缓；
-  10. ✅ **C4 半闭环（v0.45 第七批，H98）**：`scripts/flake_hunt.py` 首跑**抓到并修掉一例真 flake**（`test_v06` 4/5 轮红）——根因是**本轮 C3 新测试打桩 `dshmod.zstd_decompress` 未还原**（单跑看不见、in-process 重复才暴露）；已修 + 复跑 5 轮全绿；并把这一类做成门 `tests/test_v45_no_monkeypatch_leak.py`。**历史那例（沙箱首跑）仍未复现**，两者不是同一件事；
+  10. ⚠️ **C4 半闭环（v0.45 第七/八批，H98/H99）**：`scripts/flake_hunt.py` **两个轴**——热跑（同进程，抓跨测试状态泄漏；首跑即抓到并修掉一例：C3 新测试打桩 `dshmod.zstd_decompress` 未还原，已加门 `test_v45_no_monkeypatch_leak.py`）＋ `--cold`（独立子进程 + `--clear-pycache`，抓"首跑/冷启动"类）。**历史那例在两轴均未复现**（热跑 10+ 轮、冷跑 3 轮全绿），按"未定位（不可复现）"记账；它若再现，猎人自动点名留证；
   11. **并发教训（v0.43）**：同一工作区并行子代理**会互相同改 `cli.py`/`README.md`**——下次派活要**按文件切分**或串行。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
