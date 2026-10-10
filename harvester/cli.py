@@ -806,7 +806,42 @@ def cmd_keywords(args) -> int:
                     exclude_sids=noise_sids(tm))
     print(f"统计完成: 消息 {s['total_msgs']} 条 → "
           f"{args.meta}（run 追加）")
+    if getattr(args, "keep_runs", None):
+        from .kwstats import prune_runs
+        pr = prune_runs(Path(args.meta), keep=args.keep_runs,
+                        vacuum=bool(args.vacuum))
+        print(f"[keywords] GC：保留最近 {args.keep_runs} 次 run，"
+              f"删除 run {pr['deleted_runs']} 个 / 统计行 {pr['deleted_stats']} 条"
+              f"{'，已 VACUUM' if pr['vacuumed'] else ''}",
+              file=sys.stderr)
     _emit_report(render_report(s, top=args.top), args)
+    return 0
+
+
+def cmd_keywords_gc(args) -> int:
+    """keywords_meta.db 垃圾回收（v0.45）：保留最近 N 次 run，可 VACUUM。
+
+    为什么单独给一个入口（而不只在 `keywords --keep-runs` 上）：GC 是**定期动作**
+    ——库会随每次 keywords 线性膨胀（真库 4 次 run = 435,583 行 / 40.2 MB），
+    使用者需要"现在就回收"而不必先跑一次新统计。
+    """
+    from .kwstats import prune_runs
+    meta = Path(args.meta)
+    if not meta.is_file():
+        print(f"错误: meta 库不存在: {meta}", file=sys.stderr)
+        return 2
+    before = meta.stat().st_size
+    try:
+        r = prune_runs(meta, keep=args.keep_runs, vacuum=bool(args.vacuum))
+    except ValueError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
+    after = meta.stat().st_size
+    print(f"[keywords-gc] 保留最近 {args.keep_runs} 次 run"
+          f"（keep={r['kept']}）；删除 run {r['deleted_runs']} 个 / "
+          f"统计行 {r['deleted_stats']} 条"
+          f"{'，已 VACUUM' if r['vacuumed'] else '（未删则跳过 VACUUM）'}；"
+          f"体积 {before / 1048576:.1f} MB → {after / 1048576:.1f} MB")
     return 0
 
 
@@ -832,6 +867,22 @@ def cmd_suggest_agents(args) -> int:
     out.write_text(content, encoding="utf-8", newline="\n")
     print(f"建议已写入: {out}")
     print("纪律: 请人工审阅后自行并入 AGENTS.md（本工具绝不直接改它）。")
+    if getattr(args, "coverage", False):
+        from .agent_suggest import build_suggestion_entries, coverage_report
+        from .agent_suggest import render_coverage
+        entries = build_suggestion_entries(errors, min_count=args.min_count,
+                                           max_items=args.max,
+                                           statuses=statuses)["entries"]
+        cov = coverage_report(entries, statuses or {})
+        target = Path(args.coverage_out) if getattr(args, "coverage_out",
+                                                    None) else None
+        if target:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_coverage(cov), encoding="utf-8",
+                              newline="\n")
+            print(f"覆盖核对已写入: {target}")
+        else:
+            print(render_coverage(cov))
     return 0
 
 
@@ -1596,11 +1647,27 @@ def main(argv=None) -> int:
                     help="关闭停用词过滤（含默认表），用于复现历史口径")
     pk.add_argument("--top", type=int, default=50,
                     help="报告每档 Top N（默认 50）")
+    pk.add_argument("--keep-runs", dest="keep_runs", type=int, default=None,
+                    help="GC：统计后只保留最近 N 次 run（含本次），更早的 run "
+                         "与其 keyword_stats 一并删除（v0.45；不设则该库只增不减）")
+    pk.add_argument("--vacuum", action="store_true",
+                    help="GC 后回收磁盘（VACUUM；仅在确有删除时执行）")
     pk.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pk.set_defaults(func=cmd_keywords)
 
-    psa = sub.add_parser("suggest-agents",
-                         help="从错误模式生成 AGENTS.md 候选条目"
+    pkg = sub.add_parser(
+        "keywords-gc",
+        help="keywords_meta.db 回收（保留最近 N 次 run，可 --vacuum）："
+             "keyword_stats 是累积表，不回收会随运行次数线性膨胀")
+    pkg.add_argument("--meta", default="keywords_meta.db",
+                     help="keywords meta 库路径")
+    pkg.add_argument("--keep-runs", dest="keep_runs", type=int, default=1,
+                     help="保留最近几次 run（缺省 1；必须 >=1）")
+    pkg.add_argument("--vacuum", action="store_true",
+                     help="确有删除时执行 VACUUM 回收磁盘")
+    pkg.set_defaults(func=cmd_keywords_gc)
+
+    psa = sub.add_parser("suggest-agents",                        help="从错误模式生成 AGENTS.md 候选条目"
                               "（建议池，不直接改 AGENTS.md）")
     psa.add_argument("--db", default="harvester.db", help="索引库路径")
     psa.add_argument("--since", type=float, default=None, metavar="DAYS",
@@ -1613,6 +1680,11 @@ def main(argv=None) -> int:
     psa.add_argument("--meta", default=None,
                      help="建议状态 meta 库路径（suggestion_status 表；"
                           "缺省不读状态，全部按 pending 渲染）")
+    psa.add_argument("--coverage", action="store_true",
+                     help="追加「建议池 ↔ 台账」覆盖核对（v0.45）：列出待裁决与"
+                          "台账陈旧（建议句已不在池里）两类，只对账不代改")
+    psa.add_argument("--coverage-out", dest="coverage_out", default=None,
+                     help="覆盖核对报告输出路径（缺省打印）")
     psa.set_defaults(func=cmd_suggest_agents)
 
     pss = sub.add_parser("suggest-status",

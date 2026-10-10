@@ -65,21 +65,24 @@
 
 ### C 组 · 质量欠账（评审 P2/P3 剩余 + 本项目自留）
 
-| # | 事项 | 做法 | 验收 |
+| # | 事项 | 结果 | 状态 |
 |---|---|---|---|
-| C1 | `keywords_meta.db` GC | `report-keywords` 增 `--keep-runs N`（缺省保留最近 N 次运行）+ `--vacuum`；删旧 `keyword_runs` 与其 `keyword_stats` | 测试：造 3 次 run → `--keep-runs 1` 后只剩 1 次，且**按 run 删干净**（不许留孤儿 stats 行） |
-| C2 | 建议台账口径 | 明确"什么必须进 `suggestion_status`"：14 个主题的归并/裁决、117 候选簇的取舍都要有 status 记录（现仅 8 条） | 新增导出/核对命令输出"已裁决但无台账"清单；**清单非空即红**（或人工裁决项数 = 台账条数） |
-| C3 | DSH schema 指纹 | 设计：`adapters/dsh.py` 记 `schema_fingerprint`（对 DSH transcript 形态的稳定字段集合做 hash），落 `sessions` 或 meta 表；`detect` 不匹配时**显式降级**而非静默解析 | 测试：喂一份"字段被改名"的假 transcript → `detect` 报降级/未识别，**不许**产出半成品记录 |
-| C4 | 1 例 flake 定位 | 复现时留 `-v`；已排除"并发期间假红" | 复现记录写进台账；未复现前如实记"未定位" |
-| C5 | `regress` 的"故意破坏→变红"补证 | 对 `regress` 的 57 条断言做变异自检（照 v0.45 的 `mutation-check` 做法） | 至少 3 处口径改坏 → `regress` 必须红；把结果写进台账（补上 H90 的欠证） |
+| C1 | `keywords_meta.db` GC | 已做：`kwstats.prune_runs` + 独立子命令 **`keywords-gc --keep-runs N [--vacuum]`**（另在 `keywords` 上加 `--keep-runs/--vacuum` 顺手回收）。**真库实测 40.2 MB → 18.4 MB**，但**删 run 只删了 3 条记录、0 条统计行**——22 MB 是**空闲页**（旧 schema 迁移 `DROP TABLE` + `INSERT OR REPLACE` 留下的碎片），**只有 VACUUM 能回收**。这条口径改了我们对"库在膨胀"的归因：不全是新数据 | ✅ |
+| C2 | 建议台账口径 | 已做：`agent_suggest.coverage_report/render_coverage` + `suggest-agents --coverage [--coverage-out f]`。**真库实测很有价值**：建议 8 条、台账 8 条**看着对得上**，实际 **已裁决 6 / 待裁决 2 / 台账陈旧 2**——"数字相等"纯属巧合。裁决本身仍由人做（工具只对账、不代改） | ✅ |
+| C5 | `regress` 的"故意破坏→变红"补证 | 已做：`docs/reports/mutation-check-regress.py`（一次性）——基线 **57 断言 / 0 失败**；三处变异分别落在三层都**变红**：① 分诊判定计数 +1 → 1 条断言红；② assign 砍一条 → 14 条红；③ apply **真写少一个成员** → 5 条红。**教训**：③ 首版改的是返回值里一个**没有任何断言读**的计数字段，结果"仍绿"——那不是断言无效，是**变异瞄错了目标**（先怀疑夹具） | ✅ |
+| C3 | DSH schema 指纹 | **未做（下一轮）**：需先定"对 DSH transcript 的哪些稳定字段做指纹"，再让 `detect` 在不匹配时**显式降级**（不许静默半解析）。`apiserve._schema_fingerprint()` 是本项目 `EXPECTED_SCHEMA` 的 sha256，**不是**这件东西 | ⏳ |
+| C4 | 1 例 flake 定位 | **未做**：需自然复现（沙箱首跑那次）；已排除"并发期间假红"（v0.43 归因）。复现时留 `-v` | ⏳ |
+
+**C 组实测（2026-10-10）**：新增 10 例测试（`test_v45_keywords_gc.py` 6 + `test_v45_suggest_coverage.py` 4）；后端 **671 例全绿**；无 PyYAML 门禁 **`Ran 630 / errors=61 / 0 failures`**；死代码两根 0/0/0。
+**过程中被自己的门抓住一次**：新子命令 `keywords-gc` **忘了写进 README** → `test_v44_doc_cmds` 当场变红（这正是 v0.44 那道门存在的意义：文档与 CLI 双向比对，人工通读漏得掉，机器漏不掉）。
 
 ### D 组 · 待用户裁决（产品口径，非技术欠账）
 
-| # | 事项 | 需要你定什么 | 影响 |
+| # | 事项 | 用户裁决（2026-10-10） | 影响 |
 |---|---|---|---|
-| D1 | 已发布 chain 是否随主题重生成 | 主题 `tp-20261008-010` 已 **411** 成员，而 chain 仍是 **55** 成员的历史快照——是"历史文档不动"还是"定期重生成"？ | 决定 chain 是"档案"还是"活文档"；活文档就需要一条 `chain-regenerate` 的 SOP |
-| D2 | chain 元结论回写全局记忆 | 我此前建议**不做**（领域结论进代理工作记忆=噪声）；若你认为该做，改口径即可 | 影响 `suggest-status` 台账条数（C2 相关） |
-| D3 | 卡片产能节奏 | G3 卡片的瓶颈在"多久蒸馏一次"，不设节奏就没有存量 | 决定是否把"定期蒸馏"写成 SOP 而非待办 |
+| D1 | 已发布 chain 是否随主题重生成 | **暂缓** | 现状：主题 411 成员 / chain 55 成员快照按"历史档案"看待，不做自动重生成 |
+| D2 | chain 元结论回写全局记忆 | **暂缓** | 我此前的建议（不做）继续有效，不写入 `~/.dsh/AGENTS.md` |
+| D3 | 定期蒸馏节奏 | **做**：采纳"定期蒸馏" | 需在下一轮落成可执行 SOP（频率、触发条件、验收）；它属**产能节奏**而非工具能力，不进 `harvester/`，写在 SOP 里即可 |
 
 ---
 

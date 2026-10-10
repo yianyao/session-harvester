@@ -223,6 +223,61 @@ def build_suggestion_entries(errors: list[dict], min_count: int = 3,
     return {"entries": entries, "leftover": leftover, "min_count": min_count}
 
 
+def coverage_report(entries: list[dict],
+                    statuses: dict[str, str]) -> dict:
+    """建议池 ↔ 台账覆盖核对（v0.45，SOP C2）。
+
+    背景：台账（`suggestions_meta.db`）本应记录"人对每条建议的裁决"，
+    但真库只有 8 条，而项目已归并 14 个主题、处置过 117 个候选簇——
+    裁决留痕不全，于是"人的决策权限"没有完整记录。
+
+    本函数只做**机械对账**，返回三类：
+    - `undecided`：当前建议里 status 仍为 `pending` 的键（**待人工裁决**）；
+    - `stale`：台账里有、当前建议池里没有的键——建议句被改写或条目退休后
+      **没清台账**（这类最容易被忽略：数字看着在涨，其实对不上）；
+    - `decided`：当前建议里已有 adopted/rejected 的键。
+
+    key = 建议的 `title`（H31 口径：key 是建议句原文，含句号）。
+    """
+    titles = [e.get("title") for e in entries if e.get("title")]
+    ledger_keys = set(statuses or {})
+
+    def _st(t: str) -> str:
+        # 缺键**必须**当 pending：`.get(t)` 返回 None，用 `!= "pending"` 判
+        # 会把"没有台账"的条目错算成"已裁决"（首版即此 bug，测试当场抓住）。
+        return (statuses or {}).get(t, "pending")
+
+    decided = sorted(t for t in titles if _st(t) != "pending")
+    undecided = sorted(t for t in titles if _st(t) == "pending")
+    stale = sorted(ledger_keys - set(titles))
+    counts: dict[str, int] = {}
+    for v in (statuses or {}).values():
+        counts[v] = counts.get(v, 0) + 1
+    return {"suggestions": len(titles), "ledger": len(ledger_keys),
+            "decided": decided, "undecided": undecided, "stale": stale,
+            "ledger_counts": counts}
+
+
+def render_coverage(cov: dict) -> str:
+    """人读出口：覆盖核对的 Markdown（与 `coverage_report` 同一份数据）。"""
+    lines = [
+        "# 建议池 ↔ 台账覆盖核对",
+        "",
+        f"- 当前建议 **{cov['suggestions']}** 条｜台账 **{cov['ledger']}** 条"
+        f"（{cov['ledger_counts'] or '空'}）",
+        f"- 已裁决 **{len(cov['decided'])}** 条｜待裁决 "
+        f"**{len(cov['undecided'])}** 条｜台账陈旧（已不在建议池）"
+        f"**{len(cov['stale'])}** 条",
+        "", "## 待裁决（建议池里有、台账里 pending）", ""]
+    lines += [f"- {t}" for t in cov["undecided"]] or ["- （无）"]
+    lines += ["", "## 台账陈旧（建议句已不在当前建议池，应清账）", ""]
+    lines += [f"- {t}" for t in cov["stale"]] or ["- （无）"]
+    lines += ["", "---", "",
+              "口径：key = 建议句原文（H31）；本核对只做机械对账，"
+              "**裁决本身仍由人做**（工具不代改 AGENTS.md，也不替人下判断）。"]
+    return "\n".join(lines)
+
+
 def build_suggestions(errors: list[dict], min_count: int = 3,
                       max_items: int = 15,
                       statuses: dict[str, str] | None = None) -> str:
