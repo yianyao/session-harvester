@@ -273,8 +273,12 @@ frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain �
   字符串（给机器用），页面渲染成人读的「、」列表。
 - 批量注册场景（117 簇级别）参考 `scripts/register_candidates_20261009.py`
   ——解析候选报告后逐簇调 `topics.register_topic` + `add_members`。
-  语义梳理（把碎片并回类目）的范例见 `docs/reports/consolidate-topics.py`
-  （带**完整性校验**：库内每个主题必须归入"目标/源/舍弃/保留"之一才执行）。
+  语义梳理（把碎片并回类目）**不要照抄一次性脚本**：走
+  `topic-consolidate` 的梳理包 → plan（`groups`/`discard`/`keep`）→ `--apply`，
+  完整性校验（每个主题必须归位）已内建；逐条归位散会话用
+  `--triage-json` + `--plan-seed`（v0.35，见 §3.1）。
+  （历史一次性脚本 `docs/reports/consolidate-topics.py` 等已按"能力进工具本体"
+  的要求删除，其做法与校验口径见 `docs/HANDOFF-v0.22-next.md` 台账 H55/H58。）
 
 ## 全命令速查表
 
