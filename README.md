@@ -166,6 +166,8 @@ python -m harvester topic dedupe --meta topics_meta.db --db harvester.db --id <t
 python -m harvester topic turns --meta topics_meta.db --db harvester.db --id <tp-id> [--full] [--cap N]  # 回合索引 / raw 全文（锚点与逐字引文来源）
 python -m harvester topic export --meta topics_meta.db --db harvester.db --id <tp-id> \
     --chain-root ~/.workbuddy/knowledge/topics --out docs/reports/topic-<tp-id>.json      # 给 Agent 的结构化导出
+python -m harvester topic md --meta topics_meta.db --db harvester.db --id <tp-id> \
+    --chain-root ~/.workbuddy/knowledge/topics --out docs/reports/topic-<tp-id>.md        # 给人读的一页速览
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
 python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # chain 内容审计（引文逐字 + 锚点语义）
 ```
@@ -195,6 +197,21 @@ python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # c
 `howto`（可复制的 pack/fine/chain-validate 命令，**只给文本不执行**）。
 
 同库快照重跑，除 `generated_at` 外逐字节一致（可复现红线）。
+
+### 5.1 主题人读那一半（`topic md`，一页速览）
+
+`topic md` 复用同一个 bundle，渲染成**一页**回答四件事：**是什么**（关键词/成员数/
+来源/健康）、**跨多久**（首末时间 + 月度条形）、**关键转折**（已发布 chain 的
+frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain 正文的「元结论」
+「待补与限制」小节，单节超 1200 字符截断并指向全文）。
+
+两条纪律（都有会红的测试）：
+
+- **不列成员**。成员逐条在 `topic export` 的 JSON 里；人读那页列出来，大主题就是
+  几百行，"一页"没了。
+- **不臆造结论**。关键转折/结论/未决只从已发布 chain 来，取不到就空着，并在页面上
+  **分开**写「未执行」（没传 `--chain-root`，没去读）与「尚未生成」（读了，确实
+  还没有）——混同会让人以为主题没内容。**不用成员标题凑内容**。
 
 - 注册库默认读 `topics_meta.db`（与 harvester.db 同目录）；**view 的
   「主题」tab 需要 api-serve 启动时带 `--topics-meta <topics_meta.db>`**
@@ -279,7 +296,7 @@ python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # c
 |---|---|
 | `topic-candidates` | 自动聚类候选推荐：只产候选簇报告，不改注册表 |
 | `topic-consolidate` | 主题梳理流水线：出梳理包（信号表/零散候选/模板）→ 执行人填的 plan（完整性校验 + 文件级原子 + 快照）→ 查零散登记 |
-| `topic register/add/remove/merge/rename/delete/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源）；`rename` 保 id；`delete` 带快照 |
+| `topic register/add/remove/merge/rename/delete/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源）；`rename` 保 id；`delete` 带快照；`export` 给机器（topic.json）、`md` 给人（一页速览，四问：是什么/跨多久/关键转折/结论与未决） |
 | `chain-validate` | topic-chain 长文独立校验（frontmatter + 锚点可回溯） |
 
 ### 服务
