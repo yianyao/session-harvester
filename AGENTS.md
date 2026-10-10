@@ -21,10 +21,10 @@
   | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H82** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
-  1. 继续审 `docs/reports/` 其余一次性脚本（判定口径：下轮还会重跑 → 进工具本体；`sitecustomize.py` 已作为**环境适配件**移进 `scripts/sandbox/` 并写进 README，不再是待办）；
-  2. 池里剩 2 条"设备原型机"线索（`004352fc` + `46886828`）——**是否立主题待用户裁决**；
-  3. `harvester-view` 侧再审一轮（它只有 3 个测试文件；启动脚本与 `view.py` 的边界值得看）；
-  4. 508 条 substantive 要不要挖新主题（走 `topic-candidates`，不建议蛮力）。
+  1. **深会话（>3 回合）从未归位**：v0.38 实测 `--triage-max-turns 12` 会把池子从 **505 撑到 821**（+316，含 **53 条已机械命中现有主题**）——`max_turns=3` 是为噪声判定设的缺省，副作用是深会话进不了归位视野。建议**单列一类**（`deep_unassigned`）而非改默认值；
+  2. "原型机"线索实为 **4 条同源会话**（2 浅 + 2 深，产品/硬件研发语境，均未归主题）——**是否立主题待用户裁决**；
+  3. 长期未做项：`regress` 回归语料 / 叙事节奏 chain 证据覆盖（55 成员仅 27 个有锚点）/ chain 元结论回写全局记忆 / V3「卡片校验与主题打通」那半仍未设计；
+  4. `docs/reports/` 探查脚本**保留为报告、不再审**（用户裁决）；沙箱首跑那 1 例 flake 未定位（复现时留 `-v`）。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
