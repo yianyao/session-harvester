@@ -153,3 +153,30 @@ def show_artifacts(meta_path: Path, sid: str,
         return [dict(r) for r in con.execute(q, (sid,)).fetchall()]
     finally:
         con.close()
+
+
+def list_artifacts(meta_path: Path, limit: int = 200,
+                   sid: str | None = None) -> list[dict]:
+    """**列出**产物（可按 sid 过滤）——只给元数据与体量，不给正文。
+
+    v0.45 新增（MCP `artifacts_list` 用）：`show_artifacts` 是**按 sid 取全文**，
+    列全部时会把 new_text（Write 全文）一并搬进上下文；这里刻意只回
+    `old_chars`/`new_chars`，要看内容再用 `show_artifacts`/MCP 的按 sid 参数。
+    只读；库不存在返回 []。
+    """
+    if not Path(meta_path).is_file():
+        return []
+    con = _con(meta_path)
+    try:
+        q = ("SELECT sid, seq, ts, tool, file_path, "
+             "length(coalesce(old_text,'')) AS old_chars, "
+             "length(coalesce(new_text,'')) AS new_chars "
+             "FROM artifacts")
+        args: tuple = ()
+        if sid:
+            q += " WHERE sid=?"
+            args = (sid,)
+        q += " ORDER BY sid, seq LIMIT ?"
+        return [dict(r) for r in con.execute(q, (*args, int(limit)))]
+    finally:
+        con.close()

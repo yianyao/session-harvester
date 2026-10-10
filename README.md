@@ -373,7 +373,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `search` | 全文检索历史会话 |
 | `read` | 按纲要序号读会话（`--turn` 下钻） |
 | `pack` | 产出跨 agent 上下文交接包 |
-| `mcp-serve` | MCP stdio server：Agent 直查历史 |
+| `mcp-serve` | MCP stdio server：Agent 直查历史 + 主题/链/建议/卡片/产物（10 工具） |
 
 ### 分析报告（消费索引库）
 
@@ -533,7 +533,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"   # 加载 sitecustomize.py
 | 检索 | `indexing.py` | FTS5 全文索引与查询（零依赖） |
 | 读取 | `reader.py` | 分层读取：read → --turn 逐回合下钻 |
 | 交接 | `pack.py` | token 预算内的跨 agent 上下文交接包 |
-| MCP | `mcpserver.py` | stdio MCP server：任意 agent 运行时直查历史 |
+| MCP | `mcpserver.py` | stdio MCP server（10 工具）：任意 agent 运行时直查历史与进化数据 |
 | 诊断 | `toolstats.py` / `errstats.py` | 工具失败率/重试放弃；错误三分类+位置分桶（均含按 Agent/数据源分组） |
 | 行为画像 | `behstats.py` | report-skill：按 skill 聚合调用/触发任务/调用后行为链（G4 确定性主干） |
 | 建议闭环 | `agent_suggest.py` | AGENTS.md 候选条目生成（建议池，人工并入） |
@@ -654,7 +654,13 @@ python -m harvester pack --select "3,5-9" --tokens 2000 \
     --question "基于以上讨论继续设计 X" --out context_pack.md
 
 # MCP server（stdio，newline-delimited JSON-RPC，零依赖）
-python -m harvester mcp-serve --sources sources.json --db harvester.db
+# v0.45 起含「进化数据面」6 工具：主题/链/建议/卡片/产物，Agent 不必先起 HTTP
+python -m harvester mcp-serve --sources sources.json --db harvester.db \
+    --topics-meta topics_meta.db \
+    --chain-root ~/.workbuddy/knowledge/topics \
+    --artifacts-meta artifacts_meta.db \
+    --suggestions-meta suggestions_meta.db \
+    --cards-root <卡片目录>
 
 # 只读 HTTP JSON API（v0.17）：schema 自检 fail loud + 内核级只读
 # （mode=ro + authorizer 白名单）；默认 127.0.0.1，非回环 host 必须 --token
@@ -673,10 +679,27 @@ python -m harvester api-serve --db harvester.db [--port 8765] [--token <密钥>]
 python -m harvester api-serve --db harvester.db --suggestions-meta suggestions_meta.db
 ```
 
-MCP 暴露 4 个工具：`list_sessions` / `search_history` / `read_session` /
-`pack_context`。Claude Code 接入：`claude mcp add harvester -- python -m
-harvester mcp-serve --db harvester.db`（工作目录需在套件根）；其他宿主把
-command 指向 `python -m harvester mcp-serve` 即可。
+MCP 暴露 **10 个**只读工具：
+
+| 面 | 工具 | 说明 | 与 HTTP 的关系 |
+|---|---|---|---|
+| 会话 | `list_sessions` / `search_history` / `read_session` / `pack_context` | 纲要 / FTS5 检索 / 分层读取 / 交接包 | 本地纲要与打包（无 HTTP 对应） |
+| 进化数据 | `topic_list` | 主题注册表 + 每主题链数 | **同源** `/api/topics` |
+| 进化数据 | `chain_read` | 主题的 chain 结构化（多链时含 `chains[]`） | **同源** `/api/topic/<id>/chain` |
+| 进化数据 | `suggest_list` | 建议台账（建议句 → adopted/rejected） | 同源 `/api/reports/agents` 的状态面 |
+| 进化数据 | `cards_list` | 卡片清单（frontmatter 摘要，不校验） | 同源 `/api/cards` 的清单面 |
+| 进化数据 | `topic_export` | 主题结构化包（`harvester.topic/1`） | 同 CLI `topic export` 的 JSON 出口 |
+| 进化数据 | `artifacts_list` | 产物清单（元数据＋体量，不含正文） | 本地 `artifacts_meta.db` |
+
+**漂移门**：`TOOL_SOURCES`（`mcpserver.py`）声明每个工具的数据来源，
+`tests/test_v45_mcp_tools.py` 从 `apiserve.py` **源码 AST** 抽 `/api/*` 能力集，
+双向核对——接错端点、清单与实现脱节、或工具数缩水都会**变红**（含元测试）。
+同源的两条还做**载荷对账**（MCP 输出必须与 `apiserve` 同名函数逐字段一致，
+保证 MCP 侧没有二次加工）。
+
+Claude Code 接入：`claude mcp add harvester -- python -m harvester mcp-serve
+--db harvester.db --topics-meta topics_meta.db`（工作目录需在套件根）；其他宿主
+把 command 指向 `python -m harvester mcp-serve` 即可。
 
 **中文检索**：FTS5 unicode61 对 CJK 做 bigram 预改写（插入与查询两侧同步），
 实测 2-5 字中文词 100% 命中；单 CJK 字前缀查询兜底。原文另存 raw 列，摘要

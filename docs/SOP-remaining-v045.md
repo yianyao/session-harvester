@@ -51,14 +51,17 @@
 **A 组实测（2026-10-10）**：`tests/test_v45_hygiene.py` **5 例绿**；后端套件 **645 例全绿**；死代码两根 0/0/0。
 **过程教训（记一笔）**：AST 检查器首版把 `f"{x:04d}"` 的**格式说明符**也算成"无占位符 f-string"（Python 3.12+ PEP 701 把 format_spec 也建成 `JoinedStr`）→ 30 条"违规"里 **26 条是假阳性**，真违规只有 5 条。**先怀疑检查器**：加 `test_checker_ignores_format_spec` 钉住。
 
-### B 组 · 主线：Agent 消费面（河 1 的最后一段）
+### B 组 · 主线：Agent 消费面（河 1 的最后一段）**——✅ 已完成（v0.45 第四批）**
 
-| # | 事项 | 做法 | 验收 |
-|---|---|---|---|
-| B1 | MCP 扩五个只读工具 | `mcpserver.py` 增 `topic_list`/`topic_export`/`chain_read`/`suggest_list`/`cards_list`/`artifacts_list`。**复用现状（已读源码）**：`topic_export`→`topicexport.topic_bundle`＋`render_topic_json`；`chain_read`→`topicchain.load_chain`＋`apiserve.api_topic_chain`；`suggest_list`→`suggestmeta.load_statuses`。**需要新写的小件（各约 10 行）**：`cards_list`（`cards.py` 现只有 `validate_cards`/`render_report` 与 `cli.cmd_cards`，没有"列全部卡"的纯函数）与 `artifacts_list`（`artifacts.show_artifacts` 是**按 sid** 取）。全部只读、`mode=ro`、返回结构带 `db_fingerprint` | 每个工具一条契约测试：入参 → 返回结构含 `db_fingerprint`；**真实库跑一次**（14 主题）断言主题数与 `/api/topics` 一致 |
-| B2 | MCP ↔ 后端能力漂移门 | **注意：`apiserve` 当前没有路由表常量**（已读源码：HTTP 分派是 `if path == "/api/…"` 的硬编码分支，如 `apiserve.py:736/753`）。建议先加一个 `ROUTES` 常量表并把分派改成查表（这一步本身就是防漂移的前提），再仿 `tests/test_v44_doc_cmds.py` 做双向比对 | 元测试：**故意**从 `_tools_manifest()` 删一个工具 → 必须红；再故意加一个后端没有的工具 → 必须红 |
-| B3 | MCP 输出与 HTTP 同源对账 | 同一主题分别走 MCP 与 HTTP，比对关键字段（主题数、chains_count、成员数） | 差异 >0 即红（**additive 红线**：MCP 不得自造字段） |
-| B4 | MCP 文档与 `draft/pack` 关系说明 | README 增"MCP 工具清单 + 与 HTTP 端点对照表" | B2 的漂移门同时覆盖 README（防文档腐烂） |
+| # | 事项 | 做法 | 验收 | 状态 |
+|---|---|---|---|---|
+| B1 | MCP 扩六个只读工具 | `mcpserver.py` 增 `topic_list`/`topic_export`/`chain_read`/`suggest_list`/`cards_list`/`artifacts_list`（**10 工具**）。复用现状：`topic_list`→`apiserve.api_topics`；`chain_read`→`apiserve.api_topic_chain`；`topic_export`→`topicexport.topic_bundle`+`render_topic_json`；`suggest_list`→`suggestmeta.load_statuses`。**新写的小件**：`artifacts.list_artifacts`（元数据＋体量，**不含正文**）、`cards.list_cards`（frontmatter 摘要，不校验）。CLI `mcp-serve` 增 `--topics-meta/--chain-root/--cards-root/--artifacts-meta/--suggestions-meta` | `tests/test_v45_mcp_tools.py`（12 例）+ `tests/test_v45_mcp_chain_tools.py`（4 例，依赖 PyYAML 故单列，见 H9）；**真库冒烟**：14 主题 / 200 产物 / 台账 `{adopted:7, rejected:1}` / chain 52 节点 | ✅ |
+| B2 | MCP ↔ 后端能力漂移门 | **改用 AST 从 `apiserve.py` 源码抽 `/api/*` 字面量**，而非引入 `ROUTES` 表（不重排 30+ 端点的 `if/elif`，additive 优先）；`TOOL_SOURCES` 声明每个工具的来源（`local` 或端点） | 双向一致 + 端点真实存在 + 工具数 ≥10；**元测试覆盖三类漂移**（工具数不足／两向不一致／幽灵端点）并含"全合规必须为空"的反向对照 | ✅ |
+| B3 | MCP 输出与 HTTP 同源对账 | `topic_list`/`cards_list` 的载荷与 `apiserve` 同名函数**逐字段相等**（`chain_read` 同理） | 三条 `assertEqual`；注明"保证的是**没有二次加工**，不是两份实现一致" | ✅ |
+| B4 | MCP 文档与对照表 | README「检索 · 索引 · MCP」节：10 工具表（含"与 HTTP 的关系"列）+ 漂移门说明 + 接入命令带新参数；另两处"4 工具"表述已同步 | README↔CLI 漂移门 4 例仍绿 | ✅ |
+
+**B 组实测（2026-10-10）**：新增 16 例测试；后端套件 **661 例全绿**；无 PyYAML 门禁 **`Ran 620 / errors=61 / 0 failures`**（+18 例、+1 error——新 chain 工具测试按 H9 在缺 PyYAML 时**显式 error**，不是静默跳过）；死代码两根 0/0/0（**扫描当场抓到** `mcpserver.py` 我多写的 `import contextmanager`，已删）。
+**顺带修掉一个老缺陷**：`cards.py` 的跳过判据写成 `p.name.upper() in ("INDEX.md", "README.md")`——大写比混合大小写**永不相等**，于是 `README.md`/`INDEX.md` 一直被当成卡片校验；`list_cards` 与 `validate_cards` 现共用 `_SKIP_NAMES = ("INDEX.MD", "README.MD")`，并由 MCP 测试钉住（"README 不算卡片"）。
 
 ### C 组 · 质量欠账（评审 P2/P3 剩余 + 本项目自留）
 

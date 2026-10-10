@@ -30,6 +30,11 @@ except ImportError:  # pragma: no cover
 REQUIRED_TYPES = {"insight", "pitfall", "workflow"}
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
+#: 卡片目录里要跳过的说明文件。**必须大写**：判据是 `p.name.upper()`，
+#: 与 `("INDEX.md", "README.md")` 比大小写永不相等 → 说明文件会被当成卡片
+#: 去校验（v0.45 发现的老缺陷；`list_cards` 与 `validate_cards` 共用本常量）。
+_SKIP_NAMES = ("INDEX.MD", "README.MD")
+
 # v0.21 P0-1（H11）：cards new 脚手架占位符登记处。
 # 新增脚手架占位符必须同步登记（scaffold_card 模板改动时）。
 _PLACEHOLDER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -633,6 +638,36 @@ def _topic_consistency(fm: dict, membership: dict) -> tuple[list[str], list[str]
     }
 
 
+def list_cards(root: Path) -> list[dict]:
+    """**列出**卡片摘要（v0.45 新增，MCP `cards_list` 用）——只读、不校验。
+
+    与 `validate_cards` 的分工：那个跑全套校验（重、会查库），这个只把
+    frontmatter 的关键字段摊平，供 agent 先"看到有哪些卡"再决定读哪张。
+    口径与 `validate_cards` 一致：`root.rglob("*.md")`，跳过 INDEX/README；
+    frontmatter 缺失或不可解析的卡片**照样列出**（`parsed=False`），
+    不静默隐藏——否则"列不出来"会被误读成"没有这张卡"。
+    """
+    root = Path(root)
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    for p in sorted(root.rglob("*.md")):
+        if p.name.upper() in _SKIP_NAMES:
+            continue
+        fm, body = _parse_frontmatter(p.read_text(encoding="utf-8"))
+        row = {"path": str(p), "parsed": isinstance(fm, dict),
+               "id": None, "title": None, "type": None, "confidence": None,
+               "anchor_count": 0, "body_chars": len(body or "")}
+        if isinstance(fm, dict):
+            row["id"] = fm.get("id")
+            row["title"] = fm.get("title")
+            row["type"] = fm.get("type")
+            row["confidence"] = fm.get("confidence")
+            row["anchor_count"] = len(_anchor_sids(fm))
+        out.append(row)
+    return out
+
+
 def validate_cards(root: Path, db: Path | None = None,
                    con: sqlite3.Connection | None = None, *,
                    topics_meta: Path | None = None
@@ -671,7 +706,7 @@ def validate_cards(root: Path, db: Path | None = None,
     topic_undeclared = 0
     topic_noise_anchors = 0
     for p in sorted(root.rglob("*.md")):
-        if p.name.upper() in ("INDEX.md", "README.md"):
+        if p.name.upper() in _SKIP_NAMES:
             continue
         errors, warns, fm = validate_card(p)
         had_evidence = bool(str((fm or {}).get("evidence") or "").strip())
