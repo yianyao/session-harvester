@@ -535,7 +535,26 @@ def cmd_topic_consolidate(args) -> int:
     """
     from .consolidate import (NOISE_MAX_CHARS, apply_plan, build_plan_packet,
                               list_noise, load_plan)
+    from .noisetriage import render_triage, triage
     meta = Path(args.meta)
+    if args.triage or args.triage_out:
+        # 零散分诊（v0.30）：按"只要求查询 / 无整合诉求"判"取信息 vs 整合信息"
+        t = triage(Path(args.db) if args.db else Path("harvester.db"), meta,
+                   max_turns=args.triage_max_turns)
+        text = render_triage(t)
+        if args.triage_out:
+            out = Path(args.triage_out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic-consolidate] 分诊报告已写入: {out}"
+                  f"（扫描 {t['scanned']} 条；"
+                  + "、".join(f"{k} {v}" for k, v in
+                              sorted(t["counts"].items(),
+                                     key=lambda kv: -kv[1])) + "）",
+                  file=sys.stderr)
+        else:
+            print(text)
+        return 0
     if args.noise_list:
         rows = list_noise(meta)
         print(f"零散会话登记 {len(rows)} 条（meta 库 sessions_noise）")
@@ -1213,6 +1232,13 @@ def main(argv=None) -> int:
                       default=None,
                       help="梳理包里「零散会话候选」的字符阈值（默认 40；"
                            "调小 = 只挑最窄的一批）")
+    pcon.add_argument("--triage", action="store_true",
+                      help="零散分诊：按「只要求查询且无整合诉求」判定并打印")
+    pcon.add_argument("--triage-out", dest="triage_out", default=None,
+                      help="分诊报告输出路径（缺省打印到 stdout）")
+    pcon.add_argument("--triage-max-turns", dest="triage_max_turns", type=int,
+                      default=3,
+                      help="分诊范围：user 回合数 ≤ 该值的会话（默认 3）")
     pcon.set_defaults(func=cmd_topic_consolidate)
 
     pk = sub.add_parser("keywords",

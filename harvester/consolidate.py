@@ -248,8 +248,16 @@ def load_plan(path: Path) -> dict:
     return d
 
 
-def validate_plan(plan: dict, have_ids: set[str]) -> list[str]:
-    """返回错误清单（空 = 可执行）。完整性 + 冲突检查，全部 fail loud。"""
+def validate_plan(plan: dict, have_ids: set[str],
+                  member_owner: dict[str, str] | None = None,
+                  noise: set[str] | None = None) -> list[str]:
+    """返回错误清单（空 = 可执行）。完整性 + 冲突检查，全部 fail loud。
+
+    `member_owner`（v0.30，可选）：sid → 所属主题 id 的索引，用于校验
+    `assign` 的目标会话没被别的主题占着；`noise`：已登记零散的 sid 集合，
+    同一个 sid 既登记零散又被并入主题属自相矛盾，直接报错。
+    两者缺省 None = 跳过对应检查（旧调用不受影响）。
+    """
     errs: list[str] = []
     if int(plan.get("version") or 0) != PLAN_VERSION:
         errs.append(f"plan.version 必须是 {PLAN_VERSION}")
@@ -296,29 +304,69 @@ def validate_plan(plan: dict, have_ids: set[str]) -> list[str]:
         if i not in have_ids:
             errs.append(f"discard/keep 引用了不存在的主题: {i}")
 
-    # 只改名（不参与任何并组）的主题同样是"已归位"，必须计入覆盖面
+    # 只改名（不参与任何并组）的主题、以及 assign 的目标主题，同样是"已归位"，
+    # 必须计入覆盖面（两处都曾是校验器漏洞，均由测试当场抓出）
     renamed = [r.get("id") for r in renames if r.get("id") in have_ids]
+    assign_targets = [a.get("target") for a in (plan.get("assign") or [])
+                      if a.get("target")]
     covered = set(targets) | set(sources) | set(discards) | set(keeps) \
-        | set(renamed)
+        | set(renamed) | set(assign_targets)
     total = (len(targets) + len(sources) + len(discards) + len(keeps)
-             + len(renamed))
+             + len(renamed) + len(assign_targets))
     if len(covered) != total:
         errs.append("同一个主题被同时归入多条（target/from/discard/keep/"
-                    "renames 有重叠）")
+                    "renames/assign 有重叠）")
     missing = sorted(have_ids - covered)
     if missing:
         errs.append(f"未归置的主题 {len(missing)} 个（必须逐一归位）: "
                     + ", ".join(missing[:10])
                     + (" …" if len(missing) > 10 else ""))
 
-    noise = plan.get("noise") or []
-    if not isinstance(noise, list):
+    # 注意命名：plan 里的 noise 段叫 plan_noise，别覆盖参数里"已登记零散"的
+    # noise —— 上一版就是同名覆盖，导致"既登记零散又并入主题"的自相矛盾
+    # plan 没被拦下（测试当场抓出）
+    plan_noise = plan.get("noise") or []
+    if not isinstance(plan_noise, list):
         errs.append("noise 必须是列表")
-    for n in noise:
+        plan_noise = []
+    for n in plan_noise:
         if not n.get("sid"):
             errs.append(f"noise 条目缺 sid: {n}")
-    if len({n.get("sid") for n in noise}) != len(noise):
+    if len({n.get("sid") for n in plan_noise}) != len(plan_noise):
         errs.append("noise 有重复 sid")
+
+    # ── assign（v0.30）：把散会话并入已有/新建主题 ──────────────────
+    registered = set(noise or ())
+    assigned: set[str] = set()
+    for a in plan.get("assign") or []:
+        tgt = a.get("target")
+        if not tgt and a.get("new"):
+            if a["new"] not in new_keys:
+                errs.append(f"assign.new 指向未定义的 key: {a['new']}")
+        elif tgt:
+            if tgt not in have_ids:
+                errs.append(f"assign.target 不存在: {tgt}")
+        else:
+            errs.append(f"assign 条目既无 target 也无 new: {a}")
+        sids = a.get("sids") or []
+        if not isinstance(sids, list) or not sids:
+            errs.append(f"assign 条目缺 sids: {a}")
+            continue
+        label = tgt or f"（新建 {a.get('new')}）"
+        for sid in sids:
+            if not isinstance(sid, str) or not sid.strip():
+                errs.append(f"assign({label}) 的 sid 非法: {sid!r}")
+                continue
+            if sid in assigned:
+                errs.append(f"assign 里同一个 sid 出现两次: {sid}")
+            assigned.add(sid)
+            owner = (member_owner or {}).get(sid)
+            if owner and owner != tgt:
+                errs.append(f"assign({label}) 的 {sid} 已是主题 {owner} 的成员"
+                            "（要挪动请先 remove，不要靠并入覆盖）")
+            if sid in registered:
+                errs.append(f"assign({label}) 的 {sid} 已被登记为零散"
+                            "（同一 sid 不能既登记零散又并入主题）")
     return errs
 
 
@@ -333,7 +381,13 @@ def apply_plan(meta_path: Path, plan: dict, dry_run: bool = True,
     """
     meta_path = Path(meta_path)
     have = {t["id"] for t in list_topics(meta_path)}
-    errs = validate_plan(plan, have)
+    # 成员归属索引（校验 assign：目标会话不能已被别的主题占着）
+    member_owner: dict[str, str] = {}
+    for t in list_topics(meta_path):
+        for m in show_topic(meta_path, t["id"])["members"]:
+            member_owner.setdefault(m["sid"], t["id"])
+    errs = validate_plan(plan, have, member_owner=member_owner,
+                         noise={r["sid"] for r in list_noise(meta_path)})
     if errs:
         return {"ok": False, "errors": errs, "applied": False}
 
@@ -362,6 +416,11 @@ def apply_plan(meta_path: Path, plan: dict, dry_run: bool = True,
             srcs = g.get("from") or []
             if srcs:
                 merge_topics(tmp, tgt, srcs, delete_sources=True)
+        # assign：把散会话并入主题（走既有 add_members，证据留口径）
+        for a in plan.get("assign") or []:
+            tgt = a.get("target") or created[a["new"]]
+            add_members(tmp, tgt, list(a["sids"]),
+                        evidence=a.get("evidence") or "plan assign")
         if snap_dir:
             Path(snap_dir).mkdir(parents=True, exist_ok=True)
         for d in plan.get("discard") or []:
@@ -393,9 +452,14 @@ def _preview(plan: dict, have: set[str]) -> dict:
     for g in plan.get("groups") or []:
         tgt = g.get("target") or f"（新建 {g.get('new')}）"
         groups.append({"target": tgt, "from": len(g.get("from") or [])})
+    assigns = []
+    for a in plan.get("assign") or []:
+        assigns.append({"target": a.get("target") or f"（新建 {a.get('new')}）",
+                        "sids": len(a.get("sids") or [])})
     return {"new_topics": len(plan.get("new_topics") or []),
             "renames": len(plan.get("renames") or []),
             "groups": groups,
+            "assign": assigns,
             "discard": len(plan.get("discard") or []),
             "noise": len(plan.get("noise") or []),
             "keep": len(plan.get("keep") or [])}

@@ -20,7 +20,7 @@
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**496 例全绿**）。用无 PyYAML 的解释器会得到
+  （3.13 + PyYAML 6.0.3，**513 例全绿**）。用无 PyYAML 的解释器会得到
   `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
@@ -111,13 +111,23 @@ python -m harvester topic-consolidate --meta topics_meta.db --apply plan.yaml
 python -m harvester topic-consolidate --meta topics_meta.db --apply plan.yaml --yes \
     --snap-dir docs/reports/deleted-topics
 python -m harvester topic-consolidate --meta topics_meta.db --noise-list
+python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
+    --triage-out docs/reports/triage-report.md   # 零散分诊：取信息 vs 整合信息
 ```
 
-- **工具不判断语义**：归组/舍弃由人填的 plan 决定；工具只按**显式规则**缩小
-  候选范围并做确定性执行。零散会话候选需**三条规则同时成立**：user 回合 = 1
-  且首条正文 < 阈值字符（`--noise-max-chars`，默认 40）、不属于任何主题、
-  **steps 0 步**（纯聊天没驱动过工具）。第三条是必须的——只上"短提问"会把
-  「Skill编写规范提炼」（11 字符却是真工作）误判成噪声。
+- **零散分诊（取信息 vs 整合信息）**：按「只要求查询（是什么/含义/翻译/出处/
+  推荐…）、没提分析提炼整理归纳」判"这轮对话只为取信息"。**实测精度不足以自动
+  落库**：真库 853 条里高置信 41 条，其中仍有约 1/3 是**创作素材检索**
+  （"轿车外壳面板名称""交通锥与围栏材质区别"——为小说找料），故另立
+  `craft_material` 一类；多轮"前后不连贯"因字符 bigram 在中文短句上区分力弱
+  （相关追问也可能零重叠），只作**报告信号**，不进高置信。分诊**只产判定与
+  理由，登记与否由 plan 决定**。
+- **`assign`：把新会话并入已有主题**（采集后的主路径）。plan 里写
+  `assign: [{target: tp-x, sids: [...], evidence: "口径"}]`；校验会挡住
+  「已是别的主题成员」「既登记零散又并入主题」两种自相矛盾。
+- **零散候选的机械规则**需**三条同时成立**：user 回合 = 1 且首条正文 < 阈值
+  字符（`--noise-max-chars`）、不属于任何主题、**steps 0 步**。第三条是必须的
+  ——只上"短提问"会把「Skill编写规范提炼」（11 字符却是真工作）误判成噪声。
 - **关键词要人工定稿**：合并会把各源的自动聚类关键词并进来（实测小说主题
   并成 237 个，大量是标题 bigram 碎片"织的/与现/随嗞"）。用
   `topic keywords --id <tp> --keywords "k1,k2"` 覆盖式定稿（去噪是语义判断，
