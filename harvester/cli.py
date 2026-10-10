@@ -394,8 +394,14 @@ def cmd_pack(args) -> int:
 
 
 def cmd_mcp_serve(args) -> int:
+    """MCP stdio server（v0.45 起含进化数据面 6 工具）。"""
     from .mcpserver import serve
-    return serve(args.sources, args.db)
+    return serve(args.sources, args.db,
+                 topics_meta=args.topics_meta,
+                 chain_root=args.chain_root,
+                 cards_root=args.cards_root,
+                 artifacts_meta=args.artifacts_meta,
+                 suggestions_meta=args.suggestions_meta)
 
 
 def cmd_api_serve(args) -> int:
@@ -1854,9 +1860,23 @@ def main(argv=None) -> int:
     ppk.add_argument("--out", default="context_pack.md")
     ppk.set_defaults(func=cmd_pack)
 
-    pmc = sub.add_parser("mcp-serve", help="MCP stdio server（agent 直查历史）")
+    pmc = sub.add_parser(
+        "mcp-serve",
+        help="MCP stdio server（agent 直查历史 + 主题/链/建议/卡片/产物）")
     pmc.add_argument("--sources", default="sources.json")
     pmc.add_argument("--db", default="harvester.db", help="search 用的索引库")
+    pmc.add_argument("--topics-meta", dest="topics_meta", default=None,
+                     help="主题注册 meta 库（启用 topic_list/topic_export/"
+                          "chain_read）")
+    pmc.add_argument("--chain-root", dest="chain_root", default=None,
+                     help="topic-chain 长文目录（缺省 "
+                          "~/.workbuddy/knowledge/topics）")
+    pmc.add_argument("--cards-root", dest="cards_root", default=None,
+                     help="卡片目录（启用 cards_list）")
+    pmc.add_argument("--artifacts-meta", dest="artifacts_meta", default=None,
+                     help="产物 meta 库（启用 artifacts_list）")
+    pmc.add_argument("--suggestions-meta", dest="suggestions_meta", default=None,
+                     help="建议状态 meta 库（启用 suggest_list）")
     pmc.set_defaults(func=cmd_mcp_serve)
 
     pap = sub.add_parser(

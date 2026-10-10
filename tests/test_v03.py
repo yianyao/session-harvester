@@ -213,8 +213,12 @@ class TestMcp(unittest.TestCase):
     def test_tools_list(self):
         r = self._rpc("tools/list")
         names = {t["name"] for t in r["result"]["tools"]}
+        # v0.45：会话面 4 个 + 进化数据面 6 个（漂移门在 test_v45_mcp_tools.py）
         self.assertEqual(names, {"list_sessions", "search_history",
-                                 "read_session", "pack_context"})
+                                 "read_session", "pack_context",
+                                 "topic_list", "topic_export", "chain_read",
+                                 "suggest_list", "cards_list",
+                                 "artifacts_list"})
 
     def test_unknown_tool_is_error_result(self):
         r = self._rpc("tools/call", {"name": "nope", "arguments": {}})
