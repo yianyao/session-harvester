@@ -92,7 +92,17 @@ def _sid_of(entry) -> str:
 
 
 def _hint_name(row: dict) -> str:
-    return (row.get("reason") or "").replace("命中主题关键词：", "").strip()
+    """从 `reason` 里取机械命中的**主题名**。
+
+    必须按标记切分、不能整句 `replace`：深会话（v0.39）的 reason 是
+    "深会话（user 回合 8 > 3），机械命中主题关键词：<名>"，整句替换会把前缀
+    一起当成主题名（本函数的测试当场抓到过）。
+    """
+    reason = row.get("reason") or ""
+    marker = "命中主题关键词："
+    if marker in reason:
+        return reason.split(marker, 1)[1].strip()
+    return ""
 
 
 def build_seed(triage: dict, topics: list[dict] | None = None,
@@ -172,7 +182,7 @@ def build_seed(triage: dict, topics: list[dict] | None = None,
             bump(v, "noise")
         elif sid in skip_set:
             bump(v, "skip")
-        elif v == "topic_hint":
+        elif v in ("topic_hint", "deep_topic_hint"):
             name = _hint_name(r)
             tid = name2id.get(name)
             if not tid:

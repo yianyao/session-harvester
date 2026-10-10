@@ -162,11 +162,18 @@ def _topic_keyword_index(meta_path: Path) -> list[tuple[str, str]]:
 
 
 def triage(db_path: Path, meta_path: Path | None = None,
-           max_turns: int = 3, limit: int | None = None) -> dict:
+           max_turns: int = 3, limit: int | None = None,
+           include_deep: bool = False) -> dict:
     """对"不属于任何主题的会话"分诊。
 
-    `max_turns`：只分诊 user 回合数 ≤ 该值的会话（深会话默认视为实质会话，
-    避免把多轮打磨误判成零散）。limit：便于抽样。
+    `max_turns`：**零散判定**的适用范围（user 回合 ≤ 该值）。深会话默认不进池，
+    因为多轮打磨容易被"前后不连贯"之类的弱信号误判成零散。
+
+    `include_deep=True`（v0.39）：**把深会话也捞出来，但单列成两类**，永不参与零散
+    判定——`deep_topic_hint`（机械命中现有主题 → 归位候选）/ `deep_unassigned`（无命中）。
+    为什么需要：`max_turns=3` 的副作用是**深会话永远进不了归位视野**——真库实测
+    池子 505 → 821（+316，其中 53 条已机械命中现有主题却从未归位）。改默认值会让
+    噪声判定被多轮会话污染，故用"单列 + 只提示"来补这个洞。
     """
     import json
     known: set[str] = set()
@@ -199,7 +206,8 @@ def triage(db_path: Path, meta_path: Path | None = None,
             nu_by_sid[r["sid"]] = nu_by_sid.get(r["sid"], 0) + 1
         cand = [r for r in con.execute(
             "SELECT sid, source, title, created_at FROM sessions")
-            if 1 <= nu_by_sid.get(r["sid"], 0) <= max_turns
+            if 1 <= nu_by_sid.get(r["sid"], 0)
+            and (include_deep or nu_by_sid.get(r["sid"], 0) <= max_turns)
             and r["sid"] not in known and r["sid"] not in only]
         # ② 正文只取**候选会话**的，且分块 IN——不把全库 user 正文拉进内存
         #    （`sid` 无索引，IN 仍是全扫描，但分块后只扫 1~2 遍）
@@ -223,6 +231,16 @@ def triage(db_path: Path, meta_path: Path | None = None,
                     hint = name
                     break
             v = classify(turns[0], turns, topic_hint=hint)
+            if nu_by_sid.get(r["sid"], 0) > max_turns:
+                # 深会话：**只按主题命中分层，永不参与零散判定**（多轮打磨被
+                # "前后不连贯"之类的弱信号误判成零散的风险由这条口径挡掉）
+                v = {**v,
+                     "verdict": "deep_topic_hint" if hint else "deep_unassigned",
+                     "reason": (f"深会话（user 回合 {nu_by_sid[r['sid']]} > "
+                                f"{max_turns}），机械命中主题关键词：{hint}"
+                                if hint else
+                                f"深会话（user 回合 {nu_by_sid[r['sid']]} > "
+                                f"{max_turns}），未命中任何主题关键词")}
             rows.append({"sid": r["sid"], "source": r["source"],
                          "title": (r["title"] or "")[:44],
                          "created_at": (r["created_at"] or "")[:10],
@@ -239,21 +257,26 @@ def triage(db_path: Path, meta_path: Path | None = None,
     for r in rows:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
     return {"rows": rows, "counts": counts, "scanned": len(rows),
-            "max_turns": max_turns}
+            "max_turns": max_turns, "include_deep": include_deep}
 
 
 def render_triage(t: dict) -> str:
     label = {"noise_high": "高置信零散", "noise_maybe": "待定（查询型但成串）",
              "topic_hint": "疑似归主题", "craft_material": "创作素材型",
-             "substantive": "实质会话"}
+             "substantive": "实质会话",
+             "deep_topic_hint": "深会话·疑似归主题",
+             "deep_unassigned": "深会话·未归主题"}
     L = ["# 零散分诊报告（noise triage）", "",
-         f"- 扫描范围：不属于任何主题、且 user 回合 ≤ {t['max_turns']} 的会话",
+         f"- 扫描范围：不属于任何主题、且 user 回合 ≤ {t['max_turns']} 的会话"
+         + ("；**含深会话**（单列两类，不参与零散判定）"
+            if t.get("include_deep") else ""),
          f"- 扫描 {t['scanned']} 条；判定分布："
          + "、".join(f"{label[k]} {v}" for k, v in
                      sorted(t["counts"].items(), key=lambda kv: -kv[1])),
          "- 判据：查询型意图（无整合诉求）+ 单轮或前后不连贯 → 只为取信息",
          "- **本报告只给判定与理由，登记与否由 plan 决定**", ""]
-    for v in ("noise_high", "noise_maybe", "craft_material", "topic_hint"):
+    for v in ("noise_high", "noise_maybe", "craft_material", "topic_hint",
+              "deep_topic_hint", "deep_unassigned"):
         sub = [r for r in t["rows"] if r["verdict"] == v]
         if not sub:
             continue

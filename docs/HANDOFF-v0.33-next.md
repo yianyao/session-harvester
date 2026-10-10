@@ -14,12 +14,12 @@
 
 | 项 | 值（2026-10-10 实测） |
 |---|---|
-| 后端 head | v0.33 → **v0.36**（`a76f19c` 分诊落地 / `8c0d013` topic md / `2718731` ③ 集成门 / `74af173` 分诊尾部 / `0902f19` plan-seed 工具化 / v0.36 M1 收紧 + 池清空 + 文档清账）；**收尾提交见 `git log -1`** |
-| 后端测试基线 | **572 例全绿**（venv，须带沙箱补丁，见 §2） |
-| 无 PyYAML 门禁 | `Ran 556 / FAILED (errors=59)`（设计行为；**须 0 failures**——出现 failures 说明有人把"环境缺依赖"写成了断言） |
-| 前端仓库 | `..\harvester-view`，head `533a18d`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
+| 后端 head | v0.33 → **v0.39**（分诊落地 / topic md / ③ 集成门 / 分诊尾部 / plan-seed 工具化 / M1 收紧 + 池清空 + 文档清账 / 死代码扫描工具化 / 沙箱补丁进版本库 / **深会话单列两类**）；**收尾提交见 `git log -1`** |
+| 后端测试基线 | **580 例全绿**（venv，须带沙箱补丁，见 §2） |
+| 无 PyYAML 门禁 | `Ran 571 / FAILED (errors=59)`（设计行为；**须 0 failures**——出现 failures 说明有人把"环境缺依赖"写成了断言） |
+| 前端仓库 | `..\harvester-view`，head `c1c2c06`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
 | 主题注册表 | **14 个主题**：小说 `tp-20261008-010`=**378**、素材库 `tp-20261010-005`=**195**（关键词已收紧为 `用词`/`措辞`/`微表情`）、采集 `004`=188、心理 `tp-20261010-003`=**57**、SKILL `tp-20261008-001`=**9**；零散登记 **153 条** |
-| 分诊池 | **505 条**（substantive 503 / noise_maybe **1** / noise_high **1**；**topic_hint 与 craft_material 均已归零**） |
+| 分诊池 | **浅会话 505 条**（substantive 503 / noise_maybe **1** / noise_high **1**；topic_hint 与 craft_material 已归零）**＋ 深会话两类（`--triage-deep`）：deep_topic_hint **65** / deep_unassigned 293** —— 那 65 条此前**完全不可见**（H84） |
 | 库规模 | 1964 会话 / 62899 消息 / 36647 步骤 / 294 错误（`2026-10-09 10:17:07` 时点） |
 | 已发布 chain | 3 条（叙事节奏 / 吾好梦中救人 / Skill 自学习进化），在 `~/.workbuddy/knowledge/topics/`；Skill 链正文的对照工具引用已更新为 `chain-audit`（**过两道门后**才同步，两份逐字节一致） |
 | **沙箱策略** | 本轮**中途变化**：开始时只对 `session-harvester/` 可写（实测写 `..\harvester-view` 被拒 → ③ 一度判"未执行"），后段放开为全访问才完成 ③。**每次会话都可能不同：跨仓库任务先探一次写权限**（`Set-Content` 一个探针文件即可），别凭上一轮的印象决定做不做 |
@@ -36,11 +36,12 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 
 | # | 事项 | 为什么 | 做法 |
 |---|---|---|---|
-| 1 | **深会话（>3 回合）从未归位**（v0.38 实测：分诊池 505 → 放宽到 ≤12 回合 **821**，多出 **316** 条，其中 **53 条已机械命中现有主题**、36 素材型、24 待定） | `noisetriage.triage` 的 `max_turns` 缺省 3 是**为噪声判定设的**（避免把多轮打磨误判成零散），但它同时让**深会话永远进不了归位视野**——下面那 2 条原型机会话就是活例 | 建议**给深会话单列一类**（如 `deep_unassigned`）而不是改默认值：只提示、不参与零散判定；仍用 `--plan-seed` + `judgment.yaml` 走同一套判断流程 |
-| 2 | "原型机"线索 = **同一条产品研发线索的 4 条会话**：浅的 2 条（`004352fc` 工程机/原型机区别、`qianwen-raw:46886828` 原型机做出来之后下一步）在池里；深的 2 条（`yuanbao-raw:0OXlcMKFZpQ` 原型机定义与核心特征、`0OXlcMKFZpR` 电子产品原型机到量产流程，正文在问"能不能叫下线"）在 ≤12 回合口径下才可见 | 4 条**都不在任何主题、也没登记零散**；语境是**产品/硬件研发**而非词典查询（`search 原型机` 可见） | **待你裁决**：立主题「硬件产品原型与量产」则 `topic register` + `assign` 4 条；不立则 2 条浅的登记零散、深的留着 |
-| 3 | `docs/reports/` 探查脚本：**保留，不再审**（用户 2026-10-10 裁决） | `probe-*.py` / `resolve-members.py` / `topic-overlap.py` 回答的是"当时那个问题"，不是可复用能力；`run_tests.py` 是文档里的备用跑法 | 它们属**允许保留的一次性报告**（该目录本就 gitignore）；`sitecustomize.py` 已单独移进 `scripts/sandbox/` |
-| 4 | 长期未做项（v0.24 §7 表里仍标"未做"的） | ① `regress` 端到端回归语料（CLI 仍无该子命令）；② 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点）；③ chain 元结论回写全局记忆（走 `suggest-status`）；④ V3 的"卡片校验与主题打通"那半**仍未设计** | 按价值排：②③ 关系链质量，① 取决于要不要建 `regress`，④ 需一轮专门设计 |
-| 5 | 沙箱迁移后**首跑 1 例 flake 未定位** | 首跑出现、随后连跑两次 574 全绿 | 复现时留 `-v` 输出定位；**别当"已知 flaky"糊过去**（H82 已如实备案） |
+| 1 | **清理 `tests/` 的 9 条未用 import**（v0.39 实测；`deadcode-scan` 缺省只报 `harvester/`，这一角从没查过） | 8 条是普通死 import（`test_v19` 的 `json`/`build_suggestion_entries`、`test_v22_p1_3_cross` 与 `test_v22_t5_candidates` 的 `json`、`test_v22_t4_skilljoin` 的 `timedelta`、`test_v23_yuanbao_blockguard` 的 `tempfile`、`test_v30_noisetriage` 的 `intent_of`、`test_v31_chainaudit` 的 `audit_quotes`）；`test_v31` 的 `import yaml` 是**依赖标记**（H9） | 删 8 条；`import yaml` 加 `# noqa` 说明保留理由；建议顺手把套件里的 `test_harvester_package_has_no_dead_code` 扩到 `tests/`（否则还会再长回来） |
+| 2 | **`CHAIN-AUTHOR-SPEC.md` 移进 `docs/`** | 它只在 gitignore 的 `docs/reports/` 里（`git ls-files` 为空）——与 H82 的 `sitecustomize.py` 同类：**写 chain 的规范文档，新 clone 的作者拿不到** | 移进 `docs/CHAIN-AUTHOR-SPEC.md` 并同步引用；顺带扫一遍 `docs/reports/` 里还有没有"该入库却只在 gitignore"的文档 |
+| 3 | **复核 65 条 `deep_topic_hint`**（v0.39 新捞出来的） | 机械命中不等于判对（v0.33/v0.34 的经验：命中率约 8 成，小说正文会被"梦境"类词抢走） | `--triage-deep --triage-json` → `--triage-brief deep_topic_hint` 看全量 → 写 `judgment.yaml`（overrides/noise/skip）→ `--plan-seed --require-covered deep_topic_hint` → `--apply`；**293 条 `deep_unassigned` 缺省不动**（要看就 `--triage-brief deep_unassigned`） |
+| 4 | "原型机"线索 = **4 条同源会话**（2 浅 + 2 深，产品/硬件研发语境） | 4 条都不在任何主题、也没登记零散 | **待你裁决**：立主题「硬件产品原型与量产」则 `topic register` + `assign` |
+| 5 | 长期未做项（v0.24 §7 仍标"未做"的） | ① `regress` 端到端回归语料（CLI 无该子命令）；② 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点）；③ chain 元结论回写全局记忆（走 `suggest-status`）；④ V3 的"卡片校验与主题打通"那半**仍未设计** | ②③ 关系链质量；① 取决于要不要建 `regress`；④ 需一轮专门设计 |
+| 6 | 两处"检查没做成/未定位" | ① "README 是否漏文档化子命令"的抽取脚本返回 0（结论不可用，**未执行**）；② 沙箱迁移后首跑 1 例 flake **未定位** | ① 换个稳的抽取方式重做；② 复现时留 `-v` 输出定位——**别当"已知 flaky"糊过去** |
 
 ---
 
@@ -153,7 +154,8 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 | noise_high 复核四分 | 19 / 20 / 1 / 1 | 登记零散 / 归 M1 / 归 003 / 保持现状 |
 | 成员对账 | 010: 324→**373**、003: 27→**53**、002: 36→**38**、004: 29→**40**、M1: 0→**162** | 注册表成员数（apply 输出） |
 | `triage()` 耗时 | **529 秒 → 2 秒** | 同机同库，1964 会话 / 62899 消息；输出逐项一致 |
-| 测试 | **574 例 OK**（venv）/ 565 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
+| 深会话口径（v0.39） | `--triage-deep` → 863 条 = 浅 505 + **deep_topic_hint 65** + deep_unassigned 293；`--plan-seed --require-covered deep_topic_hint` 产出 assign **65** 条、dry-run 接受 | `--triage-deep --triage-json` |
+| 测试 | **580 例 OK**（venv）/ 571 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
 | 死代码扫描 | `harvester/` **0/0/0**（工具化后第一次跑抓到旧扫描漏掉的 3 条：2 条真死已删 + 1 条可用性探测改为 `noqa` 豁免） | `python -m harvester deadcode-scan`；套件 `test_harvester_package_has_no_dead_code` |
 | M1 关键词收紧 | 10 → **3**（用词/措辞/微表情）；28 条旧命中里仍命中 7，跌破 21（4 条含整合诉求的真工作 / 14 条兜底档 / 3 条纯查询） | `docs/reports/probe-m1-keywords.py` + 重跑分诊 |
 | 零散登记 | 139 → **153**（v0.36 复核 30 条 `noise_maybe`，登记 14 条） | `--noise-list` |

@@ -574,7 +574,8 @@ def cmd_topic_consolidate(args) -> int:
             or args.triage_brief is not None):
         # 零散分诊（v0.30）：按"只要求查询 / 无整合诉求"判"取信息 vs 整合信息"
         t = triage(Path(args.db) if args.db else Path("harvester.db"), meta,
-                   max_turns=args.triage_max_turns)
+                   max_turns=args.triage_max_turns,
+                   include_deep=args.triage_deep)
         wrote = False
         if args.triage_out:
             out = Path(args.triage_out)
@@ -1443,6 +1444,11 @@ def main(argv=None) -> int:
     pcon.add_argument("--triage-max-turns", dest="triage_max_turns", type=int,
                       default=3,
                       help="分诊范围：user 回合数 ≤ 该值的会话（默认 3）")
+    pcon.add_argument("--triage-deep", dest="triage_deep", action="store_true",
+                      help="同时捞出**深会话**（user 回合 > --triage-max-turns），"
+                           "单列为 deep_topic_hint / deep_unassigned 两类，"
+                           "**永不参与零散判定**（v0.39；不这么做的副作用是深会话"
+                           "永远进不了归位视野）")
     pcon.set_defaults(func=cmd_topic_consolidate)
 
     pdc = sub.add_parser(
