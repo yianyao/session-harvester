@@ -535,9 +535,43 @@ def cmd_topic_consolidate(args) -> int:
     """
     from .consolidate import (NOISE_MAX_CHARS, apply_plan, build_plan_packet,
                               list_noise, load_plan)
-    from .noisetriage import dump_triage, render_triage, triage
+    from .noisetriage import dump_triage, render_brief, render_triage, triage
     meta = Path(args.meta)
-    if args.triage or args.triage_out or args.triage_json:
+    if args.plan_seed:
+        # 分诊 JSON → plan 草稿（v0.35）：机械映射 + 完整性校验在工具里，
+        # 逐轮的语义判断走 --judgment 文件（红线：判断不落进代码）
+        from .planseed import (build_seed, dump_plan, load_judgment,
+                               load_triage, render_seed_stats, unhandled_sids)
+        from .topics import list_topics
+        try:
+            triage_d = load_triage(Path(args.plan_seed))
+            judgment = load_judgment(Path(args.judgment) if args.judgment else None)
+            plan, stats = build_seed(triage_d, list_topics(meta), judgment,
+                                     craft_topic=args.craft_topic)
+        except (ValueError, RuntimeError) as exc:
+            print(f"[错误] {exc}", file=sys.stderr)
+            return 2
+        text = render_seed_stats(stats) + dump_plan(plan)
+        if args.seed_out:
+            out = Path(args.seed_out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic-consolidate] plan 草稿已写入: {out}"
+                  f"（assign {stats['_total']['assign']} 条 / "
+                  f"noise {stats['_total']['noise']} 条）", file=sys.stderr)
+        else:
+            print(text)
+        for v in (args.require_covered.split(",") if args.require_covered else []):
+            v = v.strip()
+            left = unhandled_sids(stats, v)
+            if left:
+                print(f"[错误] 判定类 {v} 仍有 {len(left)} 条未归置（--require-covered）: "
+                      + ", ".join(left[:5]) + (" …" if len(left) > 5 else ""),
+                      file=sys.stderr)
+                return 2
+        return 0
+    if (args.triage or args.triage_out or args.triage_json
+            or args.triage_brief is not None):
         # 零散分诊（v0.30）：按"只要求查询 / 无整合诉求"判"取信息 vs 整合信息"
         t = triage(Path(args.db) if args.db else Path("harvester.db"), meta,
                    max_turns=args.triage_max_turns)
@@ -559,6 +593,19 @@ def cmd_topic_consolidate(args) -> int:
             print(f"[topic-consolidate] 分诊 JSON 已写入: {out}"
                   f"（{len(t['rows'])} 行，全量不截断）", file=sys.stderr)
             wrote = True
+        if args.triage_brief is not None:
+            only = args.triage_brief
+            text = render_brief(t, None if only == "*" else only,
+                                chars=args.brief_chars)
+            if args.triage_brief_out:
+                out = Path(args.triage_brief_out)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text, encoding="utf-8", newline="\n")
+                print(f"[topic-consolidate] 分诊简报已写入: {out}", file=sys.stderr)
+                wrote = True
+            else:
+                print(text)
+                wrote = True
         summary = (f"[topic-consolidate] 分诊扫描 {t['scanned']} 条；"
                    + "、".join(f"{k} {v}" for k, v in
                                sorted(t["counts"].items(),
@@ -1347,6 +1394,28 @@ def main(argv=None) -> int:
     pcon.add_argument("--triage-json", dest="triage_json", default=None,
                       help="分诊结果 JSON 输出路径（**全量 rows，不截断**）；"
                            "填 plan 要用它，别照人读报告（每类只印 60 条）")
+    pcon.add_argument("--triage-brief", dest="triage_brief", nargs="?",
+                      const="*", default=None, metavar="VERDICT",
+                      help="分诊简报：一行一条（verdict/sid/日期/命中主题/首条原文），"
+                           "**不截断条数**；可选值只列某一类判定")
+    pcon.add_argument("--triage-brief-out", dest="triage_brief_out", default=None,
+                      help="分诊简报输出路径（缺省打印；与 --triage-brief 配合）")
+    pcon.add_argument("--brief-chars", dest="brief_chars", type=int, default=60,
+                      help="简报里首条原文的截断字符数（默认 60）")
+    pcon.add_argument("--plan-seed", dest="plan_seed", default=None,
+                      help="从分诊 JSON 生成 plan 草稿（机械映射 + 完整性校验）；"
+                           "语义判断走 --judgment")
+    pcon.add_argument("--judgment", dest="judgment", default=None,
+                      help="--plan-seed 的逐轮判断文件（YAML：new_topics/"
+                           "craft_topic/overrides/noise/skip）")
+    pcon.add_argument("--craft-topic", dest="craft_topic", default=None,
+                      help="--plan-seed：craft_material 整类的去处（tp-xxx 或 "
+                           "new:KEY）；不给则该类本轮不动")
+    pcon.add_argument("--require-covered", dest="require_covered", default=None,
+                      help="--plan-seed：逗号分隔的判定类，若其中仍有未归置的 "
+                           "sid 则报错退出（如 noise_high）")
+    pcon.add_argument("--seed-out", dest="seed_out", default=None,
+                      help="--plan-seed 的 plan 输出路径（缺省打印到 stdout）")
     pcon.add_argument("--triage-max-turns", dest="triage_max_turns", type=int,
                       default=3,
                       help="分诊范围：user 回合数 ≤ 该值的会话（默认 3）")

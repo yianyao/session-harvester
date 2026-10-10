@@ -272,3 +272,30 @@ def dump_triage(t: dict) -> dict:
     return {"scanned": t["scanned"], "max_turns": t["max_turns"],
             "counts": dict(t["counts"]),
             "rows": [dict(r) for r in t["rows"]]}
+
+
+def render_brief(t: dict, only: str | None = None, chars: int = 60) -> str:
+    """一行一条的分诊简报（填 plan 时逐条判断用；制表符分隔，便于再加工）。
+
+    与人读报告（`render_triage`，每类截断 60 条）和机读 JSON（`dump_triage`）
+    的分工：这一份是**给人/Agent 顺着看一遍**的全量形态——判定、sid、日期、
+    机械命中的主题、首条原文各占一列，不截断条数（这也是它当初被写成一次性脚本
+    `docs/reports/flatten-triage.py` 的原因，v0.35 收回工具本体）。
+
+    `only`：只列某一类判定（`noise_high` / `craft_material` / `topic_hint` /
+    `noise_maybe` / `substantive`）；缺省或 `*` 列全部。
+    """
+    rows = t["rows"] if not only or only == "*" else \
+        [r for r in t["rows"] if r["verdict"] == only]
+    L = [f"# 分诊简报：{len(rows)} 条"
+         + (f"（只列 {only}）" if only and only != "*" else "")
+         + "；全量判定计数 " + "、".join(
+             f"{k} {v}" for k, v in sorted(t["counts"].items(),
+                                           key=lambda kv: -kv[1])),
+         "# verdict\tsid\tcreated\thint\tfirst_user"]
+    for r in rows:
+        hint = (r["reason"].replace("命中主题关键词：", "")
+                if r["verdict"] == "topic_hint" else "")
+        txt = " ".join((r.get("first_user") or "").split())[:chars]
+        L.append(f"{r['verdict']}\t{r['sid']}\t{r['created_at']}\t{hint}\t{txt}")
+    return "\n".join(L) + "\n"
