@@ -70,8 +70,8 @@
 | C1 | `keywords_meta.db` GC | 已做：`kwstats.prune_runs` + 独立子命令 **`keywords-gc --keep-runs N [--vacuum]`**（另在 `keywords` 上加 `--keep-runs/--vacuum` 顺手回收）。**真库实测 40.2 MB → 18.4 MB**，但**删 run 只删了 3 条记录、0 条统计行**——22 MB 是**空闲页**（旧 schema 迁移 `DROP TABLE` + `INSERT OR REPLACE` 留下的碎片），**只有 VACUUM 能回收**。这条口径改了我们对"库在膨胀"的归因：不全是新数据 | ✅ |
 | C2 | 建议台账口径 | 已做：`agent_suggest.coverage_report/render_coverage` + `suggest-agents --coverage [--coverage-out f]`。**真库实测很有价值**：建议 8 条、台账 8 条**看着对得上**，实际 **已裁决 6 / 待裁决 2 / 台账陈旧 2**——"数字相等"纯属巧合。裁决本身仍由人做（工具只对账、不代改） | ✅ |
 | C5 | `regress` 的"故意破坏→变红"补证 | 已做：`docs/reports/mutation-check-regress.py`（一次性）——基线 **57 断言 / 0 失败**；三处变异分别落在三层都**变红**：① 分诊判定计数 +1 → 1 条断言红；② assign 砍一条 → 14 条红；③ apply **真写少一个成员** → 5 条红。**教训**：③ 首版改的是返回值里一个**没有任何断言读**的计数字段，结果"仍绿"——那不是断言无效，是**变异瞄错了目标**（先怀疑夹具） | ✅ |
-| C3 | DSH schema 指纹 | **未做（下一轮）**：需先定"对 DSH transcript 的哪些稳定字段做指纹"，再让 `detect` 在不匹配时**显式降级**（不许静默半解析）。`apiserve._schema_fingerprint()` 是本项目 `EXPECTED_SCHEMA` 的 sha256，**不是**这件东西 | ⏳ |
-| C4 | 1 例 flake 定位 | **未做**：需自然复现（沙箱首跑那次）；已排除"并发期间假红"（v0.43 归因）。复现时留 `-v` | ⏳ |
+| C3 | DSH schema 指纹 | **已做**：照 `autoclaw` 的守卫先例，DSH adapter 现在有**两道判据 + 一条可追溯指纹**——① **声明版本**（文件名 `session.v<N>.` ∈ `KNOWN_SCHEMA_VERSIONS`）② **消费字段形态**（`REQUIRED_SHAPE` 逐条核对我们真正读的字段路径）；外加 `schema_fingerprint()`（观察到的类型→顶层键集的 sha256 前 12 位，**只作溯源，不作判据**——它会随数据稀疏度变化，已在 docstring 写明）。降级路径：`detect` → **STUB**（带 hints"先核对 REQUIRED_SHAPE 再改解析代码"）、`load_session` → **lossy 且 messages 为空**（不再半解析）、`list_sessions` 条目带 `schema_ok/schema_version`、`outline.md` 增 schema 列、`outline.json` 经 `vars(report)` 自动落盘（**不动 DB schema**，避免连锁改 `apiserve._schema_fingerprint`）。**顺带修一个诊断缺陷**：`_files()` 原把 `v4` 写死在 glob 里——上游改名会退化成 `MISSING`（"是不是没装"），现改为宽 glob + 守卫判定，给出正确结论"schema 不匹配"。**真机验证**：33 个会话全部 `schema_ok=True`、声明 v4、指纹 `d75532e18dc4`（说明必需字段集与真实形态一致） | ✅ |
+| C4 | 1 例 flake 定位 | **部分闭环（机制 + 抓到一例"新"flake）**：新增 `scripts/flake_hunt.py`（连跑 N 轮点名曾红的测试 + 自动留 traceback）。首跑 **5 轮 → 4/5 轮复现 `test_v06.TestDsh.test_roundtrip`**（`[policy]` 断言失败）。**根因查清**：是**本轮 C3 新写的测试自己引入的**——`tests/test_v45_dsh_schema_guard.py` 对**模块级** `dshmod.zstd_decompress` 打桩后没有还原，泄漏到同进程后续轮次里（discover 顺序让 `test_v06` 先跑，所以**单跑一次永远看不见**；只有 in-process 重复才暴露）。已修（`addCleanup` 还原）并复跑验证。**历史那例（沙箱首跑）仍未复现**——两者不是同一件事，不许混为一谈 | ⚠️ 半闭环 |
 
 **C 组实测（2026-10-10）**：新增 10 例测试（`test_v45_keywords_gc.py` 6 + `test_v45_suggest_coverage.py` 4）；后端 **671 例全绿**；无 PyYAML 门禁 **`Ran 630 / errors=61 / 0 failures`**；死代码两根 0/0/0。
 **过程中被自己的门抓住一次**：新子命令 `keywords-gc` **忘了写进 README** → `test_v44_doc_cmds` 当场变红（这正是 v0.44 那道门存在的意义：文档与 CLI 双向比对，人工通读漏得掉，机器漏不掉）。
@@ -83,6 +83,43 @@
 | D1 | 已发布 chain 是否随主题重生成 | **暂缓** | 现状：主题 411 成员 / chain 55 成员快照按"历史档案"看待，不做自动重生成 |
 | D2 | chain 元结论回写全局记忆 | **暂缓** | 我此前的建议（不做）继续有效，不写入 `~/.dsh/AGENTS.md` |
 | D3 | 定期蒸馏节奏 | **做**：采纳"定期蒸馏" | 需在下一轮落成可执行 SOP（频率、触发条件、验收）；它属**产能节奏**而非工具能力，不进 `harvester/`，写在 SOP 里即可 |
+
+---
+
+## §5 定期蒸馏 SOP（D3 裁决：**做**）
+
+> 用户 2026-10-10 裁决：D3 **做定期蒸馏**；D1（chain 随主题重生成）、D2（元结论回写）
+> **暂缓**——故本 SOP **不含** chain 再生成这一步；将来 D1 解禁时在此追加。
+> 定位：这是**产能节奏**（多久做一次、每步产出什么），不是新工具能力；
+> 每一步都要求**可判定的数字**或**显式记"未执行"**，不许"看一眼就算做过"。
+
+**触发（满足其一即做，避免"有空才做"）**
+
+| 触发 | 判定口径（可机读） |
+|---|---|
+| 时间 | 每周固定一次 |
+| 数据 | 自上次蒸馏以来新入库会话 **≥ 50 条**（`sessions.updated_at` 之后的新增计数） |
+| 事件 | 用户明确要求，或本轮做了主题级裁决 |
+
+**步骤（每步都要留下数字）**
+
+| # | 步骤 | 命令 / 动作 | 本步必须记下的数字 |
+|---|---|---|---|
+| 1 | 增量入库 | `update`（库即水位） | 新增会话数、`db_fingerprint` |
+| 2 | 错误面 → 建议池 | `report-errors`；`suggest-agents --coverage --coverage-out docs/reports/coverage-<日期>.md` | 建议条数、**待裁决**条数、**台账陈旧**条数（后两项必须逐条处置或显式记账） |
+| 3 | 分诊 → 归位 | `triage --triage-deep --triage-json` → 写 `judgment.yaml` → `--plan-seed --require-covered` → **dry-run** → `--apply` | 池子各档计数、assign/noise/skip 条数；`--apply` 前必看 dry-run |
+| 4 | 主题体检 | `topic list`；必要时 `topic-consolidate` 出梳理包 | 主题数、成员总数、是否出现"新候选簇 ≥ N"（N 由本轮判断，需写明） |
+| 5 | 卡片蒸馏（G3） | `cards new` → 人工/Agent 补 evidence → `cards validate --topics-meta <注册表>` | 新增卡片数、validate 的 error/warn 数 |
+| 6 | 顺手回收 | `keywords --keep-runs 2 --vacuum`（或 `keywords-gc`） | GC 前后体积 |
+| 7 | 收尾门禁 | 全量套件 + `gate_no_yaml` + `deadcode-scan` 两根；若本轮动了 chain 再加 `chain-validate`/`chain-audit` | 套件例数、门禁 numbers、死代码 0/0/0 |
+| 8 | 落账 | 台账新增 H 条目 + 更新 `AGENTS.md` §0 与交接 §0 | 提交号 |
+
+**纪律（与全项目一致）**
+
+- 任何一步**未做**都要在纪要里显式写"未执行（原因）"，**不许**用"跳过"冒充"通过"；
+- 卡片张数**不作为承诺**——产能瓶颈在判断质量（工具已就绪），本 SOP 只承诺"每周触发 + 每步可判定"；
+- 第 3 步的归位计划**必须先 dry-run 再 apply**，并保留 `judgment.yaml` 作为当轮判断文件；
+- 蒸馏结论一律写进**已提交**的台账/交接（`docs/reports/` 被 gitignore，写在那里等于没写）。
 
 ---
 

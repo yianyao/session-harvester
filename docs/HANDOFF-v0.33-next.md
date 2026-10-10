@@ -15,8 +15,8 @@
 | 项 | 值（2026-10-10 实测） |
 |---|---|
 | 后端 head | v0.33 → **v0.45**（分诊落地 / topic md / ③ 集成门 / 分诊尾部 / plan-seed 工具化 / M1 收紧 + 池清空 + 文档清账 / 死代码扫描工具化 / 沙箱补丁进版本库 / **深会话单列两类** / `regress` / 文档漂移门 / **chain 证据覆盖 + chain-audit 三门**）；**收尾提交见 `git log -1`** |
-| 后端测试基线 | **661 例全绿**（venv，须带沙箱补丁，见 §2） |
-| 无 PyYAML 门禁 | `Ran 620 / FAILED (errors=61)`（设计行为；**须 0 failures**）。已固化：`& $venv -X utf8 scripts\gate_no_yaml.py`（v0.43） |
+| 后端测试基线 | **680 例全绿**（venv，须带沙箱补丁，见 §2） |
+| 无 PyYAML 门禁 | `Ran 639 / FAILED (errors=61)`（设计行为；**须 0 failures**）。已固化：`& $venv -X utf8 scripts\gate_no_yaml.py`（v0.43）；flake 复现：`& $venv -X utf8 scripts\flake_hunt.py --runs N`（v0.45） |
 | 前端仓库 | `..\harvester-view`，head `c1c2c06`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
 | 主题注册表 | **14 个主题**（成员总数 938 → 1001 → **997**，v0.42 舍弃 4 条成员后）：小说 `tp-20261008-010`=**411**、素材库 `tp-20261010-005`=**199**、采集 `tp-20261010-004`=**191**、心理 `tp-20261010-003`=**69**、本机工具环境 `004-08`=**43**、SKILL `001`=**10**、`003`=**8**、`007`=**8**、`002`=**39**；零散登记 **163 条** |
 | 分诊池 | **794 条** = substantive **502** + 深会话 `deep_unassigned` **292**（`--triage-deep`）；**noise_high / noise_maybe / deep_topic_hint 均已归零**（v0.42 用户裁决把 9 条舍弃进零散） |
@@ -63,7 +63,9 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
 | **死代码扫描工具化 + API 探针清除**（v0.37） | `deadcode-scan` 进工具本体（认 `noqa` 豁免、只提示不默认拦人，并把"`harvester/` 必须 0 条"钉进套件）；第一次跑就抓到旧扫描漏掉的 3 条。另删掉那份**纯打印、无断言**的 API 链形状探针——其能力已由 `test_v25_topic_chains.py`（含 404 路径）与 view 真实载荷门覆盖。详见 **H79/H80** |
 | 测试 | 后端 +36 例（累计 565）：`test_v33_*` 21、`test_v35_planseed` 13、`test_v30` +2；view +1 门。**后端 565 / view 25 全绿** |
 | **沙箱补丁进版本库 + view 侧审计**（v0.38） | `sitecustomize.py` 移进 `scripts/sandbox/`（原在 gitignore 目录 → 新 clone 上套件的前置条件不存在，文档却教人直接跑）；`deadcode-scan` 修掉"兄弟根静默跳过却宣称覆盖"，并用它对 view 审计抓到 **1 条真死 import**（view `c1c2c06`，25 例仍全绿）。详见 **H81/H82** |
-| 事实台账 | H67–H82 追加进 `docs/HANDOFF-v0.22-next.md` §2；**H93–H95** = v0.45 第二轮、A 组、B 组 |
+| 事实台账 | H67–H82 追加进 `docs/HANDOFF-v0.22-next.md` §2；**H93–H97** = v0.45 第二轮、A 组、B 组、C1/C2/C5、C3/C4机制/D3-SOP |
+| **DSH schema 守卫**（v0.45 C3） | 声明版本（`session.v4`）+ 消费字段形态（`REQUIRED_SHAPE`）双判据；不匹配 → `detect` STUB、`load_session` **lossy 空消息**（不半解析）、`list_sessions` 带 `schema_ok`；观察指纹 `d75532e18dc4`（真机 33 会话全部通过）。`_files()` 原写死 `v4` glob 的**诊断缺陷**已修（上游改名不再伪装成 MISSING） |
+| **定期蒸馏 SOP**（v0.45 D3） | 见 `docs/SOP-remaining-v045.md` §5：三触发 + 八步 + 每步记数字；**不含 chain 再生成**（D1 暂缓） |
 | **chain 证据覆盖 + `chain-audit` 三门**（v0.45） | 长期挂账的最后一项落地：`chain-audit` 新增**证据覆盖**（无锚点成员按 H40 现算去重 → 分开"重复会话"与"独立代表"）、**正文锚点↔frontmatter 双向对账**（含简写归属）、**引文门空转显式化 + `--quotes-ascii`**；锚点门重叠判据含会话标题；`chain-audit` 由 16.4s → **3.7s**（批量取数）。叙事节奏链 30→**52 节点**、有锚点成员 27/55→**39/55**，8 个标题级代表逐条标注；改正两处锚点归属（"不要太 AI 化"首次出现 2025-07-15；笛卡尔定稿措辞在 c503406a t5 而非 t4）。详见 **H92** |
 | 测试 | 后端 **640 例全绿**（v0.45；+10 例 `test_v31_chainaudit`）；无 PyYAML 门禁 `Ran 602 / errors=60 / 0 failures`；死代码两根 0/0/0 |
 

@@ -69,6 +69,12 @@ class DetectReport:
     detail: str = ""              # 人类可读说明（如数据落点、不可实现原因）
     session_count: int | None = None
     hints: list[str] = field(default_factory=list)  # 后续实现时的接入线索
+    # v0.45 additive：私有 schema 的版本/指纹/守卫结论（可选；只有做守卫的
+    # 源会填）。用途是**溯源与对账**：DSH 0.3 之类上游改版时，
+    # 报告里能直接看到"声明版本 vs 本实现支持版本"，而不是等到解析出半成品。
+    schema_version: str | None = None
+    schema_fingerprint: str | None = None
+    schema_ok: bool | None = None
 
 
 class BaseAdapter(abc.ABC):
