@@ -20,7 +20,7 @@
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**482 例全绿**）。用无 PyYAML 的解释器会得到
+  （3.13 + PyYAML 6.0.3，**485 例全绿**）。用无 PyYAML 的解释器会得到
   `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
@@ -122,6 +122,10 @@ python -m harvester topic-consolidate --meta topics_meta.db --noise-list
   renames 之一，否则拒绝执行（防"漏掉一个悄悄留着"）。
 - **零散会话只登记、不删除**：写 meta 库的 `sessions_noise` 表
   （`--noise-list` 可查）；`harvester.db` 始终只读。
+- **登记了就真的会被用上**：`topic-candidates` 产候选时排除
+  「已注册主题成员 ∪ 已登记零散会话」；`keywords` 在给了 `--topics-meta`
+  时同样排除零散会话（报告头 `noise_excluded` / `noise_msgs_excluded`
+  给出计数）。**没登记过则行为与接线前完全一致**（缺省不过滤）。
 
 ### 4. 主题注册（T 轨）：发现簇 → 注册 → 页面出现
 

@@ -261,5 +261,61 @@ class TestPlanPacket(unittest.TestCase):
         self.assertIn("零散会话候选（0 个", txt)
 
 
+class TestNoiseWiring(unittest.TestCase):
+    """V4：零散会话要真的被消费方用上（否则登记了也白登记）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.db, self.meta = _fixture(self.dir)
+        self.a, self.b, self.c, self.d = _seed(self.meta)
+
+    def tearDown(self):
+        try:
+            self.tmp.cleanup()
+        except OSError:
+            pass
+
+    def test_noise_sids_readonly_and_missing_table(self):
+        from harvester.consolidate import noise_sids
+        # 未登记（且表还不存在）→ 空集，不建表、不报错
+        self.assertEqual(noise_sids(self.meta), set())
+        con = sqlite3.connect(f"file:{self.meta}?mode=ro", uri=True)
+        try:
+            has = con.execute("SELECT 1 FROM sqlite_master WHERE "
+                              "name='sessions_noise'").fetchone()
+        finally:
+            con.close()
+        self.assertIsNone(has, "只读查询不该顺势建表")
+        register_noise(self.meta, [{"sid": "src:s2", "reason": "r"}])
+        self.assertEqual(noise_sids(self.meta), {"src:s2"})
+        self.assertEqual(noise_sids(None), set())
+
+    def test_keywords_excludes_noise(self):
+        from harvester.consolidate import noise_sids
+        from harvester.kwstats import build_stats
+        meta_kw = self.dir / "kw.db"
+        base = build_stats(self.db, meta_kw, ns=[2], role="user")
+        register_noise(self.meta, [{"sid": "src:s2", "reason": "零散"}])
+        filt = build_stats(self.db, meta_kw, ns=[2], role="user",
+                           exclude_sids=noise_sids(self.meta))
+        self.assertEqual(base["total_msgs"], 2)
+        self.assertEqual(filt["total_msgs"], 1)          # s2 被排除
+        self.assertEqual(filt["params"]["noise_excluded"], 1)
+        self.assertEqual(filt["params"]["noise_msgs_excluded"], 1)
+
+    def test_candidates_excludes_noise(self):
+        from harvester.candidates import build_candidates
+        r2 = build_candidates(self.db, min_sim=0.0, min_size=2,
+                              topics_meta=self.meta)
+        register_noise(self.meta, [{"sid": "src:s2", "reason": "零散"}])
+        r3 = build_candidates(self.db, min_sim=0.0, min_size=2,
+                              topics_meta=self.meta)
+        sids = {m["sid"] for c in r3["clusters"] for m in c["members"]}
+        self.assertNotIn("src:s2", sids)
+        self.assertLessEqual(sum(len(c["members"]) for c in r3["clusters"]),
+                             sum(len(c["members"]) for c in r2["clusters"]))
+
+
 if __name__ == "__main__":
     unittest.main()
