@@ -16,13 +16,16 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  29 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  34 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**463 例全绿**）。用无 PyYAML 的解释器会得到
-  `Ran 460 tests / FAILED (errors=29)`——那 29 例全是 PyYAML 缺失所致。
+  （3.13 + PyYAML 6.0.3，**472 例全绿**）。用无 PyYAML 的解释器会得到
+  `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
+  **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
+  对读不出的 chain 文档一律跳过）——"环境缺库"与"这个主题真没有 chain"在响应上
+  不可区分，排查时先验解释器。
 - **`verify/` 采集工具需要 `requests` + `websocket-client`**（登录态直采管
   线，见下文），用独立 venv 运行，不污染包本体。
 - 敏感文件（`weblogin_profile/`、`webchat.accounts.json`）与运行产物已列入
@@ -103,6 +106,8 @@ python -m harvester topic-candidates --db harvester.db --out docs/reports/   # �
 python -m harvester topic register --meta topics_meta.db --name "主题名" --keywords "k1,k2"   # 认可后注册
 python -m harvester topic add --meta topics_meta.db --id <tp-id> --sids "<sid1>,<sid2>" --evidence "出处"   # 挂成员
 python -m harvester topic merge --meta topics_meta.db --id <目标> --from "<源1>,<源2>"   # 并成一个主题（成员/关键词并入后删源）
+python -m harvester topic rename --meta topics_meta.db --id <tp-id> --name "新名"        # 改名（保 id，已发布 chain 不受影响）
+python -m harvester topic delete --meta topics_meta.db --id <tp-id> --out <快照.json>    # 删除（先落快照，可回滚）
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
 ```
 
@@ -112,8 +117,16 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 - `topic merge` 只做确定性的并集（成员按 sid 去重、证据带「合并自 <源>」
   尾注、关键词并集），**不做语义判断也不给关键词去噪**——自动聚类候选的
   关键词常含标题 bigram 碎片，合并后需人工定稿关键词。
+- `topic rename` **保 id**：主题改名后，已发布 chain 的 `frontmatter.topic_id`
+  仍然对得上，不需要重发产物。`topic delete` 先落快照再删，快照含
+  名称/关键词/成员，可直接作为回滚依据。
+- **一个主题可以有多条 chain**（`/api/topic/<id>/chain` 新增 `chains[]` 与
+  `chain_count`，旧字段仍是第一条；`/api/topics` 带 `chains_count`）。
+  多链时 chain 的显示名取正文首个 `#` 标题，否则同主题各链会显示成同一个名字。
 - 批量注册场景（117 簇级别）参考 `scripts/register_candidates_20261009.py`
   ——解析候选报告后逐簇调 `topics.register_topic` + `add_members`。
+  语义梳理（把碎片并回类目）的范例见 `docs/reports/consolidate-topics.py`
+  （带**完整性校验**：库内每个主题必须归入"目标/源/舍弃/保留"之一才执行）。
 
 ## 全命令速查表
 

@@ -682,9 +682,9 @@ def cmd_cards_new(args) -> int:
 
 def cmd_topic(args) -> int:
     """主题注册表（T1 MVP，v0.22）：独立 meta 库 topics_meta.db。"""
-    from .topics import (add_members, list_topics, merge_topics,
-                         register_topic, remove_member, show_topic,
-                         title_chain)
+    from .topics import (add_members, delete_topic, list_topics, merge_topics,
+                         register_topic, remove_member, rename_topic,
+                         show_topic, title_chain)
     meta = Path(args.meta)
     if args.cmd == "register":
         kws = [k.strip() for k in (args.keywords or "").split(",")
@@ -716,6 +716,30 @@ def cmd_topic(args) -> int:
             print(f"[topic] 已删除源主题: {'、'.join(r['deleted'])}")
         else:
             print(f"[topic] 源主题保留: {'、'.join(r['sources'])}")
+        return 0
+    if args.cmd == "rename":
+        if not args.id_ or not args.name:
+            print("错误: rename 需要 --id <主题> 与 --name <新名>",
+                  file=sys.stderr)
+            return 2
+        r = rename_topic(meta, args.id_, args.name)
+        print(f"[topic] {r['id']} 改名: {r['old_name']} → {r['new_name']}")
+        return 0
+    if args.cmd == "delete":
+        if not args.id_:
+            print("错误: delete 需要 --id <主题>", file=sys.stderr)
+            return 2
+        snap = delete_topic(meta, args.id_)
+        print(f"[topic] 已删除 {snap['id']}「{snap['name']}」"
+              f"（成员 {len(snap['members'])} 个随行留痕；"
+              f"快照请用 --out 或脚本留档）")
+        if args.out:
+            import json as _json
+            outp = Path(args.out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(_json.dumps(snap, ensure_ascii=False, indent=2),
+                            encoding="utf-8", newline="\n")
+            print(f"[topic] 快照已写入: {outp}")
         return 0
     if args.cmd == "list":
         for t in list_topics(meta):
@@ -1159,13 +1183,14 @@ def main(argv=None) -> int:
 
     ptp = sub.add_parser(
         "topic",
-        help="主题注册表（T1/T2）：register/add/remove/merge/list/show/"
-             "chain/pack")
+        help="主题注册表（T1/T2）：register/add/remove/merge/rename/delete/"
+             "list/show/chain/pack")
     ptp.add_argument("cmd", choices=["register", "add", "remove", "merge",
-                                     "list", "show", "chain", "pack"])
+                                     "rename", "delete", "list", "show",
+                                     "chain", "pack"])
     ptp.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
-    ptp.add_argument("--name", help="register：主题名称")
+    ptp.add_argument("--name", help="register：主题名称；rename：新名称")
     ptp.add_argument("--keywords", help="register：逗号分隔关键词")
     ptp.add_argument("--id", dest="id_",
                      help="add/remove/merge/show/chain：主题 id")

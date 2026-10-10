@@ -179,6 +179,56 @@ def merge_topics(meta_path: Path, target_id: str, source_ids: list[str],
         con.close()
 
 
+def rename_topic(meta_path: Path, topic_id: str, new_name: str) -> dict:
+    """改主题名（保留 id，故已发布的 chain 仍能按 topic_id 对上）。
+
+    name 列有 UNIQUE 约束：与既有主题重名 → KeyError（fail loud，
+    不静默合并——重名要不要合并是语义判断，由用户裁决后显式 merge）。
+    返回 {"id", "old_name", "new_name"}。
+    """
+    new_name = (new_name or "").strip()
+    if not new_name:
+        raise ValueError("新主题名不能为空")
+    con = _con(meta_path)
+    try:
+        row = con.execute("SELECT name FROM topics WHERE id=?",
+                          (topic_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"主题不存在: {topic_id}")
+        dup = con.execute("SELECT id FROM topics WHERE name=?",
+                          (new_name,)).fetchone()
+        if dup is not None and dup["id"] != topic_id:
+            raise KeyError(f"主题名已被占用: {new_name}（{dup['id']}）")
+        con.execute("UPDATE topics SET name=? WHERE id=?", (new_name, topic_id))
+        con.commit()
+        return {"id": topic_id, "old_name": row["name"], "new_name": new_name}
+    finally:
+        con.close()
+
+
+def delete_topic(meta_path: Path, topic_id: str) -> dict:
+    """删除主题行，返回被删主题的快照（供留痕/人工回滚）。
+
+    只删注册行，**不动任何会话数据**（采集库只读）；已发布到
+    knowledge/topics 的 chain 文件由调用方决定是否一并清理。
+    """
+    con = _con(meta_path)
+    try:
+        row = con.execute("SELECT id, name, keywords, members, created "
+                          "FROM topics WHERE id=?", (topic_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"主题不存在: {topic_id}")
+        snap = {"id": row["id"], "name": row["name"],
+                "keywords": json.loads(row["keywords"]),
+                "members": json.loads(row["members"]),
+                "created": row["created"]}
+        con.execute("DELETE FROM topics WHERE id=?", (topic_id,))
+        con.commit()
+        return snap
+    finally:
+        con.close()
+
+
 def list_topics(meta_path: Path) -> list[dict]:
     if not Path(meta_path).is_file():
         return []
