@@ -1160,9 +1160,9 @@ def cmd_chain_audit(args) -> int:
     hard_fail = ("quotes" in r and not r["quotes"]["ok"])
     soft = ("anchors" in r and not r["anchors"]["ok"])
     if hard_fail or (soft and args.strict):
-        print(f"[chain-audit] 需修｜" + "、".join(bits), file=sys.stderr)
+        print("[chain-audit] 需修｜" + "、".join(bits), file=sys.stderr)
         return 1
-    print(f"[chain-audit] 通过｜" + "、".join(bits)
+    print("[chain-audit] 通过｜" + "、".join(bits)
           + ("（锚点告警需人工复核，未按 --strict 判失败）" if soft else ""),
           file=sys.stderr)
     return 0

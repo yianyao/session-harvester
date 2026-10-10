@@ -246,7 +246,7 @@ def build_suggestions(errors: list[dict], min_count: int = 3,
     watch = [e for e in entries if e["unresolved_count"] == 0]
     lines += ["## 待修清单（未解决 >= 1，优先处理）", ""]
     if not todo:
-        lines += [f"（无：所有达标条目均已自愈。）", ""]
+        lines += ["（无：所有达标条目均已自愈。）", ""]
     for i, e in enumerate(todo, 1):
         sid, seq, raw = e["samples"][0]
         raw_short = clean_error_sample(raw)

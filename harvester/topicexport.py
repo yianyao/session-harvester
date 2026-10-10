@@ -43,7 +43,6 @@ def _load_chains(chain_root: Path | None, topic_id: str) -> list[dict]:
         fm = d["fm"]
         if not isinstance(fm, dict) or fm.get("topic_id") != topic_id:
             continue
-        import re
         m = re.search(r"^#\s+(.+)$", d["body"], re.M)
         anchors = fm.get("anchors") or []
         out.append({
@@ -160,7 +159,7 @@ def _howto(topic_id: str, name: str) -> dict:
         "fine_one_session": "python -m harvester topic chain "
                             f"{common} --level fine --sid <成员sid>",
         "validate_chain": "python -m harvester chain-validate "
-                          f"<chain>.md --db harvester.db --meta topics_meta.db",
+                          "<chain>.md --db harvester.db --meta topics_meta.db",
         "note": f"主题「{name}」；pack 按档位给蒸馏包，fine 按成员会话下钻",
     }
 

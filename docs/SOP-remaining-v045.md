@@ -39,14 +39,17 @@
 
 ## §3 SOP（按执行顺序；每条都可判定）
 
-### A 组 · 一行级修复（先做，半小时量级）
+### A 组 · 一行级修复（先做，半小时量级）**——✅ 已完成（v0.45 第三批）**
 
-| # | 事项 | 做法 | 验收（会红的断言） |
-|---|---|---|---|
-| A1 | 版本号与提交对账 | `harvester/__init__.py:8` → 与"最新发布线"一致（当前应随 v0.45）；`mcpserver.SERVER_INFO.version`、`apiserve.api_meta.package_version` 都取自它，改一处即全通。**本仓库无 `CHANGELOG`**（已 glob 确认），故单一来源取 `docs/HANDOFF-v0.33-next.md` §0 快照里那行版本号 | 新增测试：从 HANDOFF §0 正则抽 `v\d+\.\d+`，与 `__version__` 的前两位比对；再断言 `__version__ != "0.18.1"` 这类**明显过期值**（两处其一忘改即红） |
-| A2 | 删 `topicexport.py:46` 的循环内 `import re` | 直接删该行（`topicexport.py:23` 已有模块级 `import re`） | 套件绿 + `deadcode-scan` 两根 0/0/0 |
-| A3 | 清 f-string 无占位符 | 逐处去掉 `f` 前缀（`cli.py`、`agent_suggest.py`、`export_analysis.py`、`topicexport.py`） | 新增一条**静态检查**测试：AST 扫 `JoinedStr` 无 `FormattedValue` → 报错（否则还会长回来） |
-| A4 | 关闭或复现 `dsh.py` unused import 条 | 已用 `deadcode-scan` 实测 0 条 → **关闭**；若换 pyflakes 复现再补 `# noqa` | 无需断言（记录在案） |
+| # | 事项 | 做法 | 验收（会红的断言） | 状态 |
+|---|---|---|---|---|
+| A1 | 版本号与提交对账 | `harvester/__init__.py:8` → **`0.45.0`**；`mcpserver.SERVER_INFO.version`、`apiserve.api_meta.package_version` 都取自它，改一处即全通。**本仓库无 `CHANGELOG`**（已 glob 确认），故单一来源取 `docs/HANDOFF-v0.33-next.md` §0 快照里 `→ **vX.Y**` 那行 | `tests/test_v45_hygiene.py`：从 HANDOFF §0 正则抽 `→ **vX.Y**` 与 `__version__` 前两位比对；另断言三段式且 `!= "0.18.1"` | ✅ |
+| A2 | 删 `topicexport.py:46` 的循环内 `import re` | 已删（`:23` 模块级已有） | 套件绿 + `deadcode-scan` 两根 0/0/0 | ✅ |
+| A3 | 清 f-string 无占位符 | **真违规 5 处**（`agent_suggest.py:249`、`cli.py:1163/1165`、`export_analysis.py:250`、`topicexport.py:162`）已去 `f` 前缀；新增 AST 静态门 | `test_v45_hygiene.py`：AST 扫 `harvester/` 全树无违规 + **两条元测试**（合成源码必须报出、`{x:04d}` 的格式说明符不算违规） | ✅ |
+| A4 | 关闭或复现 `dsh.py` unused import 条 | 已用 `deadcode-scan` 实测 0 条 → **关闭**；若换 pyflakes 复现再补 `# noqa` | 无需断言（记录在案） | ✅ |
+
+**A 组实测（2026-10-10）**：`tests/test_v45_hygiene.py` **5 例绿**；后端套件 **645 例全绿**；死代码两根 0/0/0。
+**过程教训（记一笔）**：AST 检查器首版把 `f"{x:04d}"` 的**格式说明符**也算成"无占位符 f-string"（Python 3.12+ PEP 701 把 format_spec 也建成 `JoinedStr`）→ 30 条"违规"里 **26 条是假阳性**，真违规只有 5 条。**先怀疑检查器**：加 `test_checker_ignores_format_spec` 钉住。
 
 ### B 组 · 主线：Agent 消费面（河 1 的最后一段）
 
