@@ -662,6 +662,30 @@ def cmd_topic_consolidate(args) -> int:
     return 0
 
 
+def cmd_deadcode_scan(args) -> int:
+    """死代码扫描（v0.37）——把每轮收尾的手检做成工具（见 `deadcode.py`）。
+
+    缺省**只提示**（启发式必然有误报）；加 `--fail-on-found` 才以退出码 1 判失败，
+    供 CI/套件按需当门用。
+    """
+    from .deadcode import (DEFAULT_ROOTS, found_total, render_deadcode, scan)
+    roots = tuple(args.roots) if args.roots else DEFAULT_ROOTS
+    report = scan(roots=roots, report_root=args.report_root)
+    text = render_deadcode(report)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"[deadcode-scan] 报告已写入: {out}", file=sys.stderr)
+    else:
+        print(text)
+    n = found_total(report)
+    if n and args.fail_on_found:
+        print(f"[deadcode-scan] 发现 {n} 条（--fail-on-found）", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_topic_candidates(args) -> int:
     """T5 自动聚类候选推荐器：标题 n-gram + 任务签名产候选。
 
@@ -823,7 +847,7 @@ def cmd_topic(args) -> int:
     """主题注册表（T1 MVP，v0.22）：独立 meta 库 topics_meta.db。"""
     from .topics import (add_members, delete_topic, list_topics, merge_topics,
                          register_topic, remove_member, rename_topic,
-                         show_topic, title_chain)
+                         show_topic)
     meta = Path(args.meta)
     if args.cmd == "register":
         kws = [k.strip() for k in (args.keywords or "").split(",")
@@ -1420,6 +1444,21 @@ def main(argv=None) -> int:
                       default=3,
                       help="分诊范围：user 回合数 ≤ 该值的会话（默认 3）")
     pcon.set_defaults(func=cmd_topic_consolidate)
+
+    pdc = sub.add_parser(
+        "deadcode-scan",
+        help="死代码扫描（AST）：未用 import / 未被引用函数 / 未被引用常量。"
+             "名字引用统计覆盖 harvester+tests+harvester-view（H48：只扫 harvester "
+             "会把测试用到的 API 误判成死函数），默认只对 harvester/ 报发现")
+    pdc.add_argument("--root", action="append", dest="roots", default=None,
+                     help="参与名字统计的根目录（可多次；缺省 "
+                          "harvester,tests,harvester-view 中存在者）")
+    pdc.add_argument("--report-root", dest="report_root", default="harvester",
+                     help="只对该根下的文件报 AST 发现（默认 harvester）")
+    pdc.add_argument("--fail-on-found", dest="fail_on_found", action="store_true",
+                     help="发现任何一条即退出码 1（缺省只提示，因为检查是启发式）")
+    pdc.add_argument("--out", default=None, help="报告输出路径（缺省打印到 stdout）")
+    pdc.set_defaults(func=cmd_deadcode_scan)
 
     pk = sub.add_parser("keywords",
                         help="n-gram 关键词统计（只统计 messages.raw，"

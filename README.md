@@ -352,6 +352,30 @@ frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain �
 | 命令 | 用途 |
 |---|---|
 | `api-serve` | 只读 HTTP JSON API（默认 127.0.0.1:8765；非回环 host 必须 --token；`--topics-meta/--cards-root/...` 启用对应端点） |
+| `deadcode-scan` | 死代码扫描（AST）：未用 import / 未被引用函数 / 未被引用常量。名字引用统计覆盖 `harvester`+`tests`+`harvester-view`（H48：只扫 `harvester/` 会把测试用到的 API 误判成死函数），默认只对 `harvester/` 报发现；缺省**只提示**，加 `--fail-on-found` 才判失败 |
+
+## 死代码扫描（每轮收尾的固定动作）
+
+```bash
+python -m harvester deadcode-scan                  # 提示（退出码恒 0）
+python -m harvester deadcode-scan --fail-on-found   # 当门用（有发现即退出码 1）
+python -m harvester deadcode-scan --root harvester --out docs/reports/deadcode.md
+```
+
+口径与豁免：
+
+- **未用 import**：模块内出现过的名字（属性根名 `json.dumps` 的 `json`、字符串字面量
+  里的词）都没有 → 报了基本就是真没用；
+- **未被引用函数 / 常量**：名字在**全仓文本**里只出现 1 次（定义处）→ 可能是死，
+  也可能是给别人用的公开 API，故只提示。**不用调用图**的理由：CLI 的 `cmd_*` 查表、
+  `argparse` 的 `func=`、框架回调会让调用图大面积误报，文本口径宁可漏也不误删；
+- **类方法不算**（可能是父类接口覆盖）；
+- **行内带 `noqa` 即视为有意保留**：真实案例是"import 只为探测可用性"
+  （`from compression import zstd as _z  # noqa: F401`）——那种 import 名字本就不用，
+  是 flake8 的既有约定。**要保留死代码，就在该行写 `# noqa` 并说明理由**。
+
+套件里有一条 `test_harvester_package_has_no_dead_code`（`harvester/` 必须 0 条），
+所以这道例行检查不靠人记得跑。
 
 ## 套件结构
 

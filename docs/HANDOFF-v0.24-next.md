@@ -75,7 +75,7 @@
 - `HANDOFF-v0.22-next.md` §2 台账：新增 **H51–H54**。
 - 本轮**死代码扫描**（AST 覆盖 `harvester/`+`tests/`+`harvester-view/`，89 文件）与
   **过期文本扫描**（`TODO|FIXME|后续版本|待实现|暂未`）均零发现——
-  扫描器在 `docs/reports/deadcode-scan.py`；注意其首版有两类假阳性
+  扫描器现为 `python -m harvester deadcode-scan`（缺省只提示、`noqa` 可豁免）；注意其首版有两类假阳性
   （`from __future__ import annotations`、类内方法覆盖 `do_GET/log_message`），已修。
 
 ---
@@ -86,7 +86,7 @@
 |---|---|---|
 | ~~0~~ | ~~发布两条 chain 到正式位~~ | **本轮已完成**：`~/.workbuddy/knowledge/topics/` 现有 3 条 chain（叙事节奏 + 本轮 2 条）；发布后用 `chain-validate` 就地复校通过。**view 数据通路已在进程内验证**（不起服务）：`/api/topics` 返回 126 主题，`/api/topic/tp-20261010-001/chain` 与 `…-002/chain` 均 200（7 阶段/50 节点、6 阶段/36 节点），脚本 `docs/reports/check-api-chain.py` |
 | 12 | 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点） | **未做**。本轮两条新 chain 全部给到 turn 级（A 50 节点 / B 36 节点），可作口径参照 |
-| 11 | `regress` 端到端回归语料 | **未做**（CLI 仍无该子命令）。本轮新增的引文逐字门（现为 `chain-audit` 的默认内容门）、`deadcode-scan.py` 是"可判定探针"的又一例，可并入 `regress` 的 checker 集 |
+| 11 | `regress` 端到端回归语料 | **未做**（CLI 仍无该子命令）。本轮新增的引文逐字门（现为 `chain-audit` 的默认内容门）、死代码扫描（现为 `deadcode-scan` 工具）是"可判定探针"的又一例，可并入 `regress` 的 checker 集 |
 | 13 | T4 多例（现仅 `pdf-text-extractor` 1 例） | **本轮两个新主题都不可用**：A 成员全为导出型源（无 skill 遥测）；B 的 14 成员 `steps` 里 **0 次 Skill 类调用**（只有 Read/Edit/Grep/Bash/Write/Glob/present_files/Task*）。要出 T4 多例，**必须另选成员含 autoclaw / workbuddy-transcript skill 调用的主题**（候选实测：`workbuddy-transcript:…/2026-09-29-10-54-23/e565bccf….jsonl`，80 steps 且含 Skill 调用） |
 | 9 | chain 元结论回写 `~/.dsh/AGENTS.md` | **未做**（走 `suggest-status` 落 adopted；key = 建议句原文含句号，H31） |
 | 10 | 117 个自动聚类候选主题的关键词碎片 | **部分**：本轮只定稿了合并后新主题的关键词（把 13 个 bigram 碎片换成 7 个语义词，用 `topic keywords` 定稿，当时还是一次性定稿处理）。**工具不代做语义去噪**（红线），其余 124 个主题的关键词仍待用户裁决 |
@@ -124,7 +124,7 @@
 | meta 库（均 gitignore） | `topics_meta.db` / `suggestions_meta.db` / `artifacts_meta.db` / `keywords_meta.db`；本轮备份 `topics_meta.db.bak-20261010` |
 | 卡片主库 / chain 正式位 | `~/.workbuddy/knowledge/cards/`、`~/.workbuddy/knowledge/topics/`（**均在工作区外，写入需批准**） |
 | 提交信息 | **用 `-F 文件`**，勿用 PowerShell here-string（AGENTS.md 第 1 条） |
-| 探针/底稿目录 | `docs/reports/`（gitignore；本轮新增 `probe-*.py`、`deadcode-scan.py`、`CHAIN-AUTHOR-SPEC.md`；当时的一次性回合索引 / 去重 / raw 全文导出脚本、主题注册脚本与两道 chain 内容门脚本此后已被工具取代并删除） |
+| 探针/底稿目录 | `docs/reports/`（gitignore；本轮新增 `probe-*.py`、`CHAIN-AUTHOR-SPEC.md`；当时的一次性回合索引 / 去重 / raw 全文导出脚本、主题注册脚本、两道 chain 内容门脚本与死代码扫描此后**已被工具取代并删除**：`topic dedupe` / `topic turns` / `chain-audit` / `deadcode-scan`） |
 
 **测试数变化时必须同步三处**：`README.md`（依赖边界段）、本文件、`HANDOFF-v0.22-next.md` §0。
 
@@ -223,7 +223,7 @@
 |---|---|---|---|
 | 1 | 会话级去重（H40 口径，bigram Jaccard≥0.90） | 每写一条 chain 都要出去重报告，是 chain frontmatter 的必填口径 | ✅ 已是工具：`topic dedupe --id <tp> --db --out`，配测试（H40） |
 | 2 | 回合索引 / user 回合 raw 全文导出 | 起草 chain 的锚点唯一来源（回合号 + raw 全文），每轮都要 | ✅ 已是工具：`topic turns --id <tp> [--full]` |
-| 3 | 真实载荷渲染检查（后端侧 API 链形状探针 + 前端渲染探针） | "真实载荷渲染检查"是可复用的集成门 | 后端侧仍待搬（`docs/reports/check-api-chain.py`，见 §0 表）；前端侧已移进 `harvester-view/tests/` |
+| 3 | 真实载荷渲染检查（后端侧 API 链形状探针 + 前端渲染探针） | "真实载荷渲染检查"是可复用的集成门 | ✅ 前端侧已移进 `harvester-view/tests/`；**后端侧无需再搬**——形状契约由 `tests/test_v25_topic_chains.py`（含 404 路径）覆盖，那份纯打印、无断言的探针已删 |
 | — | 主题梳理 / 关键词定稿 / 分诊出 plan 三类一次性数据操作 | **属一次性数据操作**：通用形态已进 `topic-consolidate` 的 plan 流水线（后由 `--plan-seed` 补全）；定稿名单是用户数据 | 能力已进工具（`topic-consolidate` 的 plan、`topic keywords`），一次性脚本已删 |
 | — | `run_tests.py` / `sitecustomize.py` | 沙箱环境适配，不是功能 | 保持本地（H53） |
 
