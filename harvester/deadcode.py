@@ -96,6 +96,22 @@ def _waived(lines: list[str], lineno: int) -> bool:
     return False
 
 
+def unstable_files(before: dict[str, tuple[int, int]],
+                   after: dict[str, tuple[int, int]]) -> list[str]:
+    """扫描前后**戳不一致**的文件（相对路径，排序）。
+
+    **为什么要它**（v0.45，SOP C4）：`deadcode-scan` 要**读遍**项目 + 兄弟仓库的源码，
+    若此刻另有进程/子代理正在写这些文件，扫描会撞上**半写状态**（符号瞬时"未被引用"、
+    甚至 AST 解析到一半），于是报出死代码 → 套件里那条死代码门**假红**；编辑一结束，
+    复跑就绿 = "红一次、再跑全绿、不复现"。本项目历史上两次这样的记录（v0.29 那例连
+    用例名都被摘要过滤掉、v0.38 台账 H82 那例"疑临时目录竞态"），机制实验已复现：
+    高频改写一个文件 + 连跑扫描，12 轮里 **9 轮**报出且**每轮都命中被改写的文件**。
+
+    所以扫描期间被改动的文件，其结论**不可信**——单列出来，不当作死代码（也不假装通过）。
+    """
+    return sorted(k for k, v in before.items() if after.get(k) != v)
+
+
 def scan(roots: tuple[str, ...] | list[str] | None = None,
          base: Path | None = None,
          report_root: str = DEFAULT_REPORT_ROOT) -> dict:
@@ -104,6 +120,10 @@ def scan(roots: tuple[str, ...] | list[str] | None = None,
     `base` 缺省 = 当前目录。根名支持兄弟目录（见 `resolve_root`）。
     `report_root` 下的文件才做 AST 检查，但名字统计涵盖**所有找得到的根**
     （跨根引用不会被误判）；找不到的根会在 `found`/`missing` 里显式列出。
+
+    v0.45 additive：返回里多两个键——`unstable`（扫描期间被改动的文件）与
+    `unstable_findings`（**只来自这些文件**的发现，已从 `found_total` 口径里剔除）。
+    这样"并发编辑导致的假红"不会被当成真死代码，也不会被静默放过。
     """
     base = (Path(base) if base else Path(".")).resolve()
     roots = tuple(roots or DEFAULT_ROOTS)
@@ -115,15 +135,26 @@ def scan(roots: tuple[str, ...] | list[str] | None = None,
     files: list[Path] = []
     for p in found.values():
         files += _iter_files(p)
-    texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in files}
-    blob = "\n".join(texts.values())
-    report_path = resolve_root(base, report_root)
 
     def _rel(p: Path) -> str:
         try:
             return str(p.relative_to(base))
         except ValueError:                             # 兄弟仓库（在 base 之外）
             return str(Path("..") / p.relative_to(base.parent))
+
+    # 戳必须在**读取之前**取（首版放在读取之后 → "读取→AST"窗口内的改动看不见，
+    # 机制探针实测：12 轮里 10 轮仍被当成可信死代码，修复等于没生效）。
+    stamps: dict[str, tuple[int, int]] = {}
+    for p in files:
+        try:
+            st = p.stat()
+            stamps[_rel(p)] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            pass
+
+    texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in files}
+    blob = "\n".join(texts.values())
+    report_path = resolve_root(base, report_root)
 
     unused_imports: list[str] = []
     uncalled: list[str] = []
@@ -163,17 +194,58 @@ def scan(roots: tuple[str, ...] | list[str] | None = None,
                     if (_count(blob, tgt.id) <= 1
                             and not _waived(lines, node.lineno)):
                         unused_consts.append(f"{rel}:{node.lineno} {tgt.id}")
+    # 扫描结束复查：① 戳变了 ② **内容与扫描时读到的不一致**（含同尺寸改写与
+    # "撕裂读"：写入未落盘时读到半截内容，此时戳和大小都可能没变——只靠戳漏掉过
+    # 实测 3/12 轮）。凡命中其一的文件，结论归入"不可信"。
+    after: dict[str, tuple[int, int]] = {}
+    reread_changed: list[str] = []
+    for p in files:
+        rel = _rel(p)
+        try:
+            st = p.stat()
+            after[rel] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            pass
+        try:
+            if p.read_text(encoding="utf-8", errors="replace") != texts[p]:
+                reread_changed.append(rel)
+        except OSError:
+            reread_changed.append(rel)
+    unstable = sorted(set(unstable_files(stamps, after)) | set(reread_changed))
+    unstable_set = set(unstable)
+
+    def _split(items: list[str]) -> tuple[list[str], list[str]]:
+        """按"发现所属文件是否在扫描期间被改动"拆成 (可信, 不可信)。"""
+        stable = [x for x in items if x.split(":", 1)[0] not in unstable_set]
+        moved = [x for x in items if x.split(":", 1)[0] in unstable_set]
+        return sorted(stable), sorted(moved)
+
+    clean_imports, dirty_imports = _split(unused_imports)
+    clean_funcs, dirty_funcs = _split(uncalled)
+    clean_consts, dirty_consts = _split(unused_consts)
     return {"roots": list(roots), "report_root": report_root, "files": len(files),
             "found": {k: str(v) for k, v in found.items()},
             "missing": sorted(missing),
-            "unused_imports": sorted(unused_imports),
-            "uncalled_functions": sorted(uncalled),
-            "unused_constants": sorted(unused_consts)}
+            "unused_imports": clean_imports,
+            "uncalled_functions": clean_funcs,
+            "unused_constants": clean_consts,
+            "unstable": unstable,
+            "unstable_findings": {"unused_imports": dirty_imports,
+                                  "uncalled_functions": dirty_funcs,
+                                  "unused_constants": dirty_consts}}
 
 
 def found_total(report: dict) -> int:
+    """**可信**发现总数（不含 `unstable_findings`——那些文件的结论不可信）。"""
     return (len(report["unused_imports"]) + len(report["uncalled_functions"])
             + len(report["unused_constants"]))
+
+
+def unstable_total(report: dict) -> int:
+    """扫描期间被改动的文件里报出的发现数（**不是**死代码，是"要重跑"）。"""
+    u = report.get("unstable_findings") or {}
+    return (len(u.get("unused_imports", [])) + len(u.get("uncalled_functions", []))
+            + len(u.get("unused_constants", [])))
 
 
 def render_deadcode(report: dict) -> str:
@@ -191,8 +263,23 @@ def render_deadcode(report: dict) -> str:
         items = report[key]
         L.append(f"\n== {title}（{len(items)}）")
         L += [f"  - {x}" for x in items]
+    unstable = report.get("unstable") or []
+    if unstable:
+        L.append(f"\n== **扫描期间被改动的文件（{len(unstable)}）——结论不可信，需重跑**")
+        L += [f"  - {x}" for x in unstable]
+        u = report.get("unstable_findings") or {}
+        for key, title in (("unused_imports", "未用 import"),
+                           ("uncalled_functions", "未被引用函数"),
+                           ("unused_constants", "未被引用常量")):
+            for x in u.get(key, []):
+                L.append(f"  - [不可信·{title}] {x}")
+        L.append("  （成因：`deadcode-scan` 要读遍项目+兄弟仓库源码，若另有进程"
+                 "正在写文件就会撞上半写状态——本项目两次\"红一次再跑全绿\"的记录即此类；"
+                 "等写入结束重跑即可，**别据此删代码**。）")
     if found_total(report) == 0:
-        L.append("\n未发现死代码。")
+        L.append("\n未发现死代码。" if not unstable
+                 else "\n**可信范围内**未发现死代码（但本轮有文件在扫描期间被改动，"
+                      "整轮结论不确定，请重跑）。")
     else:
         L.append(f"\n合计 {found_total(report)} 条——**启发式提示**：确属给别人"
                  "用的公开 API 或框架回调可保留，但要在评审时说明；"

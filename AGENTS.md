@@ -11,8 +11,9 @@
   | 项 | 值 |
   |---|---|
   | 后端 head | v0.33 → **v0.45**，**收尾提交见 `git log -1`** |
-  | 后端测试基线 | **680 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | **`GATE ran=639 failures=0 errors=61`**（须 0 failures）。已固化成可重跑脚本：`& $venv -X utf8 scripts\gate_no_yaml.py`；flake 复现用 `& $venv -X utf8 scripts\flake_hunt.py --runs N` |
+  | 后端测试基线 | **685 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | **`GATE ran=644 failures=0 errors=61`**（须 0 failures）。已固化成可重跑脚本：`& $venv -X utf8 scripts\gate_no_yaml.py`；flake 复现用 `& $venv -X utf8 scripts\flake_hunt.py --runs N`（热跑抓跨测试泄漏 / `--cold --clear-pycache` 抓首跑类）；旧版本树复现见 `docs/reports/probe-history-flake.py`（`git worktree add` 后冷跑） |
+  | 死代码门的并发保护 | v0.45：扫描期间被改动的文件（戳变**或内容与扫描时不一致**——含撕裂读）其发现单列 `unstable_findings`，**不计入死代码**；CLI 只有不可信发现时回 **3（不确定，请重跑）**，套件那道门改为可区分 `skipTest`。成因与实测见 `harvester/deadcode.py::unstable_files`（**并发编辑会假红**，本项目两次"红一次再跑全绿"即此类） |
   | 跨测试泄漏门 | **`tests/test_v45_no_monkeypatch_leak.py`**：AST 查"给**模块级**对象打桩且文件里无还原手段"（`addCleanup`/`patch`/`try:finally`/二次赋值）；**权威仍是动态的 `flake_hunt.py`**（文件级还原证据区分不出是哪一处被还原，弱点写在测试 docstring 里） |
   | README↔CLI 漂移 | 已**钉进套件**（`tests/test_v44_doc_cmds.py`，双向：漏文档化 / 幽灵命令；含抽取 sanity 与"比对本身会红"的元测试）。v0.44 实测 37 个子命令全有提及、0 条幽灵命令 |
   | 死代码扫描 | `python -m harvester deadcode-scan`；**`harvester/` 与 `tests/` 都须 0/0/0**（套件里 `test_harvester_and_tests_have_no_dead_code` 已把两个根都钉住；**行内写 `# noqa` 即视为有意保留**）。根名支持**兄弟目录**（`harvester-view` 会被真找到），**找不到的根在报告里显式列出**——不许静默跳过还宣称覆盖 |
@@ -22,25 +23,25 @@
   | 已发布 chain | 3 条；**叙事节奏链 v0.45 补做 + 引号已净化**：52 节点、有锚点成员 **39/55**、8 个标题级代表逐条标注；引号按规范统一（术语加粗、数据引文 `「」`）后**默认引文门真实生效**（`chain-audit` 不带 `--quotes-ascii`：`「」` 62 条全部逐字命中、锚点告警 0） |
   | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（A 一行级 / B Agent 消费面 / C 质量欠账 / D 待裁决；含对第三方检查文档的逐条实测核对——其中 `regress` 那条**已过期**） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H99** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H100** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
   | MCP 工具 | **10 个**（会话面 4 + 进化数据面 6：`topic_list`/`topic_export`/`chain_read`/`suggest_list`/`cards_list`/`artifacts_list`）；漂移门 `tests/test_v45_mcp_tools.py` 从 `apiserve.py` 源码 AST 抽 `/api/*` 双向核对 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
   1. ✅ **已完成（v0.39–v0.42）**：tests/ 死 import 清 + 死代码门扩两根；`CHAIN-AUTHOR-SPEC.md` 入库；65 条深会话复核落库（63/1/1）并修掉"机械命中跨进程不确定"（严重）；用户裁决**舍弃 9 条会话**进零散；
   2. ✅ **已完成（v0.43–v0.44）**：**V3「卡片校验与主题注册表打通」**（`cards validate --topics-meta`，只读核对；24 例新测试）、**`regress` 端到端回归语料**（7 步 / 57 条断言 / 退出码三分；**注**：`regress` 那个子代理被中断、**没交回"故意破坏→变红"证据**）、**README↔CLI 漂移门**（37/37 有提及、0 幽灵命令）；
   3. ✅ **已完成（v0.45）**：**叙事节奏 chain 证据覆盖**（长期挂账最后一项）——`chain-audit` 扩成三门（证据覆盖 / 正文↔frontmatter 双向对账 / 引文门空转显式化 + `--quotes-ascii`）；chain 30→52 节点、有锚点成员 27/55→**39/55**、8 个标题级代表逐条标注，另改正两处锚点归属（H92）；
-  4. **仅剩 1 项"没做成"**：沙箱首跑那 **1 例 flake 仍未定位**（并发期间的假红 v0.43 已归因）；复现时留 `-v` 定位，别当"已知 flaky"糊过去。chain 元结论回写**建议不做**（领域内容，放代理工作记忆是噪声）；
+  4. ✅ **已闭环（v0.45 第九批，H100）**：C4 那例 flake 的**成因类别已定位并修掉**——`deadcode-scan` 在**并发编辑窗口**内读遍源码时会读到半写/撕裂读状态而**假红**（探针实测 9～10/12 轮复现，每轮都命中被改写文件），这正是 v0.29 与 v0.38 两次"红一次、再跑全绿"的机制；v0.38 那棵树（`d9cac46`，574 例）冷跑 **13 轮全绿**排除代码缺陷。修法：不可信发现单列 + CLI 回 **3（请重跑）** + 套件门可区分 skip。**两条历史记录的共同缺口是"没记用例名"**（记录方式问题，已由 `flake_hunt.py` 补上）；chain 元结论回写**建议不做**（领域内容，放代理工作记忆是噪声）；
   5. ✅ **引号净化已做（v0.45 第二批）**：叙事节奏链的 72 对数据引文改成 `「」`、9 处术语改加粗（原本默认引文门对该链**空转**，现在是真实门：62 条全部逐字命中）；
   6. ✅ **已完成（v0.45 A/B）**：A 一行级（版本号 `0.45.0` + 卫生门 `test_v45_hygiene.py`、`topicexport.py:46` import 遮蔽、5 处 f-string）；B **MCP 4→10 工具 + 漂移门**（`test_v45_mcp_tools.py` 从 `apiserve.py` 源码 AST 双向核对，含元测试）；
   7. ✅ **C1/C2/C5 已完成（v0.45 第五批，H96）**：C1 `keywords-gc --keep-runs/--vacuum`（真库 40.2→**18.4 MB**；22 MB 是空闲页，只有 VACUUM 回收）；C2 `suggest-agents --coverage`（真库：建议 8/台账 8 看着相等，实际**已裁决 6、待裁决 2、陈旧 2**）；C5 `regress` 变异补证（3 处破坏全部变红，补上 H90 的欠证）；
   8. ✅ **C3 已完成（v0.45 第六批，H97）**：DSH schema 守卫（声明版本 + 消费字段形态双判据；不匹配 → `detect` STUB / `load_session` **lossy 空消息**，不半解析）；真机 **33 会话全部通过**、指纹 `d75532e18dc4`；顺带修掉 `_files()` 写死 `v4` 导致"上游改名伪装成 MISSING"的诊断缺陷；
   9. **D3 定期蒸馏 SOP 已落地（SOP §5）**：三触发 + 八步 + 每步记数字；**不含 chain 再生成**（D1 暂缓）；D2 暂缓；
-  10. ⚠️ **C4 半闭环（v0.45 第七/八批，H98/H99）**：`scripts/flake_hunt.py` **两个轴**——热跑（同进程，抓跨测试状态泄漏；首跑即抓到并修掉一例：C3 新测试打桩 `dshmod.zstd_decompress` 未还原，已加门 `test_v45_no_monkeypatch_leak.py`）＋ `--cold`（独立子进程 + `--clear-pycache`，抓"首跑/冷启动"类）。**历史那例在两轴均未复现**（热跑 10+ 轮、冷跑 3 轮全绿），按"未定位（不可复现）"记账；它若再现，猎人自动点名留证；
+  10. ✅ **C4 已闭环（v0.45 第七/八/九批，H98/H99/H100）**：三条轴都跑过——热跑（同进程，抓到并修掉一例：C3 新测试打桩 `dshmod.zstd_decompress` 未还原，已加门 `test_v45_no_monkeypatch_leak.py`）｜`--cold --clear-pycache`（首跑类）｜**旧版本树**（`git worktree add d9cac46`，574 例 × 13 轮全绿）。最终定位：那两次"红一次再跑全绿"是 **`deadcode-scan` 撞上并发编辑窗口**（半写/撕裂读 → 假红），机制已实测复现并**修掉**（不可信发现单列 + CLI 回 3 + 套件门可区分 skip）；
   11. **并发教训（v0.43）**：同一工作区并行子代理**会互相同改 `cli.py`/`README.md`**——下次派活要**按文件切分**或串行。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **680 例 OK**；无 PyYAML 门禁用
+  `& $venv -m unittest discover -s tests` → 预期 **685 例 OK**；无 PyYAML 门禁用
   `& $venv -X utf8 scripts\gate_no_yaml.py`（须 **0 failures**）。
   （补丁 = `scripts/sandbox/sitecustomize.py`：沙箱下 `os.mkdir(0o700)` 建出的目录
   连本进程都写不进 → `tempfile` 全崩。**普通机器上不需要**，见 README「沙箱环境适配」。）

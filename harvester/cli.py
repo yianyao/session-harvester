@@ -676,7 +676,8 @@ def cmd_deadcode_scan(args) -> int:
     缺省**只提示**（启发式必然有误报）；加 `--fail-on-found` 才以退出码 1 判失败，
     供 CI/套件按需当门用。
     """
-    from .deadcode import (DEFAULT_ROOTS, found_total, render_deadcode, scan)
+    from .deadcode import (DEFAULT_ROOTS, found_total, render_deadcode, scan,
+                           unstable_total)
     roots = tuple(args.roots) if args.roots else DEFAULT_ROOTS
     report = scan(roots=roots, report_root=args.report_root)
     text = render_deadcode(report)
@@ -688,6 +689,15 @@ def cmd_deadcode_scan(args) -> int:
     else:
         print(text)
     n = found_total(report)
+    # v0.45：扫描期间被改动的文件，其结论不可信——**不能当死代码，也不能假装通过**
+    # （退出码 3＝"未执行/不确定"，与 regress 的三分口径一致）。成因见 deadcode.py。
+    u = unstable_total(report)
+    if u:
+        print(f"[deadcode-scan] {len(report['unstable'])} 个文件在扫描期间被改动 → "
+              f"{u} 条发现不可信（并发编辑会假红）；请等写入结束重跑",
+              file=sys.stderr)
+        if args.fail_on_found and not n:
+            return 3
     if n and args.fail_on_found:
         print(f"[deadcode-scan] 发现 {n} 条（--fail-on-found）", file=sys.stderr)
         return 1

@@ -418,7 +418,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | 命令 | 用途 |
 |---|---|
 | `api-serve` | 只读 HTTP JSON API（默认 127.0.0.1:8765；非回环 host 必须 --token；`--topics-meta/--cards-root/...` 启用对应端点） |
-| `deadcode-scan` | 死代码扫描（AST）：未用 import / 未被引用函数 / 未被引用常量。名字引用统计覆盖 `harvester`+`tests`+`harvester-view`（H48：只扫 `harvester/` 会把测试用到的 API 误判成死函数），默认只对 `harvester/` 报发现；缺省**只提示**，加 `--fail-on-found` 才判失败 |
+| `deadcode-scan` | 死代码扫描（AST）：未用 import / 未被引用函数 / 未被引用常量。名字引用统计覆盖 `harvester`+`tests`+`harvester-view`（H48：只扫 `harvester/` 会把测试用到的 API 误判成死函数），默认只对 `harvester/` 报发现；缺省**只提示**，加 `--fail-on-found` 才判失败。**并发编辑保护**（v0.45）：扫描要读遍项目+兄弟仓库源码，若此刻有别的进程/子代理正在写文件，会撞上半写/撕裂读状态而**假红**（本项目两次"红一次、再跑全绿"的记录即此类，机制已实测复现）。现按"戳变或内容与扫描时不一致"把这些文件的发现单列为 `unstable_findings`，**不计入死代码**；`--fail-on-found` 下若只有不可信发现则回 **3＝不确定（请重跑）**，不许把不确定当通过 |
 | `regress` | 端到端回归语料：**从空库**跑 分诊（含 `--triage-deep`）→ `--plan-seed` → `apply`（dry-run + 真写）→ `topic export`/`md` → H87 跨进程确定性，逐项核对关键数字。全程只用临时库（造自 `indexing.SCHEMA` + `index_session`），**真库一字节不动**；`--out` 人读 / `--json` 机读；退出码 0 通过 / 1 失败 / 3 未执行 |
 
 ## 死代码扫描（每轮收尾的固定动作）

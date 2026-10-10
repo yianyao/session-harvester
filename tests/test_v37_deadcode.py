@@ -201,6 +201,14 @@ class TestRealRepoIsClean(unittest.TestCase):
     def test_harvester_and_tests_have_no_dead_code(self):
         for root in ("harvester", "tests"):
             r = scan(base=REPO, report_root=root)
+            # v0.45：若扫描期间有文件被改动（并发编辑/子代理保存），本轮结论**不可信**
+            # ——此时既不判红（那是假红，只冤枉代码），也不静默通过（那是把不确定当通过），
+            # 而是**可区分的 skip**（unittest 摘要里以 skipped 出现）。机制与实测见
+            # `harvester/deadcode.py::unstable_files`。
+            if r.get("unstable"):
+                self.skipTest(
+                    f"{root}/ 有 {len(r['unstable'])} 个文件在扫描期间被改动 → 结论不可信，"
+                    f"请等写入结束后重跑本门：{r['unstable'][:3]}")
             self.assertEqual(
                 found_total(r), 0,
                 f"{root}/ 出现死代码（删掉，或在该行加 `# noqa` 说明保留理由）：\n"
