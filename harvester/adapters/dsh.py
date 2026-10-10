@@ -29,9 +29,11 @@ jsonl 行 type（v4 实测全集）→ 映射：
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -44,6 +46,97 @@ DSH_SESSIONS = Path(os.environ.get(
     "USERPROFILE", str(Path.home()))) / ".dsh" / "sessions"
 
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+
+# ── schema 守卫（v0.45，SOP C3）────────────────────────────────────────
+# 背景：DSH 0.3 落地前，本 adapter 对**私有 transcript 形态**的依赖全靠
+# "实测核验"（模块头那段注释）。上游一旦改版，旧代码的失败方式是
+# **静默产出半成品**（消息全丢或字段读空），而纲要/统计照跑不报错。
+# 这里照 autoclaw 的守卫先例补两道：
+# ① **声明版本**（文件名 `session.v4.jsonl.zstd` 自带）——不是已知版本就降级；
+# ② **消费字段形态**——逐条核对"我们真正读的字段路径"是否存在且类型对。
+# 外加一个**观察指纹**用于溯源（写进 detect 报告），它与版本号一起回答
+# "这份数据我当时看到的形态是什么"。
+_DECLARED_RE = re.compile(r"session\.v(\d+)\.")
+
+#: 本实现对应的声明版本（文件名里那个 vN）
+SCHEMA_VERSION = "4"
+KNOWN_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION})
+
+#: 我们**真正读**的字段路径（消费契约）。这些路径缺失/类型不对 = 形态已改，
+#: 因为下面的解析代码全部按它们取值（见 load_session 各分支）。
+#: 注：approval/policy、sandbox/mode、permission/preset 读的是可空标量，
+#: 缺失时只是渲染成 None，不算形态破坏，故不进必需集。
+REQUIRED_SHAPE: dict[str, tuple[str, ...]] = {
+    "session/title": ("data.title",),
+    "user/message": ("data.content",),
+    "assistant/message": ("data.message.content",),
+    "tool/call": ("data.name",),
+    "tool/result": ("data.message.toolCallId",),
+}
+
+
+def declared_version(path: Path) -> str | None:
+    """从文件名取上游声明的 schema 版本（`session.v4.jsonl.zstd` → `"4"`）。"""
+    m = _DECLARED_RE.search(Path(path).name)
+    return m.group(1) if m else None
+
+
+def _dig(obj: dict, dotted: str):
+    """按 `a.b.c` 取值；中途不是 dict 就返回 None。"""
+    cur = obj
+    for part in dotted.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def shape_problems(lines: list[dict]) -> list[str]:
+    """核对消费字段形态；返回问题清单（**空 = 与 v4 形态一致**）。
+
+    只看"出现了该类型的行、但其必需字段缺失/类型不对"。数据稀疏（某些类型
+    本来就没出现）不算问题——那是会话内容差异，不是 schema 差异。
+    """
+    problems: list[str] = []
+    for o in lines:
+        if not isinstance(o, dict):
+            continue
+        t = o.get("type")
+        want = REQUIRED_SHAPE.get(t) if isinstance(t, str) else None
+        if not want:
+            continue
+        for path in want:
+            v = _dig(o, path)
+            if v is None:
+                problems.append(f"{t} 缺字段 {path}（形态可能已改版）")
+                break
+    # 去重但保序，避免同一问题刷屏
+    seen: set[str] = set()
+    return [p for p in problems if not (p in seen or seen.add(p))]
+
+
+def schema_fingerprint(lines: list[dict]) -> str:
+    """观察指纹：`{类型: 顶层键排序}` 的 sha256 前 12 位。
+
+    **它是溯源记录，不是判断依据**——同一 schema 的稀疏会话与饱满会话
+    指纹不同（键集随数据变）。判断交给 `shape_problems` 与声明版本；
+    指纹的用处是对账："上一轮探测看到的形态"与"这一轮"能不能对上。
+    """
+    shape: dict[str, list[str]] = {}
+    for o in lines:
+        if not isinstance(o, dict):
+            continue
+        t = o.get("type")
+        if not isinstance(t, str):
+            continue
+        keys = sorted(o.keys())
+        if t in shape:
+            shape[t] = sorted(set(shape[t]) | set(keys))
+        else:
+            shape[t] = keys
+    canon = json.dumps(shape, ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
 
 _SKIP_TYPES = {
     "system/message", "session-log-deepseek/delivery-accepted",
@@ -184,7 +277,11 @@ class DshAdapter(BaseAdapter):
     def _files(self) -> list[Path]:
         if not self.root.is_dir():
             return []
-        return sorted(self.root.glob("*/*/session.v4.jsonl.zstd"))
+        # v0.45：**不再把 `v4` 写死在 glob 里**。原实现 `session.v4.jsonl.zstd`
+        # 会在上游改名（v5 / 去掉版本号）时让整个源变成 MISSING（"未找到会话"），
+        # 把人引向"是不是没装"；而真实结论应该是 **schema 不匹配**。
+        # 宽 glob + 守卫判定，才能给出正确的诊断（版本号仍由 detected 报出）。
+        return sorted(self.root.glob("*/*/session*.jsonl.zstd"))
 
     def _decompress_ok(self) -> bool:
         if self._zstd_ok is None:
@@ -232,6 +329,25 @@ class DshAdapter(BaseAdapter):
                 continue
         return items
 
+    def _schema_check(self, f: Path, lines: list[dict]
+                      ) -> tuple[bool, str, str | None, str]:
+        """守卫：返回 (ok, why, 声明版本, 观察指纹)。
+
+        两道判据：① 文件名声明版本 ∈ KNOWN_SCHEMA_VERSIONS；
+        ② `shape_problems` 为空。任一不过 → ok=False 并给出可读原因。
+        """
+        ver = declared_version(f)
+        fp = schema_fingerprint(lines) if lines else ""
+        if ver is None:
+            return False, f"文件名未声明 schema 版本（{f.name}）", ver, fp
+        if ver not in KNOWN_SCHEMA_VERSIONS:
+            return (False, f"上游声明 schema v{ver}，本实现只支持 "
+                           f"v{'/'.join(sorted(KNOWN_SCHEMA_VERSIONS))}", ver, fp)
+        problems = shape_problems(lines)
+        if problems:
+            return False, "；".join(problems[:3]), ver, fp
+        return True, f"schema v{ver} 形态匹配（指纹 {fp}）", ver, fp
+
     # ---- protocol ------------------------------------------------
 
     def detect(self) -> DetectReport:
@@ -246,9 +362,28 @@ class DshAdapter(BaseAdapter):
                 "需 Python 3.14+ / pip install zstandard / zstd.exe / "
                 "node（≥23.8）任一可用",
                 session_count=len(files))
-        return DetectReport(self.id, self.name, "OK",
-                            f"{len(files)} 个会话（多 frame zstd，已具备解压能力）",
-                            session_count=len(files))
+        # schema 守卫：拿**一个非空样本**判定（首个能解出行的文件）
+        sample: list[dict] = []
+        for f in files:
+            sample = self._lines(f)
+            if sample:
+                break
+        ok, why, ver, fp = self._schema_check(files[0], sample)
+        if not ok:
+            return DetectReport(
+                self.id, self.name, "STUB",
+                f"{len(files)} 个会话，但 **schema 守卫未通过**：{why}",
+                session_count=len(files),
+                hints=["上游 transcript 形态可能已改版：先核对 "
+                       "harvester/adapters/dsh.py 的 REQUIRED_SHAPE 与模块头"
+                       "的数据源说明，再改解析代码（不许凭猜测解析）"],
+                schema_version=ver, schema_fingerprint=fp or None,
+                schema_ok=False)
+        return DetectReport(
+            self.id, self.name, "OK",
+            f"{len(files)} 个会话（多 frame zstd，已具备解压能力）；{why}",
+            session_count=len(files),
+            schema_version=ver, schema_fingerprint=fp or None, schema_ok=True)
 
     def list_sessions(self) -> list[dict]:
         items = []
@@ -283,6 +418,9 @@ class DshAdapter(BaseAdapter):
                     n_msgs += 1
             rel = f.relative_to(self.root).as_posix()
             is_sub = origin == "subagent" or depth > 0
+            # v0.45：纲要条目带 schema 守卫结论（additive）——清单照列（时间/标题
+            # 仍然可信），但下游能看到"这条的 schema 没过守卫"，而不是到写库时才发现。
+            ok, _why, ver, _fp = self._schema_check(f, lines)
             items.append({
                 "session_id": rel,
                 "title": (("[subagent] " if is_sub else "")
@@ -292,6 +430,8 @@ class DshAdapter(BaseAdapter):
                 "message_count": n_msgs,
                 "preview": (title or label or "")[:100],
                 "workspace": rel.split("/")[0],
+                "schema_ok": ok,
+                "schema_version": ver,
             })
         items.sort(key=lambda x: x["updated_at"] or "", reverse=True)
         return items
@@ -302,6 +442,25 @@ class DshAdapter(BaseAdapter):
         if not f.is_file():
             raise KeyError(f"DSH 会话不存在: {f}")
         lines = self._lines(f)
+        # v0.45 schema 守卫（照 autoclaw 先例）：**不匹配就不解析**——宁可交付
+        # 一条明确标 lossy、messages 为空的记录（调用方与报告都能看到原因），
+        # 也不产出一条"看起来正常"的半成品（旧行为的失败方式正是它）。
+        ok, why, ver, fp = self._schema_check(f, lines)
+        if not ok:
+            return SessionRecord(
+                source=self.id, session_id=rel,
+                title=f"DSH 会话 {f.parent.name[:8]}",
+                created_at=None, updated_at=None,
+                messages=[],
+                extra={"file": str(f), "workspace": rel.split("/")[0],
+                       "origin": "dsh-session-v4",
+                       "dsh_meta": {}, "model": None, "models": None,
+                       "lossy": True,
+                       "warnings": [f"schema 守卫未通过，未解析消息（{why}）"],
+                       "dsh_schema": {"ok": False, "declared": ver,
+                                      "fingerprint": fp or None,
+                                      "expected": sorted(KNOWN_SCHEMA_VERSIONS)},
+                       })
         msgs: list[Message] = []
         title = None
         meta: dict = {}
@@ -420,5 +579,7 @@ class DshAdapter(BaseAdapter):
                                    or int(meta.get("delegationDepth") or 0) > 0),
                    "origin": "dsh-session-v4", "dsh_meta": meta,
                    "model": model, "models": models or None,
-                   "lossy": bool(warns), "warnings": warns},
+                   "lossy": bool(warns), "warnings": warns,
+                   "dsh_schema": {"ok": True, "declared": ver,
+                                  "fingerprint": fp or None}},
         )

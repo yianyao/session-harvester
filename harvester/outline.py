@@ -85,10 +85,19 @@ def render_outline_md(items: list[dict], reports: list[DetectReport]) -> str:
         lines.append("")
     lines.append("## 数据源状态")
     lines.append("")
-    lines.append("| 来源 | 状态 | 说明 |")
-    lines.append("|---|---|---|")
+    lines.append("| 来源 | 状态 | schema | 说明 |")
+    lines.append("|---|---|---|---|")
     for rep in reports:
-        lines.append(f"| {rep.name} ({rep.adapter_id}) | {rep.status} | {rep.detail} |")
+        # v0.45：做过 schema 守卫的源（目前 DSH）在这里显示版本/指纹/结论——
+        # 上游改版时第一眼就能看到是"守卫没过"还是"没数据"。
+        if getattr(rep, "schema_ok", None) is None:
+            sch = "—"
+        else:
+            sch = (f"v{rep.schema_version or '?'} "
+                   f"{'ok' if rep.schema_ok else '**不匹配**'}"
+                   f"（{rep.schema_fingerprint or 'n/a'}）")
+        lines.append(f"| {rep.name} ({rep.adapter_id}) | {rep.status} | "
+                     f"{sch} | {rep.detail} |")
     lines.append("")
     return "\n".join(lines)
 
