@@ -10,22 +10,25 @@
 
   | 项 | 值 |
   |---|---|
-  | 后端 head | `49fc883`（v0.32：`topic dedupe` / `topic turns` 工具化 + 交接机制修正） |
-  | 后端测试基线 | **529 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | `Ran 520 / FAILED (errors=45)`（设计行为） |
-  | 前端 | 仓库 `..\harvester-view`，head `7066e5e`，**24 例全绿** |
-  | 主题注册表 | 13 个主题（语义梳理后；零散登记 120 条） |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.32-next.md`（最新，先读它）**；备档 `<用户>`/`~/.workbuddy/knowledge/handoffs/session-harvester-v0.32.md`；事实台账 H1–H66 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 后端 head | `8c0d013`（v0.33.1：语义分诊落地 + `topic md` 人读那一半） |
+  | 后端测试基线 | **551 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | `Ran 542 / FAILED (errors=54)`（设计行为：9 个 chain 类测试各显式报错） |
+  | 前端 | 仓库 `..\harvester-view`，head `7066e5e`，**24 例全绿**（本地领先 origin/main 1 个提交，未 push） |
+  | 主题注册表 | **14 个主题**（本轮新建 `tp-20261010-005`「创作素材与背景检索」162 成员；零散登记 **139 条**） |
+  | 分诊池 | 归置后 **562 条**（substantive 503 / noise_maybe 30 / topic_hint 28 / noise_high 1） |
+  | 本会话沙箱 | **只对 `session-harvester/` 可写**；`..\harvester-view`、`~/.dsh`、`~/.workbuddy` 等**工作区外路径一律拒绝** → 跨仓库任务（如 ③）需提权 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H72** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
-- **下一件事（按序，详见 `docs/HANDOFF-v0.32-next.md` §0）**：
-  1. **语义分诊**：109 条 `topic_hint` + 142 条 `craft_material` + 41 条 `noise_high`
-     → 写 plan（`assign:` 归主题 / `noise:` 登记零散）→ `topic-consolidate --apply`；
-  2. V3 剩余产物：给人读的 `topic.md`（`topic export` 已给机器那半）；
-  3. 把 `check-view-real.py` 等集成门移进 `harvester-view/tests/`。
+- **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
+  1. **前端集成门搬家**（v0.32 交接的 ③，本轮**未执行：沙箱不可写 view 仓库**）——
+     配方见 `docs/HANDOFF-v0.33-next.md` §3 ③；
+  2. 复核分诊池剩下的 **28 条 `topic_hint`**（M1 关键词进索引后新命中的，H71）；
+  3. `noise_maybe` 30 条逐条复核后二分（**不自动登记**，精度约 2/3）；
+  4. `make-plan` 的机械部分工具化（`--plan-seed` 形态，见交接 §0 表）。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\docs\reports"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **529 例 OK**。
+  `& $venv -m unittest discover -s tests` → 预期 **551 例 OK**。
 
 - **收尾纪律**：交接正文写进仓库并**提交**（必要时 push）+ 更新本段快照 +
   同轮 `read` 读回验证后再声称"已生成"（`$DSH_HOME/AGENTS.md` §六 17/18 条）。
