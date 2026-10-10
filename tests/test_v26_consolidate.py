@@ -317,5 +317,83 @@ class TestNoiseWiring(unittest.TestCase):
                              sum(len(c["members"]) for c in r2["clusters"]))
 
 
+class TestPlanAssign(unittest.TestCase):
+    """v0.30：plan 级「把散会话并入已有主题」——新数据进来时的主路径。
+
+    可用性缺口：此前只能 merge/rename/delete（主题级），不能把一批**新会话**
+    吸进某个已有主题；没有它，收藏越多主题越粗，新会话却进不去。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.db, self.meta = _fixture(self.dir)
+        self.a, self.b, self.c, self.d = _seed(self.meta)
+
+    def tearDown(self):
+        try:
+            self.tmp.cleanup()
+        except OSError:
+            pass
+
+    def _plan(self, sids, **kw):
+        p = {"version": 1, "assign": [{"target": self.a, "sids": sids,
+                                       "evidence": "新会话并入（口径：关键词命中）",
+                                       **kw}]}
+        p["keep"] = [{"id": i} for i in (self.b, self.c, self.d)]
+        return p
+
+    def test_assign_adds_sessions_with_evidence(self):
+        r = apply_plan(self.meta, self._plan(["src:new1", "src:new2"]),
+                       dry_run=False)
+        self.assertTrue(r["ok"], r["errors"])
+        d = show_topic(self.meta, self.a)
+        by = {m["sid"]: m["evidence"] for m in d["members"]}
+        self.assertIn("src:new1", by)
+        self.assertIn("关键词命中", by["src:new1"])      # 口径留痕
+
+    def test_assign_dry_run_and_preview(self):
+        before = self.meta.read_bytes()
+        r = apply_plan(self.meta, self._plan(["src:new1"]), dry_run=True)
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["applied"])
+        self.assertEqual(r["preview"]["assign"],
+                         [{"target": self.a, "sids": 1}])
+        self.assertEqual(self.meta.read_bytes(), before)
+
+    def test_assign_rejects_session_owned_by_other_topic(self):
+        # 候选会话已是 self.b 的成员 → 不能靠 assign 挪动（应显式 remove）
+        r = apply_plan(self.meta, self._plan(["src:s2"]), dry_run=False)
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("已是主题" in e for e in r["errors"]), r["errors"])
+
+    def test_assign_rejects_noise_registered_session(self):
+        register_noise(self.meta, [{"sid": "src:new9", "reason": "零散"}])
+        r = apply_plan(self.meta, self._plan(["src:new9"]), dry_run=False)
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("已被登记为零散" in e for e in r["errors"]),
+                        r["errors"])
+
+    def test_assign_rejects_duplicate_and_empty(self):
+        r = apply_plan(self.meta, self._plan(["src:x", "src:x"]), dry_run=False)
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("同一个 sid 出现两次" in e for e in r["errors"]))
+        r2 = apply_plan(self.meta, self._plan([]), dry_run=False)
+        self.assertFalse(r2["ok"])
+        self.assertTrue(any("缺 sids" in e for e in r2["errors"]))
+
+    def test_assign_into_new_topic_key(self):
+        plan = {"version": 1,
+                "new_topics": [{"key": "N1", "name": "新类目"}],
+                "assign": [{"new": "N1", "sids": ["src:new1"]}],
+                "keep": [{"id": i} for i in (self.a, self.b, self.c, self.d)]}
+        r = apply_plan(self.meta, plan, dry_run=False)
+        self.assertTrue(r["ok"], r["errors"])
+        new_id = [t["id"] for t in list_topics(self.meta)
+                  if t["name"] == "新类目"][0]
+        self.assertEqual([m["sid"] for m in show_topic(self.meta, new_id)["members"]],
+                         ["src:new1"])
+
+
 if __name__ == "__main__":
     unittest.main()
