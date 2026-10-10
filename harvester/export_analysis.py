@@ -247,7 +247,7 @@ def render_sessions_md(data: dict) -> str:
 
     与 view v2.3 批量导出口径一致；全文走 raw（H3 契约）。
     """
-    lines = [f"# 异常会话分析导出", "",
+    lines = ["# 异常会话分析导出", "",
              f"- 会话数 {data['n_sessions']}｜错误模式 "
              f"{len(data['patterns_dedup'])} 个（已按归一模式跨会话去重）",
              ""]
