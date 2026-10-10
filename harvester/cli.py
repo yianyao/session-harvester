@@ -1115,20 +1115,23 @@ def cmd_topic(args) -> int:
 
 
 def cmd_chain_audit(args) -> int:
-    """chain 长文审计（v0.31）：引文逐字门 + 锚点语义门。
+    """chain 长文审计（v0.31）：引文逐字门 + 锚点语义门 + 证据覆盖（v0.45）。
 
     与 `chain-validate` 的分工：校验器管**结构**（sid 在成员内、turn 越界），
-    本命令管**内容保真**（引文能否逐字找到、note 与原文有没有交集）。
+    本命令管**内容保真与证据覆盖**（引文能否逐字找到、note 与原文有没有交集、
+    有多少成员只有标题级证据）。
     """
     from .chainaudit import audit_chain, render_audit
     try:
         r = audit_chain(Path(args.file), Path(args.db),
                         quotes=not args.no_quotes,
-                        anchors=not args.no_anchors)
+                        anchors=not args.no_anchors,
+                        coverage=not args.no_coverage,
+                        quotes_ascii=args.quotes_ascii)
     except RuntimeError as exc:            # 缺 PyYAML 等环境错误：fail loud
         print(f"错误: {exc}", file=sys.stderr)
         return 2
-    text = render_audit(r)
+    text = render_audit(r, list_limit=args.list_limit)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1138,9 +1141,20 @@ def cmd_chain_audit(args) -> int:
         print(text)
     bits = []
     if "quotes" in r:
-        bits.append(f"引文未命中 {len(r['quotes']['misses'])}")
+        q = r["quotes"]
+        bits.append(f"引文未命中 {len(q['misses'])}"
+                    + (f"（**空转**：0 条「」，另 "
+                       f"{q['ascii_total']} 处 ASCII 引用未核）"
+                       if q.get("vacuous") and not q.get("ascii_checked")
+                       else ""))
+        if q.get("ascii_checked"):
+            bits.append(f"ASCII 引用未命中 {len(q['ascii_misses'])}")
     if "anchors" in r:
         bits.append(f"疑似错配 {len(r['anchors']['suspicious'])}")
+    if "coverage" in r:
+        c = r["coverage"]
+        bits.append(f"成员锚点覆盖 {c['anchored_members']}/{c['members']}"
+                    f"（真缺口 {len(c['uncovered_reps'])}）")
     # 退出码口径：引文门是**硬门**（未命中即不合格）；锚点门是启发式，
     # 有已知误报类别（note 写跨会话关系），故只在 --strict 时才让它影响退出码
     hard_fail = ("quotes" in r and not r["quotes"]["ok"])
@@ -1697,8 +1711,9 @@ def main(argv=None) -> int:
 
     pca = sub.add_parser(
         "chain-audit",
-        help="chain 长文审计（v0.31）：引文逐字门（未命中即不合格）+ "
-             "锚点语义门（note 与原文零重叠的机械告警 + 并排列出）")
+        help="chain 长文审计（v0.31/v0.45）：引文逐字门（未命中即不合格）+ "
+             "锚点语义门（note 与原文零重叠的机械告警）+ 证据覆盖"
+             "（哪些成员只有标题级证据）")
     pca.add_argument("file", help="chain 长文路径（chain-<topic>.md）")
     pca.add_argument("--db", default="harvester.db",
                      help="索引库路径（只读；取成员原文与回合原文）")
@@ -1706,8 +1721,16 @@ def main(argv=None) -> int:
                      help="跳过引文逐字门")
     pca.add_argument("--no-anchors", dest="no_anchors", action="store_true",
                      help="跳过锚点语义门")
+    pca.add_argument("--no-coverage", dest="no_coverage", action="store_true",
+                     help="跳过证据覆盖区块（不查成员的锚点覆盖/去重）")
+    pca.add_argument("--quotes-ascii", dest="quotes_ascii", action="store_true",
+                     help="连 ASCII 双引号 \"…\" 引用一起逐字核（本仓库首条 chain "
+                          "只有 ASCII 引用，「」门对它空转；开了即计入硬门）")
     pca.add_argument("--strict", action="store_true",
                      help="锚点告警也让退出码非零（默认只在引文门失败时非零）")
+    pca.add_argument("--list-limit", dest="list_limit", type=int, default=20,
+                     help="各区块明细最多列几条；0 = 不限（默认 20，超出会显式"
+                          "印「另有 N 条」）")
     pca.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pca.set_defaults(func=cmd_chain_audit)
 

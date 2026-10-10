@@ -56,28 +56,15 @@ def _jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
-def dedupe_topic(meta_path: Path, db_path: Path, topic_id: str) -> dict:
-    """主题成员的会话级去重报告（H40 口径）。"""
-    meta_path, db_path = Path(meta_path), Path(db_path)
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    try:
-        items = []
-        for m in _members(meta_path, topic_id):
-            r = _session_row(con, m["sid"])
-            turns = _user_raw(con, r["sid"]) if r is not None else []
-            items.append({
-                "sid": r["sid"] if r is not None else m["sid"],
-                "title": (r["title"] or "") if r is not None else "",
-                "created_at": (r["created_at"] or "") if r is not None else "",
-                "turns": len(turns),
-                "grams": _grams("".join(turns)),
-                "evidence": m.get("evidence") or "",
-                "in_index": r is not None})
-    finally:
-        con.close()
+def dedupe_items(items: list[dict]) -> dict:
+    """会话级去重核心（H40 口径）：items 每项须含
+    `sid` / `title` / `created_at` / `turns` / `grams`（user raw 拼接的字符 bigram）。
 
-    items.sort(key=lambda x: (x["created_at"], x["sid"]))
+    **为什么要单独抽出来**：同一个口径有两个调用方——`topic dedupe`（按**当前主题
+    成员**）与 `chain-audit` 的证据覆盖（按 **chain frontmatter 里的成员**；chain 是
+    历史快照，真库实测主题已 411、chain 仍 55）。写成两份实现必然漂移，故只留这一份。
+    """
+    items = sorted(items, key=lambda x: (x["created_at"], x["sid"]))
     parent = {it["sid"]: it["sid"] for it in items}
 
     def find(x):
@@ -109,9 +96,7 @@ def dedupe_topic(meta_path: Path, db_path: Path, topic_id: str) -> dict:
         members.sort(key=lambda x: (x["created_at"], x["sid"]))
         reps.append(members[0])
         dups.extend(members[1:])
-    return {"topic_id": topic_id, "topic": show_topic(meta_path,
-                                                      topic_id)["name"],
-            "threshold": DUP_THRESHOLD, "band": BAND_THRESHOLD,
+    return {"threshold": DUP_THRESHOLD, "band": BAND_THRESHOLD,
             "members": len(items), "reps": len(reps),
             "duplicates": len(dups), "dup_pairs": dup_pairs,
             "band_pairs": band_pairs,
@@ -119,6 +104,32 @@ def dedupe_topic(meta_path: Path, db_path: Path, topic_id: str) -> dict:
                          if len(v) > 1],
             "rep_list": [r["sid"] for r in reps],
             "no_user_text": [it["sid"] for it in items if not it["grams"]]}
+
+
+def dedupe_topic(meta_path: Path, db_path: Path, topic_id: str) -> dict:
+    """主题成员的会话级去重报告（H40 口径）。"""
+    meta_path, db_path = Path(meta_path), Path(db_path)
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        items = []
+        for m in _members(meta_path, topic_id):
+            r = _session_row(con, m["sid"])
+            turns = _user_raw(con, r["sid"]) if r is not None else []
+            items.append({
+                "sid": r["sid"] if r is not None else m["sid"],
+                "title": (r["title"] or "") if r is not None else "",
+                "created_at": (r["created_at"] or "") if r is not None else "",
+                "turns": len(turns),
+                "grams": _grams("".join(turns)),
+                "evidence": m.get("evidence") or "",
+                "in_index": r is not None})
+    finally:
+        con.close()
+    out = dedupe_items(items)
+    out.update({"topic_id": topic_id,
+                "topic": show_topic(meta_path, topic_id)["name"]})
+    return out
 
 
 def render_dedupe(r: dict) -> str:
