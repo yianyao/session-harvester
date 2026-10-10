@@ -84,7 +84,7 @@
 
 | # | 事项 | 现状与本轮结论 |
 |---|---|---|
-| ~~0~~ | ~~发布两条 chain 到正式位~~ | **本轮已完成**：`~/.workbuddy/knowledge/topics/` 现有 3 条 chain（叙事节奏 + 本轮 2 条）；发布后用 `chain-validate` 就地复校通过。**view 数据通路已在进程内验证**（不起服务）：`/api/topics` 返回 126 主题，`/api/topic/tp-20261010-001/chain` 与 `…-002/chain` 均 200（7 阶段/50 节点、6 阶段/36 节点），脚本 `docs/reports/check-api-chain.py` |
+| ~~0~~ | ~~发布两条 chain 到正式位~~ | **本轮已完成**：`~/.workbuddy/knowledge/topics/` 现有 3 条 chain（叙事节奏 + 本轮 2 条）；发布后用 `chain-validate` 就地复校通过。**view 数据通路已在进程内验证**（不起服务）：`/api/topics` 返回 126 主题，`/api/topic/tp-20261010-001/chain` 与 `…-002/chain` 均 200（7 阶段/50 节点、6 阶段/36 节点），当时用一份纯打印的 API 链形状探针（已删：形状契约现由 `tests/test_v25_topic_chains.py` 覆盖） |
 | 12 | 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点） | **未做**。本轮两条新 chain 全部给到 turn 级（A 50 节点 / B 36 节点），可作口径参照 |
 | 11 | `regress` 端到端回归语料 | **未做**（CLI 仍无该子命令）。本轮新增的引文逐字门（现为 `chain-audit` 的默认内容门）、死代码扫描（现为 `deadcode-scan` 工具）是"可判定探针"的又一例，可并入 `regress` 的 checker 集 |
 | 13 | T4 多例（现仅 `pdf-text-extractor` 1 例） | **本轮两个新主题都不可用**：A 成员全为导出型源（无 skill 遥测）；B 的 14 成员 `steps` 里 **0 次 Skill 类调用**（只有 Read/Edit/Grep/Bash/Write/Glob/present_files/Task*）。要出 T4 多例，**必须另选成员含 autoclaw / workbuddy-transcript skill 调用的主题**（候选实测：`workbuddy-transcript:…/2026-09-29-10-54-23/e565bccf….jsonl`，80 steps 且含 Skill 调用） |
