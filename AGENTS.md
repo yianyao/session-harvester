@@ -10,25 +10,27 @@
 
   | 项 | 值 |
   |---|---|
-  | 后端 head | v0.33 → **v0.38**，**收尾提交见 `git log -1`** |
-  | 后端测试基线 | **574 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | `Ran 565 / FAILED (errors=59)`（设计行为；**须 0 failures**——failures 说明有人把"缺依赖"写成了断言） |
+  | 后端 head | v0.33 → **v0.39**，**收尾提交见 `git log -1`** |
+  | 后端测试基线 | **580 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | `Ran 571 / FAILED (errors=59)`（设计行为；**须 0 failures**） |
   | 死代码扫描 | `python -m harvester deadcode-scan`；`harvester/` 须 **0/0/0**（套件里 `test_harvester_package_has_no_dead_code` 已钉住；**行内写 `# noqa` 即视为有意保留**）。根名支持**兄弟目录**（`harvester-view` 会被真找到），**找不到的根在报告里显式列出**——不许静默跳过还宣称覆盖 |
   | 前端 | 仓库 `..\harvester-view`，head `c1c2c06`（集成门在 tests/；末尾一次 cleanup 删了它的死 import），**25 例全绿**，已 push |
   | 主题注册表 | **14 个主题**：小说 `010`=**378**、素材库 `005`=**195**（关键词已收紧为 用词/措辞/微表情）、采集 `004`=188、心理 `003`=**57**、SKILL `001`=**9**；零散登记 **153 条** |
-  | 分诊池 | **505 条**（substantive 503 / noise_maybe **1** / noise_high **1**；**topic_hint 与 craft_material 已归零**） |
+  | 分诊池 | **浅 505 条**（substantive 503 / noise_maybe **1** / noise_high **1**；topic_hint 与 craft_material 已归零）**＋ 深会话（`--triage-deep`）deep_topic_hint 65 / deep_unassigned 293**——深会话单列两类、**永不参与零散判定** |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H82** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H85** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
-  1. **深会话（>3 回合）从未归位**：v0.38 实测 `--triage-max-turns 12` 会把池子从 **505 撑到 821**（+316，含 **53 条已机械命中现有主题**）——`max_turns=3` 是为噪声判定设的缺省，副作用是深会话进不了归位视野。建议**单列一类**（`deep_unassigned`）而非改默认值；
-  2. "原型机"线索实为 **4 条同源会话**（2 浅 + 2 深，产品/硬件研发语境，均未归主题）——**是否立主题待用户裁决**；
-  3. 长期未做项：`regress` 回归语料 / 叙事节奏 chain 证据覆盖（55 成员仅 27 个有锚点）/ chain 元结论回写全局记忆 / V3「卡片校验与主题打通」那半仍未设计；
-  4. `docs/reports/` 探查脚本**保留为报告、不再审**（用户裁决）；沙箱首跑那 1 例 flake 未定位（复现时留 `-v`）。
+  1. **清 `tests/` 的 9 条未用 import**（v0.39 实测：`deadcode-scan` 缺省只报 `harvester/`，这一角从没查过；8 条删、`test_v31` 的 `import yaml` 是 H9 依赖标记→加 `# noqa`），并建议把套件里的死代码测试扩到 `tests/`；
+  2. **`CHAIN-AUTHOR-SPEC.md` 移进 `docs/`**（它只在 gitignore 的 `docs/reports/` 里，新 clone 的 chain 作者拿不到——与沙箱补丁同类问题）；
+  3. **复核 65 条 `deep_topic_hint`**（机械命中率约 8 成）：`--triage-brief deep_topic_hint` → 写 `judgment.yaml` → `--plan-seed --require-covered deep_topic_hint` → `--apply`；
+  4. "原型机"线索 **4 条同源会话**（2 浅 + 2 深）——是否立主题**待用户裁决**；
+  5. 长期未做项：`regress` 回归语料 / 叙事节奏 chain 证据覆盖 / chain 元结论回写 / V3「卡片校验与主题打通」那半未设计；
+  6. 两处"没做成"：README 子命令文档化检查（抽取脚本返回 0，结论不可用）+ 沙箱首跑那 1 例 flake **未定位**。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **574 例 OK**。
+  `& $venv -m unittest discover -s tests` → 预期 **580 例 OK**。
   （补丁 = `scripts/sandbox/sitecustomize.py`：沙箱下 `os.mkdir(0o700)` 建出的目录
   连本进程都写不进 → `tempfile` 全崩。**普通机器上不需要**，见 README「沙箱环境适配」。）
 
