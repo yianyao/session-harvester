@@ -18,3 +18,10 @@
 - `harvester.db` 只读：所有分析/产物走只读连接（api-serve 已有 authorizer 模式可复用）。
 - API 变更只增不删不改语义（additive）：既有字段一个不少，测试对账 + monkeypatch 守卫。
 - 统计口径变更必须同步更新测试对账数字与 README 端点说明。
+- **能力一律做进工具本体，不许只做在 `docs/reports/`**（2026-10-10 用户明确要求）：
+  凡"以后还会再用一次"的东西（校验门、审计、去重、派生素材、导出），必须落在
+  `harvester/`（或 view 仓库）里，配 CLI 入口 + 测试 + README 说明；
+  `docs/reports/` 只放**一次性产物**（本次执行的报告、被 gitignore 的中间文件）。
+  判定口径：这个动作**下一次采集 / 下一次起草还会不会重跑**？会 → 进工具。
+  反例与修正：引文逐字门、锚点语义门曾是一次性脚本，已提升为 `chain-audit`
+  （`harvester/chainaudit.py` + CLI + 7 例测试）。

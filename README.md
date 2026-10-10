@@ -16,11 +16,11 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  44 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  45 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**513 例全绿**）。用无 PyYAML 的解释器会得到
+  （3.13 + PyYAML 6.0.3，**520 例全绿**）。用无 PyYAML 的解释器会得到
   `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
@@ -159,7 +159,24 @@ python -m harvester topic keywords --meta topics_meta.db --id <tp-id> --keywords
 python -m harvester topic export --meta topics_meta.db --db harvester.db --id <tp-id> \
     --chain-root ~/.workbuddy/knowledge/topics --out docs/reports/topic-<tp-id>.json      # 给 Agent 的结构化导出
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
+python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # chain 内容审计（引文逐字 + 锚点语义）
 ```
+
+### 4.1 chain 内容审计（写完 chain 必跑）
+
+`chain-validate` 只管**结构**（sid 在成员内、turn 是否越界），**管不了引文真伪，
+也管不了"这个 turn 是否真说了这句 note"**。`chain-audit` 补两道内容门：
+
+- **引文逐字门**（硬门）：正文所有 `「」` 必须能在成员会话 `raw` 或标题里逐字找到
+  （自动归一空白与 Markdown 加粗标记；`……` 多段省略引用逐段比对）。**未命中即
+  退出码 1**。实测价值：起草 Agent 曾把检索列 bigram 当原文、引文经"还原"后并非
+  逐字；也有把原话压缩改写的（漏掉半句）。
+- **锚点语义门**（启发式）：逐节点把 `note` 与该回合 `raw` 并排列出，并对
+  **note 的 CJK 2-gram 与原文零重叠**的节点告警。实测价值：抓到过"整条挂错
+  sid/turn"（note 写"王德荣与沈望的剧组旧交"，而该 turn 在讲"锚点的心理学依据"）。
+  **已知误报类别**：note 写的是**跨会话关系**（"同日第三处重发""同一疑问跨端
+  复问"）时本就不与本回合有交集——这类已排除；锚点门默认**不影响退出码**
+  （要它判失败加 `--strict`）。
 
 ### 5. 主题结构化导出（给 Agent 用）
 

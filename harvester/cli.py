@@ -913,6 +913,46 @@ def cmd_topic(args) -> int:
     return 2
 
 
+def cmd_chain_audit(args) -> int:
+    """chain 长文审计（v0.31）：引文逐字门 + 锚点语义门。
+
+    与 `chain-validate` 的分工：校验器管**结构**（sid 在成员内、turn 越界），
+    本命令管**内容保真**（引文能否逐字找到、note 与原文有没有交集）。
+    """
+    from .chainaudit import audit_chain, render_audit
+    try:
+        r = audit_chain(Path(args.file), Path(args.db),
+                        quotes=not args.no_quotes,
+                        anchors=not args.no_anchors)
+    except RuntimeError as exc:            # 缺 PyYAML 等环境错误：fail loud
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
+    text = render_audit(r)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"[chain-audit] 报告已写入: {out}", file=sys.stderr)
+    else:
+        print(text)
+    bits = []
+    if "quotes" in r:
+        bits.append(f"引文未命中 {len(r['quotes']['misses'])}")
+    if "anchors" in r:
+        bits.append(f"疑似错配 {len(r['anchors']['suspicious'])}")
+    # 退出码口径：引文门是**硬门**（未命中即不合格）；锚点门是启发式，
+    # 有已知误报类别（note 写跨会话关系），故只在 --strict 时才让它影响退出码
+    hard_fail = ("quotes" in r and not r["quotes"]["ok"])
+    soft = ("anchors" in r and not r["anchors"]["ok"])
+    if hard_fail or (soft and args.strict):
+        print(f"[chain-audit] 需修｜" + "、".join(bits), file=sys.stderr)
+        return 1
+    print(f"[chain-audit] 通过｜" + "、".join(bits)
+          + ("（锚点告警需人工复核，未按 --strict 判失败）" if soft else ""),
+          file=sys.stderr)
+    return 0
+
+
 def cmd_chain_validate(args) -> int:
     """topic-chain 长文校验（T3，v0.22）：独立校验器，非 §8 卡片校验。"""
     import json as _json
@@ -1375,6 +1415,22 @@ def main(argv=None) -> int:
                      help="索引库路径（只读，锚点回溯核对）")
     pcv.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pcv.set_defaults(func=cmd_chain_validate)
+
+    pca = sub.add_parser(
+        "chain-audit",
+        help="chain 长文审计（v0.31）：引文逐字门（未命中即不合格）+ "
+             "锚点语义门（note 与原文零重叠的机械告警 + 并排列出）")
+    pca.add_argument("file", help="chain 长文路径（chain-<topic>.md）")
+    pca.add_argument("--db", default="harvester.db",
+                     help="索引库路径（只读；取成员原文与回合原文）")
+    pca.add_argument("--no-quotes", dest="no_quotes", action="store_true",
+                     help="跳过引文逐字门")
+    pca.add_argument("--no-anchors", dest="no_anchors", action="store_true",
+                     help="跳过锚点语义门")
+    pca.add_argument("--strict", action="store_true",
+                     help="锚点告警也让退出码非零（默认只在引文门失败时非零）")
+    pca.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pca.set_defaults(func=cmd_chain_audit)
 
     par = sub.add_parser(
         "artifacts",
