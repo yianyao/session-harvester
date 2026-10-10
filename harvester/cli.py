@@ -619,6 +619,7 @@ def cmd_keywords(args) -> int:
     """P2-2 n-gram 关键词统计：只统计 messages.raw（H3 契约/H38），
     落 keywords_meta.db（runs+stats），可出报告。范围 --sid/--topic
     数据驱动（任何主题可用，不写死）。"""
+    from .consolidate import noise_sids
     from .kwstats import build_stats, render_report
     dbp = Path(args.db)
     if not dbp.is_file():
@@ -630,13 +631,16 @@ def cmd_keywords(args) -> int:
         print(f"错误: --n 需为 >=2 的档位列表（如 2,3），收到: {args.n}",
               file=sys.stderr)
         return 2
+    tm = Path(args.topics_meta) if args.topics_meta else None
     s = build_stats(dbp, Path(args.meta), ns=[int(x) for x in ns],
                     role=args.role,
                     sids=list(args.sid) if args.sid else None,
                     topic_ids=list(args.topic) if args.topic else None,
-                    topics_meta=Path(args.topics_meta)
-                    if args.topics_meta else None,
-                    stopwords_paths=_kw_stopword_paths(args))
+                    topics_meta=tm,
+                    stopwords_paths=_kw_stopword_paths(args),
+                    # 已判定零散的会话不参与统计（v0.26；未登记时该集合为空，
+                    # 行为与接线前一致）
+                    exclude_sids=noise_sids(tm))
     print(f"统计完成: 消息 {s['total_msgs']} 条 → "
           f"{args.meta}（run 追加）")
     _emit_report(render_report(s, top=args.top), args)

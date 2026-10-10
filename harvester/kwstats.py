@@ -124,12 +124,17 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
                 topic_ids: list[str] | None = None,
                 topics_meta: Path | None = None,
                 stopwords_path: Path | None = None,
-                stopwords_paths: list[Path] | None = None) -> dict:
+                stopwords_paths: list[Path] | None = None,
+                exclude_sids: set[str] | None = None) -> dict:
     """统计 messages.raw 的 n-gram 词频并写入 meta 库（新 run）。
 
     `stopwords_paths`（v0.23）为多表叠加入口；`stopwords_path` 为旧单表
     入口（保持兼容，二者会合并）。默认表的启用与否由 **CLI 层**决定
     （见 cmd_keywords），本函数不做隐式默认——保持纯函数可测。
+
+    `exclude_sids`（v0.26）：**已判定零散**的会话（`sessions_noise`）不参与
+    统计——否则"零散不成系统"的闲聊会污染词频榜。缺省 None = 不过滤，
+    行为与接线前完全一致（additive）。
 
     返回 summary（含 rows=全部 gram 按 doc_freq 降序），供报告与端点消费。
     """
@@ -141,6 +146,10 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
     scope = list(sids or []) + expand_topic_sids(topic_ids or [],
                                                  topics_meta)
     scope = list(dict.fromkeys(scope))  # 去重保序
+    noise = set(exclude_sids or ())
+    if scope:
+        scope = [s for s in scope if s not in noise]
+    n_excluded = 0
 
     con = sqlite3.connect(f"file:{Path(db)}?mode=ro", uri=True)
     try:
@@ -152,6 +161,10 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
         if scope:
             sql += f" AND sid IN ({','.join('?' * len(scope))})"
             args += scope
+        elif noise:
+            # 无范围（=全会话）时才用 NOT IN；有范围时已在 scope 里滤过
+            sql += f" AND sid NOT IN ({','.join('?' * len(noise))})"
+            args += sorted(noise)
         counters = {n: Counter() for n in ns}    # 词频：gram 在该条文本内的出现次数
         doccounters = {n: Counter() for n in ns}  # 文档频：含该 gram 的文本条数
         total_msgs = 0
@@ -164,6 +177,17 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
                 counters[n].update(grams)
                 # 单条文本内同一 gram 只记一次（doc_freq 的语义）
                 doccounters[n].update(set(grams))
+        if noise:
+            # 计数口径与统计一致：同 role 过滤，否则会把"没参与统计的消息"
+            # 也算成被排除（首次实现就是按全 role 计的，测试当场抓出 2≠1）
+            ph = ",".join("?" * len(noise))
+            csql = (f"SELECT COUNT(*) FROM messages WHERE raw IS NOT NULL "
+                    f"AND sid IN ({ph})")
+            cargs: list = sorted(noise)
+            if role != "all":
+                csql += " AND role=?"
+                cargs.append(role)
+            n_excluded = con.execute(csql, cargs).fetchone()[0]
     finally:
         con.close()
 
@@ -175,7 +199,9 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
     now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     params = {"ns": ns, "role": role, "sids_used": len(scope),
               "topic_ids": list(topic_ids or []),
-              "stopwords": len(stop), "scope": scope}
+              "stopwords": len(stop), "scope": scope,
+              "noise_excluded": len(noise),
+              "noise_msgs_excluded": n_excluded}
     meta = Path(meta)
     meta.parent.mkdir(parents=True, exist_ok=True)
     mcon = sqlite3.connect(meta)

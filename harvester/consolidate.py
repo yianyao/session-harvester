@@ -81,17 +81,35 @@ def register_noise(meta_path: Path, rows: list[dict]) -> int:
         con.close()
 
 
-def list_noise(meta_path: Path) -> list[dict]:
+def list_noise(meta_path: Path, create: bool = False) -> list[dict]:
+    """读零散登记。缺表时返回空列表（除非 create=True 才建表）。
+
+    默认**只读**：消费方（candidates/keywords）持有的是只读连接，
+    不能因为读一下就顺手建表。
+    """
     if not Path(meta_path).is_file():
         return []
-    ensure_noise_table(meta_path)
-    con = sqlite3.connect(str(meta_path))
+    if create:
+        ensure_noise_table(meta_path)
+    con = sqlite3.connect(f"file:{Path(meta_path)}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
+        has = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND "
+            "name='sessions_noise'").fetchone()
+        if not has:
+            return []
         return [dict(r) for r in con.execute(
             "SELECT sid, reason, created FROM sessions_noise ORDER BY sid")]
     finally:
         con.close()
+
+
+def noise_sids(meta_path: Path | None) -> set[str]:
+    """零散会话 sid 集合（消费方过滤用；未配置/缺表 → 空集，行为不变）。"""
+    if not meta_path:
+        return set()
+    return {r["sid"] for r in list_noise(Path(meta_path))}
 
 
 # ── 梳理包（确定性一半） ───────────────────────────────────────────────

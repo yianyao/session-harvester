@@ -124,6 +124,15 @@ def _registered_sids(topics_meta: Path | None) -> set[str]:
         con.close()
 
 
+def _noise_sids(topics_meta: Path | None) -> set[str]:
+    """零散会话（用户判定登记在 topics_meta 的 sessions_noise）→ 不产候选。
+
+    未配置/缺表 → 空集，行为与接线前完全一致（additive）。
+    """
+    from .consolidate import noise_sids
+    return noise_sids(topics_meta)
+
+
 def build_candidates(db: Path, min_sim: float = 0.35, min_size: int = 2,
                      top_tools: int = 3, weights: dict | None = None,
                      topics_meta: Path | None = None,
@@ -138,7 +147,11 @@ def build_candidates(db: Path, min_sim: float = 0.35, min_size: int = 2,
     finally:
         con.close()
     reg = _registered_sids(topics_meta)
-    sids = [s for s in sids if s not in reg]
+    noise = _noise_sids(topics_meta)
+    # 已注册成员 + 已判定零散的会话都不再产候选（后者是用户/Agent 登记的
+    # "零散不成系统"清单，见 consolidate.register_noise）
+    drop = reg | noise
+    sids = [s for s in sids if s not in drop]
     feats = _load_features(db, sids, top_tools)
 
     # 倒排：title/fu bigram 任一共享 → 候选对
