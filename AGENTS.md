@@ -13,18 +13,17 @@
   | 后端 head | `8c0d013`（v0.33.1：语义分诊落地 + `topic md` 人读那一半） |
   | 后端测试基线 | **551 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
   | 无 PyYAML 门禁 | `Ran 542 / FAILED (errors=54)`（设计行为：9 个 chain 类测试各显式报错） |
-  | 前端 | 仓库 `..\harvester-view`，head `7066e5e`，**24 例全绿**（本地领先 origin/main 1 个提交，未 push） |
+  | 前端 | 仓库 `..\harvester-view`，head `533a18d`（本轮：集成门搬进 tests/），**25 例全绿**，已 push |
   | 主题注册表 | **14 个主题**（本轮新建 `tp-20261010-005`「创作素材与背景检索」162 成员；零散登记 **139 条**） |
   | 分诊池 | 归置后 **562 条**（substantive 503 / noise_maybe 30 / topic_hint 28 / noise_high 1） |
-  | 本会话沙箱 | **只对 `session-harvester/` 可写**；`..\harvester-view`、`~/.dsh`、`~/.workbuddy` 等**工作区外路径一律拒绝** → 跨仓库任务（如 ③）需提权 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H72** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 沙箱策略 | **每次会话都可能不同**（本轮中途从"只可写本项目"变为全访问）→ 跨仓库任务**先探一次写权限**再决定做不做 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H73** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
-  1. **前端集成门搬家**（v0.32 交接的 ③，本轮**未执行：沙箱不可写 view 仓库**）——
-     配方见 `docs/HANDOFF-v0.33-next.md` §3 ③；
-  2. 复核分诊池剩下的 **28 条 `topic_hint`**（M1 关键词进索引后新命中的，H71）；
-  3. `noise_maybe` 30 条逐条复核后二分（**不自动登记**，精度约 2/3）；
-  4. `make-plan` 的机械部分工具化（`--plan-seed` 形态，见交接 §0 表）。
+  1. 复核分诊池剩下的 **28 条 `topic_hint`**（M1 关键词进索引后新命中的，H71）；
+  2. `noise_maybe` 30 条逐条复核后二分（**不自动登记**，精度约 2/3）；
+  3. `make-plan` 的机械部分工具化（`--plan-seed` 形态，见交接 §0 表）；
+  4. 后端侧剩余一次性脚本 `docs/reports/check-api-chain.py` → 移进 `harvester/tests/`。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\docs\reports"` 后

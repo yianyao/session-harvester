@@ -16,12 +16,12 @@
 | 后端 head | `8c0d013`（v0.33.1：语义分诊落地 + `topic md`） |
 | 后端测试基线 | **551 例全绿**（venv，**须带沙箱补丁**，见 §2） |
 | 无 PyYAML 门禁 | `Ran 542 / FAILED (errors=54)`（**设计行为**，不是坏了：新增 9 个 chain 类测试各显式报错） |
-| 前端仓库 | `..\harvester-view`，head `7066e5e`，**24 例全绿**（本地**领先 origin/main 1 个提交，未 push**） |
+| 前端仓库 | `..\harvester-view`，head `533a18d`，**25 例全绿**（24 + 真实载荷集成门 1），已 push |
 | 主题注册表 | **14 个主题**（本轮新建 `tp-20261010-005`）+ 零散登记 **139 条** |
 | 分诊池 | 归置后重跑：**562 条**（substantive 503 / noise_maybe 30 / topic_hint 28 / noise_high 1） |
 | 库规模 | 1964 会话 / 62899 消息 / 36647 步骤 / 294 错误（`2026-10-09 10:17:07` 时点） |
 | 已发布 chain | 3 条（叙事节奏 / 吾好梦中救人 / Skill 自学习进化），在 `~/.workbuddy/knowledge/topics/` |
-| **本会话沙箱** | **只对 `session-harvester/` 可写**；`..\harvester-view` 与 `~/.dsh`、`~/.workbuddy` 等**工作区外路径一律拒绝**（实测 Set-Content 被拒）。跨仓库任务需提权（见 §3 ③） |
+| **沙箱策略** | 本轮**中途变化**：开始时只对 `session-harvester/` 可写（实测写 `..\harvester-view` 被拒 → ③ 一度判"未执行"），后段放开为全访问才完成 ③。**每次会话都可能不同：跨仓库任务先探一次写权限**（`Set-Content` 一个探针文件即可），别凭上一轮的印象决定做不做 |
 
 **基线自查（先做，否则会误判"项目坏了"）**：
 
@@ -35,10 +35,10 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 
 | # | 事项 | 为什么 | 做法 |
 |---|---|---|---|
-| 1 | **前端集成门搬家**（交接 v0.32 §0 的 ③，**本轮未执行**） | `check-view-real.py` + `view-real-render-check.js` 仍在 `docs/reports/`（一次性脚本），但每改一次 view 都该跑 | 见 §3 ③ 的**完整配方**；需先解决沙箱不可写 `..\harvester-view` |
-| 2 | **复核分诊池剩下的 28 条 `topic_hint`** | 它们是 M1 关键词进索引后**新命中**的（H71）；其中可能有"小说正文被 M1 的 描写/动作/语气 命中"的错配（正是本轮修过的那类） | 跑 `--triage-json` → 看这 28 条的 `reason`/`first_user` → 错配的改判 `tp-20261008-010`，对的 `assign` 进 M1 |
-| 3 | `noise_maybe` **30 条**仍未处理 | 用户已裁决**不自动登记**（精度约 2/3），但可以像本轮 41 条那样**逐条复核**后二分 | 先出 `--triage-json`，逐条判"纯取信息 / 有写作指向"，再写 plan（**别一刀切登记**） |
-| 4 | `make-plan` 的机械部分工具化 | 本轮 `docs/reports/make-plan-v033.py` 干的活（分诊 JSON → plan 草稿 + 硬校验）**每轮都要重做**，按项目铁律应进工具本体 | 建议形态：`topic-consolidate --plan-seed <triage.json> --out plan.yaml [--judgment <yaml>]`：机械映射 + 显式判断文件，脚本里的三张清单就是 `--judgment` 的样例 |
+| 1 | **复核分诊池剩下的 28 条 `topic_hint`** | 它们是 M1 关键词进索引后**新命中**的（H71）；其中可能有"小说正文被 M1 的 描写/动作/语气 命中"的错配（正是本轮修过的那类） | 跑 `--triage-json` → 看这 28 条的 `reason`/`first_user` → 错配的改判 `tp-20261008-010`，对的 `assign` 进 M1 |
+| 2 | `noise_maybe` **30 条**仍未处理 | 用户已裁决**不自动登记**（精度约 2/3），但可以像本轮 41 条那样**逐条复核**后二分 | 先出 `--triage-json`，逐条判"纯取信息 / 有写作指向"，再写 plan（**别一刀切登记**） |
+| 3 | `make-plan` 的机械部分工具化 | 本轮 `docs/reports/make-plan-v033.py` 干的活（分诊 JSON → plan 草稿 + 硬校验）**每轮都要重做**，按项目铁律应进工具本体 | 建议形态：`topic-consolidate --plan-seed <triage.json> --out plan.yaml [--judgment <yaml>]`：机械映射 + 显式判断文件，脚本里的三张清单就是 `--judgment` 的样例 |
+| 4 | 后端侧剩余的一次性脚本 | `docs/reports/check-api-chain.py`（API 链端点形状检查）每改一次 API 都该跑，但它属**后端**的测试而非 view 的 | 移进 `harvester/tests/`（或并入既有 API 测试），完成后删除原件 |
 
 ---
 
@@ -50,8 +50,9 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | 三个真缺陷修复 | ① `register_topic` 同日缺口撞 id（**H68**）；② `triage()` FTS5 全表扫 → **529 秒变 2 秒**（**H69**）；③ 候选 sid 集合重复构建 |
 | `topic-consolidate --triage-json` | 分诊的**全量**机器出口 + `first_user`；人读报告仍 60 条（**H70**） |
 | `topic md`（v0.32 交接 ②） | 人读一页：是什么/跨多久/关键转折/结论与未决；两条纪律（不列成员、不臆造结论）见 **H72** |
-| 测试 | +22 例：`test_v33_triagejson` 8、`test_v33_triagebatch` 4、`test_v33_topicmd` 9、`test_v22_topics` +1。**551 例全绿** |
-| 事实台账 | H67–H72 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
+| **前端集成门搬家**（v0.32 交接 ③） | 移进 `harvester-view/tests/`（`check_real_payload.py` + `render_real.js` + 套件接线），view head `533a18d`，**25 例全绿**；断言改成**从载荷推导**，原件已删。详见 **H73** |
+| 测试 | 后端 +22 例：`test_v33_triagejson` 8、`test_v33_triagebatch` 4、`test_v33_topicmd` 9、`test_v22_topics` +1；view +1 门。**后端 551 / view 25 全绿** |
+| 事实台账 | H67–H73 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
 
 ## §2 环境速查（沿用；本轮无变化）
 
@@ -74,20 +75,21 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
   `chain-audit`、`noisetriage`、`topicexport`、多链 API、view 多链渲染与人读形态。
 - **未完成**：§0 表里的四件。另：`docs/reports/` 下仍有 `consolidate-topics.py` /
   `finalize-keywords.py` / `make-noise-plan.py` 属**一次性数据操作**（通用形态已进
-  `topic-consolidate`，不必再工具化）。
-- **③ 前端集成门搬家的完整配方**（本轮因沙箱**未执行**，不是忘了）：
-  1. 需能写 `..\harvester-view`（本会话属工作区外，实测拒绝写入）→ 需提权或换个
-     能写该仓库的会话；
-  2. `git mv` 等价操作：把 `docs/reports/check-view-real.py` →
-     `harvester-view/tests/check_real_payload.py`（**路径要改**：`parents[2]` 指向
-     session-harvester 仓库根、`VIEW` 改为 `static/index.html`、`OUT` 改到
-     `tests/_tmp/`），`view-real-render-check.js` → `harvester-view/tests/render_real.js`；
-  3. 接入 view 的 24 例：`tests/test_v24_render.py` 里加一条"真载荷渲染检查"
-     （用 `subprocess.run([sys.executable, ...])` 调 Python 侧，或直接在 node 断言里
-     读 payload），**断言要能红**（先故意改一个字段名确认失败）；
-  4. 在 view 仓库跑全量（预期 24+1 例）、提交（view 当前**领先 origin 1 个提交未 push**，
-     一并处理）；
-  5. 完成后把 `docs/reports/` 下这两个脚本删掉，避免出现两份。
+  `topic-consolidate`，不必再工具化）。`check-api-chain.py` 待移（见 §0 表 4）。
+- **③ 前端集成门搬家（本轮已完成，`harvester-view` 提交 `533a18d`）**：
+  1. `docs/reports/check-view-real.py` → `harvester-view/tests/check_real_payload.py`
+     （取数逻辑改为**选链最多的主题**而非写死 `tp-20261008-010`；新增退出码 **3 =
+     未执行**：后端仓库/库不在时不让调用方误当成通过）；
+  2. `docs/reports/view-real-render-check.js` → `harvester-view/tests/render_real.js`；
+  3. **断言全部改成从载荷推导**（主题数、chains_count、首阶段互斥、锚点节点数 =
+     载荷里 anchors 的 nodes 总数、首个关键词可见）——原脚本写死"324 成员 / 50 节点 /
+     作品本体主线"，一次性用没问题，**变成每轮都跑的门就会假红**；"载荷里根本没有
+     这种主题"的项输出 `n/a` 并单列计数，不混进 ok（AGENTS.md §五 16）；
+  4. 接入 view 套件：`tests/test_v33_real_payload.py`（node 缺失 → skip；脚本报 3 →
+     skip 且理由写明"未执行：…"；断言失败 → 失败）；
+  5. 验证：`ok 12 / n/a 0 / FAIL 0`、view **25 例 OK**；后端两份原件已删（避免两份）；
+  6. 后端仓库文档里的历史引用（台账 H60、HANDOFF-v0.24 §7.4）保留原文，**迁移事实由
+     H73 记录**——不追改历史条目。
 - **明确不做**（用户裁决）：不改 `D:\Data\AI\Skills\`（路线图 R1–R6 由用户那边开工）；
   工具不调用任何 Agent/模型（确定性、离线是设计特性）；不自动登记任何"疑似零散"
   （精度约 2/3 —— 本轮 41 条逐条复核再次证实：约 1/3 是创作素材）。
@@ -111,6 +113,11 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 7. **性能修复未必能配上"会红"的断言**：H69 的 529→2 秒没有回归测试
    （计时断言 flaky；`set_trace_callback` 看不到子查询执行次数）。这类改动要在
    交接里**明说没有测试**，别让下一个会话以为它有覆盖。
+8. **一次性脚本变成"每轮都跑的门"时，写死的真实数字必须改成从数据推导**（H73）：
+   原"真实载荷渲染检查"写死 324 成员 / 50 节点 / 2 条链，一次性跑没问题；搬进
+   view 套件后数据一变就**假红**（主题数 13→14、小说主题成员 324→373）。
+   判据：**这个断言在数据变化时该不该跟着变？** 不该变 → 从载荷推导；
+   该变 → 它就不是一道门，别放进套件。
 
 ## §5 实测数字（口径显式，便于对账）
 
@@ -123,4 +130,6 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | 成员对账 | 010: 324→**373**、003: 27→**53**、002: 36→**38**、004: 29→**40**、M1: 0→**162** | 注册表成员数（apply 输出） |
 | `triage()` 耗时 | **529 秒 → 2 秒** | 同机同库，1964 会话 / 62899 消息；输出逐项一致 |
 | 测试 | **551 例 OK**（venv）/ 542 errors=54（无 PyYAML） | `unittest discover -s tests` |
+| view 测试 | **25 例 OK**（24 + 真实载荷集成门） | `harvester-view`：`unittest discover -s tests` |
+| 真实载荷门 | `ok 12 / n/a 0 / FAIL 0` | 真库 14 主题；多链主题 `tp-20261008-010` 2 条链 |
 | `topic md` 体量 | 2037 字符（无链主题）/ 约 6K（有链主题） | 一页；不列成员 |
