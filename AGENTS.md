@@ -11,8 +11,8 @@
   | 项 | 值 |
   |---|---|
   | 后端 head | v0.33 → **v0.45**，**收尾提交见 `git log -1`** |
-  | 后端测试基线 | **661 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | **`GATE ran=620 failures=0 errors=61`**（须 0 failures）。已固化成可重跑脚本：`& $venv -X utf8 scripts\gate_no_yaml.py` |
+  | 后端测试基线 | **671 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | **`GATE ran=630 failures=0 errors=61`**（须 0 failures）。已固化成可重跑脚本：`& $venv -X utf8 scripts\gate_no_yaml.py` |
   | README↔CLI 漂移 | 已**钉进套件**（`tests/test_v44_doc_cmds.py`，双向：漏文档化 / 幽灵命令；含抽取 sanity 与"比对本身会红"的元测试）。v0.44 实测 37 个子命令全有提及、0 条幽灵命令 |
   | 死代码扫描 | `python -m harvester deadcode-scan`；**`harvester/` 与 `tests/` 都须 0/0/0**（套件里 `test_harvester_and_tests_have_no_dead_code` 已把两个根都钉住；**行内写 `# noqa` 即视为有意保留**）。根名支持**兄弟目录**（`harvester-view` 会被真找到），**找不到的根在报告里显式列出**——不许静默跳过还宣称覆盖 |
   | 前端 | 仓库 `..\harvester-view`，head `c1c2c06`（集成门在 tests/；末尾一次 cleanup 删了它的死 import），**25 例全绿**，已 push |
@@ -21,7 +21,7 @@
   | 已发布 chain | 3 条；**叙事节奏链 v0.45 补做 + 引号已净化**：52 节点、有锚点成员 **39/55**、8 个标题级代表逐条标注；引号按规范统一（术语加粗、数据引文 `「」`）后**默认引文门真实生效**（`chain-audit` 不带 `--quotes-ascii`：`「」` 62 条全部逐字命中、锚点告警 0） |
   | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（A 一行级 / B Agent 消费面 / C 质量欠账 / D 待裁决；含对第三方检查文档的逐条实测核对——其中 `regress` 那条**已过期**） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H95** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H96** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
   | MCP 工具 | **10 个**（会话面 4 + 进化数据面 6：`topic_list`/`topic_export`/`chain_read`/`suggest_list`/`cards_list`/`artifacts_list`）；漂移门 `tests/test_v45_mcp_tools.py` 从 `apiserve.py` 源码 AST 抽 `/api/*` 双向核对 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
@@ -31,12 +31,13 @@
   4. **仅剩 1 项"没做成"**：沙箱首跑那 **1 例 flake 仍未定位**（并发期间的假红 v0.43 已归因）；复现时留 `-v` 定位，别当"已知 flaky"糊过去。chain 元结论回写**建议不做**（领域内容，放代理工作记忆是噪声）；
   5. ✅ **引号净化已做（v0.45 第二批）**：叙事节奏链的 72 对数据引文改成 `「」`、9 处术语改加粗（原本默认引文门对该链**空转**，现在是真实门：62 条全部逐字命中）；
   6. ✅ **已完成（v0.45 A/B）**：A 一行级（版本号 `0.45.0` + 卫生门 `test_v45_hygiene.py`、`topicexport.py:46` import 遮蔽、5 处 f-string）；B **MCP 4→10 工具 + 漂移门**（`test_v45_mcp_tools.py` 从 `apiserve.py` 源码 AST 双向核对，含元测试）；
-  7. **下一步（见 SOP C 组）**：C1 `keywords_meta.db` GC（`--keep-runs`/`--vacuum`）→ C2 建议台账覆盖核对 → C3 DSH schema 指纹与 `detect` 显式降级 → C5 `regress` 变异补证 → C4 flake 定位；**D3 已裁决：做定期蒸馏**（另记 SOP），D1/D2 暂缓；
-  8. **并发教训（v0.43）**：同一工作区并行子代理**会互相同改 `cli.py`/`README.md`**——下次派活要**按文件切分**或串行。
+  7. ✅ **C1/C2/C5 已完成（v0.45 第五批，H96）**：C1 `keywords-gc --keep-runs/--vacuum`（真库 40.2→**18.4 MB**；22 MB 是空闲页，只有 VACUUM 回收）；C2 `suggest-agents --coverage`（真库：建议 8/台账 8 看着相等，实际**已裁决 6、待裁决 2、陈旧 2**）；C5 `regress` 变异补证（3 处破坏全部变红，补上 H90 的欠证）。**剩余：C3 DSH schema 指纹 + `detect` 显式降级；C4 1 例 flake 定位**；
+  8. **D 组裁决（2026-10-10）**：**D3 定期蒸馏 = 做**（下一轮落成可执行 SOP：频率/触发/验收；属产能节奏，不进工具本体）；D1（chain 随主题重生成）、D2（元结论回写）**暂缓**；
+  9. **并发教训（v0.43）**：同一工作区并行子代理**会互相同改 `cli.py`/`README.md`**——下次派活要**按文件切分**或串行。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **661 例 OK**；无 PyYAML 门禁用
+  `& $venv -m unittest discover -s tests` → 预期 **671 例 OK**；无 PyYAML 门禁用
   `& $venv -X utf8 scripts\gate_no_yaml.py`（须 **0 failures**）。
   （补丁 = `scripts/sandbox/sitecustomize.py`：沙箱下 `os.mkdir(0o700)` 建出的目录
   连本进程都写不进 → `tempfile` 全崩。**普通机器上不需要**，见 README「沙箱环境适配」。）
