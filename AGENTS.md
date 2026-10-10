@@ -10,26 +10,27 @@
 
   | 项 | 值 |
   |---|---|
-  | 后端 head | v0.33 → **v0.43**，**收尾提交见 `git log -1`** |
-  | 后端测试基线 | **626 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | `Ran 598 / FAILED (errors=60)`（设计行为；**须 0 failures**）。**已固化成可重跑脚本**：`& $venv -X utf8 scripts\gate_no_yaml.py`（用 `sys.meta_path` 屏蔽 `yaml` 后 discover） |
+  | 后端 head | v0.33 → **v0.44**，**收尾提交见 `git log -1`** |
+  | 后端测试基线 | **630 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | **`GATE ran=602 failures=0 errors=60`**（须 0 failures）。已固化成可重跑脚本：`& $venv -X utf8 scripts\gate_no_yaml.py` |
+  | README↔CLI 漂移 | 已**钉进套件**（`tests/test_v44_doc_cmds.py`，双向：漏文档化 / 幽灵命令；含抽取 sanity 与"比对本身会红"的元测试）。v0.44 实测 37 个子命令全有提及、0 条幽灵命令 |
   | 死代码扫描 | `python -m harvester deadcode-scan`；**`harvester/` 与 `tests/` 都须 0/0/0**（套件里 `test_harvester_and_tests_have_no_dead_code` 已把两个根都钉住；**行内写 `# noqa` 即视为有意保留**）。根名支持**兄弟目录**（`harvester-view` 会被真找到），**找不到的根在报告里显式列出**——不许静默跳过还宣称覆盖 |
   | 前端 | 仓库 `..\harvester-view`，head `c1c2c06`（集成门在 tests/；末尾一次 cleanup 删了它的死 import），**25 例全绿**，已 push |
   | 主题注册表 | **14 个主题**（成员总数 **997**）：小说 `010`=**411**、素材库 `005`=**199**、采集 `004`=**191**、心理 `003`=**69**、本机工具环境 `004-08`=43、SKILL `001`=**10**；零散登记 **163 条**（v0.42 用户裁决舍弃 9 条后） |
   | 分诊池 | **794 条** = substantive **502** + `deep_unassigned` **292**（`--triage-deep`）；**noise_high / noise_maybe / deep_topic_hint 均已归零**（v0.42 舍弃 9 条进零散；深会话两类永不参与零散判定的口径不变） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H90** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H91** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
   1. ✅ **已完成（v0.39–v0.42）**：tests/ 死 import 清 + 死代码门扩两根；`CHAIN-AUTHOR-SPEC.md` 入库；65 条深会话复核落库（63/1/1）并修掉"机械命中跨进程不确定"（严重）；用户裁决**舍弃 9 条会话**进零散；
   2. ✅ **已完成（v0.43）**：**V3「卡片校验与主题注册表打通」**（`cards validate --topics-meta`，只读核对；24 例新测试）与 **`regress` 端到端回归语料**（7 步 / 57 条断言 / 退出码三分）。**注意**：`regress` 那个子代理被中断、**没交回它的"故意破坏→变红"证据**，我只做到"套件绿 + 真跑一次通过 + 它的元测试（`TestAssertionsCanFail`）绿"——**未有它自证的破坏实验**；
-  3. 两处"没做成"：README 子命令文档化检查（现在两个新子命令刚加完，正是重做它的时机）+ 沙箱/并发首跑那 1 例 flake **未定位**（另有一例 `test_harvester_and_tests_have_no_dead_code` 偶发，疑为**两个子代理并发改文件**时扫到中间态，连跑 3 次全绿）；
+  3. 两处"没做成"：~~README 子命令文档化检查~~ ✅ **v0.44 已补做并钉进套件**（37/37 有提及、0 幽灵命令）；剩 **1 例 flake 未定位**（沙箱首跑那次；并发期间那次假红已归因为"并行子代理改文件扫到中间态"）；
   4. 叙事节奏 chain 证据覆盖（55 成员仅 27 个有 turn 锚点）仍待办；chain 元结论回写**建议不做**（领域内容，放进代理工作记忆是噪声）；
   5. **并发教训（v0.43）**：同一工作区并行子代理**会互相同改 `cli.py`/`README.md`**——本轮两拨改动侥幸都在，但险些互相覆盖；下次派活要**按文件切分**或串行。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **626 例 OK**；无 PyYAML 门禁用
+  `& $venv -m unittest discover -s tests` → 预期 **630 例 OK**；无 PyYAML 门禁用
   `& $venv -X utf8 scripts\gate_no_yaml.py`（须 **0 failures**）。
   （补丁 = `scripts/sandbox/sitecustomize.py`：沙箱下 `os.mkdir(0o700)` 建出的目录
   连本进程都写不进 → `tempfile` 全崩。**普通机器上不需要**，见 README「沙箱环境适配」。）
