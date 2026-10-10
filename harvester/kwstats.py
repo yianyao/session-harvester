@@ -243,6 +243,48 @@ def build_stats(db: Path, meta: Path, ns: list[int] | None = None,
             "total_msgs": total_msgs, "rows": rows}
 
 
+def prune_runs(meta: Path, keep: int = 1, vacuum: bool = False) -> dict:
+    """只保留最近 `keep` 次 run，删掉更早的 run 与其统计行；可选 VACUUM。
+
+    为什么需要（v0.45，SOP C1）：`keyword_stats` 是**累积式**的——真库实测
+    `keyword_runs` 只 4 行，`keyword_stats` 已 **435,583 行 / 40.2 MB**
+    （每跑一次 keywords 追加一整份 n-gram 表）。没有 GC，库会随运行次数线性膨胀。
+
+    实现要点：
+    - `keyword_stats` 没有外键级联，**必须按 run_id 显式删**，否则留下孤儿行
+      （比不删更坏：占着空间却读不到）；
+    - 删完再 `VACUUM`（`VACUUM` 不能在事务里，故放在同一连接但独立执行）；
+    - `keep <= 0` 视为非法（会清空全部历史）→ ValueError，要求显式给正数。
+    """
+    meta = Path(meta)
+    if keep < 1:
+        raise ValueError(f"keep 必须 >= 1（收到 {keep}）——清空历史请显式删库")
+    if not meta.is_file():
+        return {"kept": [], "deleted_runs": 0, "deleted_stats": 0,
+                "vacuumed": False, "hint": "meta 库不存在"}
+    con = sqlite3.connect(str(meta))
+    try:
+        ids = [r[0] for r in con.execute(
+            "SELECT id FROM keyword_runs ORDER BY id DESC")]
+        drop = ids[int(keep):]
+        n_stats = 0
+        if drop:
+            marks = ",".join("?" * len(drop))
+            n_stats = con.execute(
+                f"DELETE FROM keyword_stats WHERE run_id IN ({marks})",
+                drop).rowcount
+            con.execute(f"DELETE FROM keyword_runs WHERE id IN ({marks})", drop)
+        con.commit()
+        vacuumed = False
+        if vacuum and drop:
+            con.execute("VACUUM")
+            vacuumed = True
+        return {"kept": ids[:int(keep)], "deleted_runs": len(drop),
+                "deleted_stats": max(0, n_stats), "vacuumed": vacuumed}
+    finally:
+        con.close()
+
+
 def load_stats(meta: Path | None, n: int = 2, limit: int = 50) -> dict:
     """读最新 run 的指定 n 词频（端点 / 高频词捞取消费）。"""
     if not meta or not Path(meta).is_file():
