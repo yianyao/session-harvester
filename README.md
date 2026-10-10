@@ -377,6 +377,25 @@ python -m harvester deadcode-scan --root harvester --out docs/reports/deadcode.m
 套件里有一条 `test_harvester_package_has_no_dead_code`（`harvester/` 必须 0 条），
 所以这道例行检查不靠人记得跑。
 
+## 沙箱环境适配（DSH 沙箱专用，**可选**）
+
+在 DSH 沙箱里跑套件前需要它，普通机器上不需要：
+
+```powershell
+$env:PYTHONPATH = "<repo>\scripts\sandbox"   # 加载 sitecustomize.py
+& $venv -X utf8 -m unittest discover -s tests
+```
+
+- **它解决什么**：本会话沙箱把 `os.mkdir(path, 0o700)` 建出的目录 provision 成
+  **连本进程都写不进去**的形态（`PermissionError: Errno 13`），而 `tempfile.mkdtemp()`
+  用 0o700、`mkstemp()` 用 0o600 → **任何基于 tempfile 的测试都会失败**（与项目代码
+  无关，见台账 H53）。`scripts/sandbox/sitecustomize.py` 只是把传给 `os.mkdir`/`os.open`
+  的 mode 补上组/其他位，解释器启动时自动导入。
+- **为什么它在 `scripts/sandbox/` 而不是 `docs/reports/`**：它一度放在
+  `docs/reports/`（gitignore 目录），结果**全量套件的前置条件在新 clone 上不存在**，
+  文档却按"它就是有"来教人跑测试。环境适配件也要进版本库（v0.38）。
+- 对**工作区外的项目**（如兄弟仓库 `harvester-view`）同样有效——它不要求写入目标目录。
+
 ## 套件结构
 
 ```text

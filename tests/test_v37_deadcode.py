@@ -145,12 +145,46 @@ class TestScan(unittest.TestCase):
         self.assertIn("未发现死代码", render_deadcode(r))
 
     def test_missing_root_is_not_an_error(self):
-        """兄弟仓库可能不在（只 checkout 了后端）——缺根目录不算错误。"""
+        """兄弟仓库可能不在（只 checkout 了后端）——缺根目录不算错误，
+
+        但**必须在报告里显式说出"没找到"**（`missing`），不能假装覆盖了。
+        """
         _make_fixture(self.root, CLEAN)
         r = scan(roots=("pkg", "tests", "harvester-view"), base=self.root,
                  report_root="pkg")
         self.assertEqual(found_total(r), 0, r)
-        self.assertIn("harvester-view", r["roots"])
+        self.assertIn("harvester-view", r["missing"])
+        self.assertIn("未找到", render_deadcode(r))
+
+    def test_sibling_repo_root_is_actually_found(self):
+        """`harvester-view` 是**兄弟仓库**：上一版只在 `base/<名>` 下找 → 从后端
+        仓库里跑时静默落空，报告却仍写着"覆盖 harvester-view"。这条钉住兄弟查找。
+        """
+        backend = self.root / "backend"
+        _make_fixture(backend, CLEAN)                  # 造出 pkg/ 与 tests/
+        sibling = self.root / "harvester-view"
+        sibling.mkdir()
+        (sibling / "v.py").write_text("def helper_in_view():\n    return 1\n",
+                                      encoding="utf-8")
+        r = scan(roots=("pkg", "tests", "harvester-view"), base=backend,
+                 report_root="pkg")
+        self.assertEqual(r["missing"], [], r)
+        self.assertIn("harvester-view", r["found"])
+        self.assertEqual(found_total(r), 0, r)
+        self.assertIn("harvester-view", render_deadcode(r))
+
+    def test_report_root_can_be_the_sibling(self):
+        """也能对兄弟仓库报发现（view 侧审计用）。"""
+        backend = self.root / "backend"
+        _make_fixture(backend, CLEAN)
+        sibling = self.root / "harvester-view"
+        sibling.mkdir()
+        (sibling / "v.py").write_text("import os\n\n\ndef dead_in_view():\n"
+                                      "    return 1\n", encoding="utf-8")
+        r = scan(roots=("pkg", "tests", "harvester-view"), base=backend,
+                 report_root="harvester-view")
+        self.assertEqual(_mods(r), {"os"}, r["unused_imports"])
+        self.assertEqual(_fns(r), {"dead_in_view"}, r["uncalled_functions"])
 
 
 class TestRealRepoIsClean(unittest.TestCase):

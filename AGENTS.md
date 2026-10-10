@@ -10,25 +10,27 @@
 
   | 项 | 值 |
   |---|---|
-  | 后端 head | v0.33 → **v0.37**，**收尾提交见 `git log -1`** |
-  | 后端测试基线 | **572 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
-  | 无 PyYAML 门禁 | `Ran 563 / FAILED (errors=59)`（设计行为；**须 0 failures**——failures 说明有人把"缺依赖"写成了断言） |
-  | 死代码扫描 | `python -m harvester deadcode-scan`；`harvester/` 须 **0/0/0**（套件里 `test_harvester_package_has_no_dead_code` 已钉住；**行内写 `# noqa` 即视为有意保留**） |
-  | 前端 | 仓库 `..\harvester-view`，head `533a18d`（集成门在 tests/），**25 例全绿**，已 push |
+  | 后端 head | v0.33 → **v0.38**，**收尾提交见 `git log -1`** |
+  | 后端测试基线 | **574 例全绿**（venv，见下「基线自查」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | `Ran 565 / FAILED (errors=59)`（设计行为；**须 0 failures**——failures 说明有人把"缺依赖"写成了断言） |
+  | 死代码扫描 | `python -m harvester deadcode-scan`；`harvester/` 须 **0/0/0**（套件里 `test_harvester_package_has_no_dead_code` 已钉住；**行内写 `# noqa` 即视为有意保留**）。根名支持**兄弟目录**（`harvester-view` 会被真找到），**找不到的根在报告里显式列出**——不许静默跳过还宣称覆盖 |
+  | 前端 | 仓库 `..\harvester-view`，head `c1c2c06`（集成门在 tests/；末尾一次 cleanup 删了它的死 import），**25 例全绿**，已 push |
   | 主题注册表 | **14 个主题**：小说 `010`=**378**、素材库 `005`=**195**（关键词已收紧为 用词/措辞/微表情）、采集 `004`=188、心理 `003`=**57**、SKILL `001`=**9**；零散登记 **153 条** |
   | 分诊池 | **505 条**（substantive 503 / noise_maybe **1** / noise_high **1**；**topic_hint 与 craft_material 已归零**） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H80** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H82** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
-  1. 继续审 `docs/reports/` 其余一次性脚本（判定口径：下轮还会重跑 → 进工具本体；**`sitecustomize.py` 是沙箱补丁，不是一次性，该写进 README**）；
+  1. 继续审 `docs/reports/` 其余一次性脚本（判定口径：下轮还会重跑 → 进工具本体；`sitecustomize.py` 已作为**环境适配件**移进 `scripts/sandbox/` 并写进 README，不再是待办）；
   2. 池里剩 2 条"设备原型机"线索（`004352fc` + `46886828`）——**是否立主题待用户裁决**；
   3. `harvester-view` 侧再审一轮（它只有 3 个测试文件；启动脚本与 `view.py` 的边界值得看）；
   4. 508 条 substantive 要不要挖新主题（走 `topic-candidates`，不建议蛮力）。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
-  `$env:PYTHONPATH = "<repo>\docs\reports"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **572 例 OK**。
+  `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
+  `& $venv -m unittest discover -s tests` → 预期 **574 例 OK**。
+  （补丁 = `scripts/sandbox/sitecustomize.py`：沙箱下 `os.mkdir(0o700)` 建出的目录
+  连本进程都写不进 → `tempfile` 全崩。**普通机器上不需要**，见 README「沙箱环境适配」。）
 
 - **收尾纪律**：交接正文写进仓库并**提交**（必要时 push）+ 更新本段快照 +
   同轮 `read` 读回验证后再声称"已生成"（`$DSH_HOME/AGENTS.md` §六 17/18 条）。
