@@ -117,7 +117,7 @@
 | venv Python（一切测试/CLI 用它） | `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`（3.13.14 + PyYAML 6.0.3） |
 | 无 PyYAML 解释器（门禁验证用） | `C:\Users\yianyao\.workbuddy\binaries\python\versions\3.13.12\python.exe` |
 | **沙箱 tempfile 限制（H53）** | 本会话沙箱下 `os.mkdir(p, 0o700)` 建出的目录**连本进程都写不进去**（`tempfile.mkdtemp/mkstemp` 因此必失败 → **所有基于 tempfile 的测试直接崩**，与项目代码无关） |
-| **绕过方式（推荐）** | `$env:PYTHONPATH = "<repo>\docs\reports"` → `sitecustomize.py` 在解释器启动时把传给 `os.mkdir`/`os.open` 的 mode 补组/其他位。**无需写目标目录**，故可用于工作区外的 `harvester-view` |
+| **绕过方式（推荐）** | `$env:PYTHONPATH = "<repo>\scripts\sandbox"`（v0.38 前在 `docs/reports/`）→ `sitecustomize.py` 在解释器启动时把传给 `os.mkdir`/`os.open` 的 mode 补组/其他位。**无需写目标目录**，故可用于工作区外的 `harvester-view` |
 | 备用方式 | `python docs/reports/run_tests.py discover -s tests`（需在目标项目内） |
 | 后端测试 | `& $venv -X utf8 -m unittest discover -s tests` → 预期 **529 例 OK**（带上述 PYTHONPATH） |
 | 前端测试 | 同解释器，在 `..\harvester-view` 下 → 预期 **24 例 OK**（该目录在**工作区外，不可写**） |
@@ -225,7 +225,7 @@
 | 2 | 回合索引 / user 回合 raw 全文导出 | 起草 chain 的锚点唯一来源（回合号 + raw 全文），每轮都要 | ✅ 已是工具：`topic turns --id <tp> [--full]` |
 | 3 | 真实载荷渲染检查（后端侧 API 链形状探针 + 前端渲染探针） | "真实载荷渲染检查"是可复用的集成门 | ✅ 前端侧已移进 `harvester-view/tests/`；**后端侧无需再搬**——形状契约由 `tests/test_v25_topic_chains.py`（含 404 路径）覆盖，那份纯打印、无断言的探针已删 |
 | — | 主题梳理 / 关键词定稿 / 分诊出 plan 三类一次性数据操作 | **属一次性数据操作**：通用形态已进 `topic-consolidate` 的 plan 流水线（后由 `--plan-seed` 补全）；定稿名单是用户数据 | 能力已进工具（`topic-consolidate` 的 plan、`topic keywords`），一次性脚本已删 |
-| — | `run_tests.py` / `sitecustomize.py` | 沙箱环境适配，不是功能 | 保持本地（H53） |
+| — | `run_tests.py` / `sitecustomize.py` | 沙箱环境适配，不是功能 | `sitecustomize.py` 已进版本库 `scripts/sandbox/`（v0.38，写进 README）；`run_tests.py` 保持本地 |
 
 ### 7.2 本轮新增的环境事实
 

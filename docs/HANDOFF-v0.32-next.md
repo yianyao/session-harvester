@@ -53,7 +53,7 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 
 - **沙箱补丁（H53，必须先设）**：本会话沙箱下 `os.mkdir(p, 0o700)` 建出的目录连本
   进程都写不进去 → `tempfile` 必失败 → 直接跑套件会"整体崩"。
-  `$env:PYTHONPATH = "<repo>\docs\reports"`（加载 `sitecustomize.py`）即可；
+  `$env:PYTHONPATH = "<repo>\scripts\sandbox"`（加载 `sitecustomize.py`；v0.38 前在 `docs/reports/`）即可；
   工作区外项目（如 view）用同一招。
 - venv 解释器：`C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
 - 无 PyYAML 解释器：`…\versions\3.13.12\python.exe`

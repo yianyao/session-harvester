@@ -44,6 +44,20 @@ def _iter_files(root: Path) -> list[Path]:
                   if "__pycache__" not in p.parts)
 
 
+def resolve_root(base: Path, name: str) -> Path | None:
+    """把根名解析成真实目录：先看 `base/<name>`，再看**兄弟目录** `base/../<name>`。
+
+    为什么要有兄弟查找：`harvester-view` 是**兄弟仓库**（不在后端仓库内），
+    而 H48 要求名字引用统计覆盖它。上一版只在 `base/<name>` 下找 → 从后端仓库
+    里跑时它**静默落空**，报告却仍写着"覆盖 harvester-view" —— 这就是"静默跳过
+    伪装成覆盖"，本轮修掉（同时报告里显式列出**实际找到/未找到**的根）。
+    """
+    for cand in (base / name, base.parent / name):
+        if cand.is_dir():
+            return cand.resolve()
+    return None
+
+
 def _used_names(tree: ast.AST) -> set[str]:
     """模块内"出现过"的名字：Name / 属性名 / 字符串字面量里的词。"""
     used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
@@ -87,24 +101,37 @@ def scan(roots: tuple[str, ...] | list[str] | None = None,
          report_root: str = DEFAULT_REPORT_ROOT) -> dict:
     """扫 `base/roots` 下的 .py，返回发现清单。
 
-    `base` 缺省 = 当前目录。`report_root` 下的文件才做 AST 检查，但名字统计涵盖
-    所有 roots（跨根引用不会被误判）。
+    `base` 缺省 = 当前目录。根名支持兄弟目录（见 `resolve_root`）。
+    `report_root` 下的文件才做 AST 检查，但名字统计涵盖**所有找得到的根**
+    （跨根引用不会被误判）；找不到的根会在 `found`/`missing` 里显式列出。
     """
-    base = Path(base) if base else Path(".")
+    base = (Path(base) if base else Path(".")).resolve()
     roots = tuple(roots or DEFAULT_ROOTS)
-    files: list[Path] = []
+    found: dict[str, Path] = {}
+    missing: list[str] = []
     for r in roots:
-        files += _iter_files(base / r)
+        p = resolve_root(base, r)
+        (found.__setitem__(r, p) if p else missing.append(r))
+    files: list[Path] = []
+    for p in found.values():
+        files += _iter_files(p)
     texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in files}
     blob = "\n".join(texts.values())
+    report_path = resolve_root(base, report_root)
+
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(base))
+        except ValueError:                             # 兄弟仓库（在 base 之外）
+            return str(Path("..") / p.relative_to(base.parent))
 
     unused_imports: list[str] = []
     uncalled: list[str] = []
     unused_consts: list[str] = []
     for p, src in texts.items():
-        rel = p.relative_to(base)
-        if rel.parts[0] != report_root:
+        if report_path is None or report_path not in p.parents:
             continue
+        rel = _rel(p)
         try:
             tree = ast.parse(src)
         except SyntaxError as exc:                     # 语法错单独报，不当死代码
@@ -136,7 +163,9 @@ def scan(roots: tuple[str, ...] | list[str] | None = None,
                     if (_count(blob, tgt.id) <= 1
                             and not _waived(lines, node.lineno)):
                         unused_consts.append(f"{rel}:{node.lineno} {tgt.id}")
-    return {"roots": roots, "report_root": report_root, "files": len(files),
+    return {"roots": list(roots), "report_root": report_root, "files": len(files),
+            "found": {k: str(v) for k, v in found.items()},
+            "missing": sorted(missing),
             "unused_imports": sorted(unused_imports),
             "uncalled_functions": sorted(uncalled),
             "unused_constants": sorted(unused_consts)}
@@ -149,8 +178,13 @@ def found_total(report: dict) -> int:
 
 def render_deadcode(report: dict) -> str:
     L = [f"# 死代码扫描：{report['files']} 个 py 文件"
-         f"（名字统计覆盖 {'、'.join(report['roots'])}；"
-         f"只对 {report['report_root']}/ 报 AST 发现）"]
+         f"（只对 {report['report_root']}/ 报 AST 发现）",
+         "# 名字统计覆盖的根（**没找到的显式列出**，不假装覆盖）："]
+    for name, path in sorted(report.get("found", {}).items()):
+        L.append(f"#   {name} → {path}")
+    for name in report.get("missing", []):
+        L.append(f"#   {name} → **未找到**（该根下的名字引用没被统计）")
+    L.append("")
     for title, key in (("未用 import", "unused_imports"),
                        ("未被引用函数", "uncalled_functions"),
                        ("未被引用常量", "unused_constants")):

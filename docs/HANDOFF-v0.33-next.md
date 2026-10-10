@@ -28,8 +28,8 @@
 
 ```powershell
 $venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
-$env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
-& $venv -X utf8 -m unittest discover -s tests     # 预期 572 例 OK
+$env:PYTHONPATH = "<repo>\scripts\sandbox"    # 沙箱补丁，见 §2
+& $venv -X utf8 -m unittest discover -s tests     # 预期 574 例 OK
 ```
 
 **下一件事（按优先级，均已写成可执行形态）**：
@@ -58,14 +58,16 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | **池子清空 + 文档清账**（v0.36） | 30 条 `noise_maybe` 用新工具归位（10→005 / 4→003 / 1→001 / 14 登记零散 / 1 skip），池 534→**505**；已删脚本的引用从全部文档与源码清掉（含已发布 chain 的对照工具引用，过 `chain-audit` 两道门后同步）。详见 **H77/H78** |
 | **死代码扫描工具化 + API 探针清除**（v0.37） | `deadcode-scan` 进工具本体（认 `noqa` 豁免、只提示不默认拦人，并把"`harvester/` 必须 0 条"钉进套件）；第一次跑就抓到旧扫描漏掉的 3 条。另删掉那份**纯打印、无断言**的 API 链形状探针——其能力已由 `test_v25_topic_chains.py`（含 404 路径）与 view 真实载荷门覆盖。详见 **H79/H80** |
 | 测试 | 后端 +36 例（累计 565）：`test_v33_*` 21、`test_v35_planseed` 13、`test_v30` +2；view +1 门。**后端 565 / view 25 全绿** |
-| 事实台账 | H67–H78 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
+| **沙箱补丁进版本库 + view 侧审计**（v0.38） | `sitecustomize.py` 移进 `scripts/sandbox/`（原在 gitignore 目录 → 新 clone 上套件的前置条件不存在，文档却教人直接跑）；`deadcode-scan` 修掉"兄弟根静默跳过却宣称覆盖"，并用它对 view 审计抓到 **1 条真死 import**（view `c1c2c06`，25 例仍全绿）。详见 **H81/H82** |
+| 事实台账 | H67–H82 追加进 `docs/HANDOFF-v0.22-next.md` §2 |
 
 ## §2 环境速查（沿用；本轮无变化）
 
 - **沙箱补丁（H53，必须先设）**：本会话沙箱下 `os.mkdir(p, 0o700)` 建出的目录连本
   进程都写不进去 → `tempfile` 必失败 → 直接跑套件会"整体崩"。
-  `$env:PYTHONPATH = "<repo>\docs\reports"`（加载 `sitecustomize.py`）即可；
-  工作区外项目（如 view）用同一招。
+  `$env:PYTHONPATH = "<repo>\scripts\sandbox"`（加载 `sitecustomize.py`）即可；
+  工作区外项目（如 view）用同一招。**v0.38 已把它从 `docs/reports/`（gitignore）移进
+  `scripts/sandbox/` 并写进 README**——全量套件的前置条件不该躺在一个不入库的目录里。
 - venv 解释器：`C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
 - 无 PyYAML 解释器：`…\versions\3.13.12\python.exe`
 - 提交信息用 `-F 文件`（别用 PowerShell here-string —— 已踩两次；v0.33 又差点踩）
@@ -91,7 +93,7 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 
   | 留下的 | 为什么 |
   |---|---|
-  | `sitecustomize.py` | **不是一次性**：沙箱补丁，全量套件靠它跑（H53）——该写进 README |
+  | `sitecustomize.py` | 已移进 **`scripts/sandbox/`**（v0.38，进版本库）并写进 README：它是**环境适配件**不是一次性脚本，而全量套件的前置条件不该躺在 gitignore 目录里 |
   | `run_tests.py` | 文档里的备用跑法（HANDOFF-v0.24 环境节） |
   | `probe-*.py` / `resolve-members.py` / `topic-overlap.py` | 一次性**探查**（回答当时的具体问题），属报告；**别再当工具用** |
   | `verify-planseed-*.py` / `judgment-v0*.yaml` | 迁移验证 + **逐轮判断文件**（允许保留的一次性形态） |
@@ -150,7 +152,7 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 | noise_high 复核四分 | 19 / 20 / 1 / 1 | 登记零散 / 归 M1 / 归 003 / 保持现状 |
 | 成员对账 | 010: 324→**373**、003: 27→**53**、002: 36→**38**、004: 29→**40**、M1: 0→**162** | 注册表成员数（apply 输出） |
 | `triage()` 耗时 | **529 秒 → 2 秒** | 同机同库，1964 会话 / 62899 消息；输出逐项一致 |
-| 测试 | **572 例 OK**（venv）/ 无 PyYAML 563 errors=59（0 failures） | `unittest discover -s tests` |
+| 测试 | **574 例 OK**（venv）/ 565 errors=59（无 PyYAML，0 failures） | `unittest discover -s tests` |
 | 死代码扫描 | `harvester/` **0/0/0**（工具化后第一次跑抓到旧扫描漏掉的 3 条：2 条真死已删 + 1 条可用性探测改为 `noqa` 豁免） | `python -m harvester deadcode-scan`；套件 `test_harvester_package_has_no_dead_code` |
 | M1 关键词收紧 | 10 → **3**（用词/措辞/微表情）；28 条旧命中里仍命中 7，跌破 21（4 条含整合诉求的真工作 / 14 条兜底档 / 3 条纯查询） | `docs/reports/probe-m1-keywords.py` + 重跑分诊 |
 | 零散登记 | 139 → **153**（v0.36 复核 30 条 `noise_maybe`，登记 14 条） | `--noise-list` |
