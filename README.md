@@ -115,7 +115,50 @@ python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
     --triage-out docs/reports/triage-report.md   # 零散分诊：取信息 vs 整合信息
 python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
     --triage-json docs/reports/triage-full.json  # 分诊**全量** JSON（填 plan 用这个）
+python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
+    --triage-brief topic_hint --triage-brief-out docs/reports/brief.txt  # 一行一条，不截断
+# ④ 分诊 JSON + 逐轮判断 → plan 草稿（机械映射与校验在工具里，见下）
+python -m harvester topic-consolidate --meta topics_meta.db \
+    --plan-seed docs/reports/triage-full.json --judgment docs/reports/judgment.yaml \
+    --craft-topic new:M1 --require-covered noise_high \
+    --seed-out plan.yaml
 ```
+
+### 3.1 分诊 → plan：机械部分在工具里，判断在文件里（v0.35）
+
+**为什么有这一步**：v0.33/v0.34 两轮都把「读分诊 → 写 plan」写成了
+`docs/reports/make-plan-*.py` 一次性脚本，而它**每轮采集/起草都要重跑**。按项目
+铁律，机械部分进了 `harvester/planseed.py`；`docs/reports/` 只留**逐轮的判断文件**。
+
+- `--triage-brief [判定类]`：一行一条（`verdict / sid / 日期 / 命中主题 / 首条原文`），
+  **不截断条数**（人读报告每类封顶 60 条）；加 `--triage-brief-out` 落盘。
+- `--plan-seed <triage.json>`：把 `topic_hint` 的机械命中映射成主题 **id**、
+  把 `craft_material` 整类归位（`--craft-topic tp-x` 或 `new:KEY`）、把未 assign 的
+  主题列进 `keep`（完整性），并按判定类打出**覆盖统计**。
+  `--require-covered noise_high` 表示"这一类必须逐条归置完，否则退出码 2"。
+- `--judgment <yaml>`：**逐轮判断**，就是原来一次性脚本里那些清单的形态：
+
+  ```yaml
+  version: 1
+  new_topics:                        # 要新建的主题（可选）
+    - {key: M1, name: 创作素材与背景检索, keywords: [描写, 用词]}
+  craft_topic: new:M1                # craft_material 整类归这里
+  overrides:                         # 逐条改判：sid → tp-xxx / new:KEY
+    qianwen-raw:abc: tp-20261008-010
+  noise: [yuanbao-raw:xyz]           # 登记零散（**必须显式列出**，不自动登记）
+  skip: [{sid: yuanbao-raw:def, why: 语义两可}]   # 本轮不动（与"忘了"区分开）
+  ```
+
+- **fail loud 而非静默**：judgment 里出现分诊结果里没有的 sid、指向不存在的主题、
+  或同一 sid 既改判又登记零散 → 报错退出 2；`topic_hint` 命中的主题名已被改名/
+  删除 → 报错（不丢行）。
+- **覆盖统计里 `unhandled` 是要看见的**：缺省不动的 `substantive` / `noise_maybe`
+  会显式计数（未处理 ≠ 通过）。
+- 产出的 plan **保证能过 `validate_plan`**（完整性 + 重复检查），可直接
+  `--apply`（缺省 dry-run）。
+- 迁移等价性已在真库上验证：新工具**逐条复现**了 v0.33（assign 272 / noise 19 /
+  skip 1）与 v0.34（assign 28 / keep 12）两份已落库 plan，随后删除了那三个一次性
+  脚本；两轮的判断固化为 `docs/reports/judgment-v033.yaml`、`judgment-v034.yaml`。
 
 - **零散分诊（取信息 vs 整合信息）**：按「只要求查询（是什么/含义/翻译/出处/
   推荐…）、没提分析提炼整理归纳」判"这轮对话只为取信息"。**实测精度不足以自动
@@ -295,7 +338,7 @@ frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain �
 | 命令 | 用途 |
 |---|---|
 | `topic-candidates` | 自动聚类候选推荐：只产候选簇报告，不改注册表 |
-| `topic-consolidate` | 主题梳理流水线：出梳理包（信号表/零散候选/模板）→ 执行人填的 plan（完整性校验 + 文件级原子 + 快照）→ 查零散登记 |
+| `topic-consolidate` | 主题梳理流水线：出梳理包（信号表/零散候选/模板）→ 执行人填的 plan（完整性校验 + 文件级原子 + 快照）→ 查零散登记；分诊三出口（人读报告 `--triage-out` / 全量 JSON `--triage-json` / 一行一条简报 `--triage-brief`）；**`--plan-seed` 把分诊 JSON + `--judgment` 判断文件变成可执行的 plan 草稿**（机械映射与校验在工具里，判断不落代码） |
 | `topic register/add/remove/merge/rename/delete/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源）；`rename` 保 id；`delete` 带快照；`export` 给机器（topic.json）、`md` 给人（一页速览，四问：是什么/跨多久/关键转折/结论与未决） |
 | `chain-validate` | topic-chain 长文独立校验（frontmatter + 锚点可回溯） |
 
