@@ -4,9 +4,9 @@
 建成**可全文检索的本地库**，并支撑后续蒸馏（思路过程 / 工具改进 / Harness
 踩坑 / 用户画像）。
 
-当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1946 会话 /
-55203 消息 / 30956 工具步（截至 2026-10-07，随 sync 持续增长；
-FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
+当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1964 会话 /
+62899 消息 / 36647 工具步 / 294 错误（截至 2026-10-09 库快照，随 sync
+持续增长；FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
 留接口。
 
 依赖边界（诚实声明）：
@@ -16,12 +16,12 @@ FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  23 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  29 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**417 例全绿**）。用无 PyYAML 的解释器会得到
-  `Ran 408 tests / FAILED (errors=23)`——那 23 例全是 PyYAML 缺失所致。
+  （3.13 + PyYAML 6.0.3，**463 例全绿**）。用无 PyYAML 的解释器会得到
+  `Ran 460 tests / FAILED (errors=29)`——那 29 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
 - **`verify/` 采集工具需要 `requests` + `websocket-client`**（登录态直采管
   线，见下文），用独立 venv 运行，不污染包本体。
@@ -96,18 +96,22 @@ python -m harvester update    # 收件箱收割 -> 只导出新增/变更会话 
 ### 主题注册（T 轨）：发现簇 → 注册 → 页面出现
 
 主题**不是固定清单**：由聚合数据中发现簇后注册进 meta 库，注册即出现在
-view「主题」tab；代码零写死主题名。三个命令：
+view「主题」tab；代码零写死主题名。命令：
 
 ```bash
 python -m harvester topic-candidates --db harvester.db --out docs/reports/   # 聚类推荐候选簇（只产候选，不改注册表）
 python -m harvester topic register --meta topics_meta.db --name "主题名" --keywords "k1,k2"   # 认可后注册
 python -m harvester topic add --meta topics_meta.db --id <tp-id> --sids "<sid1>,<sid2>" --evidence "出处"   # 挂成员
+python -m harvester topic merge --meta topics_meta.db --id <目标> --from "<源1>,<源2>"   # 并成一个主题（成员/关键词并入后删源）
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
 ```
 
 - 注册库默认读 `topics_meta.db`（与 harvester.db 同目录）；**view 的
   「主题」tab 需要 api-serve 启动时带 `--topics-meta <topics_meta.db>`**
   （`start.cmd` 已内置），未配置时该 tab 空表并提示 hint，不炸。
+- `topic merge` 只做确定性的并集（成员按 sid 去重、证据带「合并自 <源>」
+  尾注、关键词并集），**不做语义判断也不给关键词去噪**——自动聚类候选的
+  关键词常含标题 bigram 碎片，合并后需人工定稿关键词。
 - 批量注册场景（117 簇级别）参考 `scripts/register_candidates_20261009.py`
   ——解析候选报告后逐簇调 `topics.register_topic` + `add_members`。
 
@@ -173,7 +177,7 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 | 命令 | 用途 |
 |---|---|
 | `topic-candidates` | 自动聚类候选推荐：只产候选簇报告，不改注册表 |
-| `topic register/add/remove/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab） |
+| `topic register/add/remove/merge/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源） |
 | `chain-validate` | topic-chain 长文独立校验（frontmatter + 锚点可回溯） |
 
 ### 服务

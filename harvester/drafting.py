@@ -65,6 +65,10 @@ def render_transcript(db: Path, sid_query: str,
     消息锚点用 rowid 序，步骤锚点用 steps.seq（与 report-* 口径一致）。
     返回 (transcript_text, meta)；meta 含 sid/source/session_id/title/
     n_msgs/n_steps/truncated。文本超预算时从尾部截断并标注。
+
+    **取文口径：raw 优先**（H3/H38：raw 恒为原文；text 列为检索用 bigram
+    切片，真库 33832/62899 条与 raw 不等）。v0.23 前此处为 text 优先，
+    会把 bigram 原貌（"丁樾 樾瘫 瘫坐…"）当成原文喂进蒸馏包。
     """
     db = Path(db)
     row = _fetch_session(db, sid_query)
@@ -88,7 +92,7 @@ def render_transcript(db: Path, sid_query: str,
     body: list[str] = []
     for m in msgs:
         anchor = f"{sid}#{m['rn']}"
-        text = (m["text"] or m["raw"] or "").strip()
+        text = (m["raw"] or m["text"] or "").strip()
         if not text:
             continue
         body.append(f"[{anchor}] [{m['role']}] {text}")

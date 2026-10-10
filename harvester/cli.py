@@ -682,8 +682,9 @@ def cmd_cards_new(args) -> int:
 
 def cmd_topic(args) -> int:
     """主题注册表（T1 MVP，v0.22）：独立 meta 库 topics_meta.db。"""
-    from .topics import (add_members, list_topics, register_topic,
-                         remove_member, show_topic, title_chain)
+    from .topics import (add_members, list_topics, merge_topics,
+                         register_topic, remove_member, show_topic,
+                         title_chain)
     meta = Path(args.meta)
     if args.cmd == "register":
         kws = [k.strip() for k in (args.keywords or "").split(",")
@@ -700,6 +701,21 @@ def cmd_topic(args) -> int:
     if args.cmd == "remove":
         remove_member(meta, args.id_, args.sid)
         print(f"[topic] {args.id_} 移除成员 {args.sid}")
+        return 0
+    if args.cmd == "merge":
+        srcs = [s.strip() for s in (args.from_ or "").split(",") if s.strip()]
+        if not args.id_ or not srcs:
+            print("错误: merge 需要 --id <目标> 与 --from <源,源…>",
+                  file=sys.stderr)
+            return 2
+        r = merge_topics(meta, args.id_, srcs,
+                         delete_sources=not args.keep_sources)
+        print(f"[topic] 合并入 {r['target']}：新增成员 {r['added']}、"
+              f"既有 {r['kept']}；关键词 {('、'.join(r['keywords'])) or '（无）'}")
+        if r["deleted"]:
+            print(f"[topic] 已删除源主题: {'、'.join(r['deleted'])}")
+        else:
+            print(f"[topic] 源主题保留: {'、'.join(r['sources'])}")
         return 0
     if args.cmd == "list":
         for t in list_topics(meta):
@@ -1143,14 +1159,20 @@ def main(argv=None) -> int:
 
     ptp = sub.add_parser(
         "topic",
-        help="主题注册表（T1/T2）：register/add/remove/list/show/chain/pack")
-    ptp.add_argument("cmd", choices=["register", "add", "remove", "list",
-                                     "show", "chain", "pack"])
+        help="主题注册表（T1/T2）：register/add/remove/merge/list/show/"
+             "chain/pack")
+    ptp.add_argument("cmd", choices=["register", "add", "remove", "merge",
+                                     "list", "show", "chain", "pack"])
     ptp.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
     ptp.add_argument("--name", help="register：主题名称")
     ptp.add_argument("--keywords", help="register：逗号分隔关键词")
-    ptp.add_argument("--id", dest="id_", help="add/remove/show/chain：主题 id")
+    ptp.add_argument("--id", dest="id_",
+                     help="add/remove/merge/show/chain：主题 id")
+    ptp.add_argument("--from", dest="from_",
+                     help="merge：逗号分隔源主题 id（成员并入 --id 后删除）")
+    ptp.add_argument("--keep-sources", action="store_true",
+                     help="merge：保留源主题行（缺省删除）")
     ptp.add_argument("--sids", help="add：逗号分隔成员 sid 列表")
     ptp.add_argument("--evidence", default="",
                      help="add：成员证据说明（如关键词命中口径）")
