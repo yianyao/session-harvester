@@ -17,8 +17,9 @@ from pathlib import Path
 from harvester.drafting import render_transcript
 from harvester.indexing import SCHEMA, index_session
 from harvester.models import Message, SessionRecord
-from harvester.topics import (add_members, ensure_topics_db, list_topics,
-                              merge_topics, register_topic, show_topic)
+from harvester.topics import (add_members, delete_topic, ensure_topics_db,
+                              list_topics, merge_topics, register_topic,
+                              rename_topic, show_topic)
 
 
 class TestTopicMerge(unittest.TestCase):
@@ -88,6 +89,57 @@ class TestTopicMerge(unittest.TestCase):
         self.assertEqual([m["sid"] for m in d["members"]], ["src:keep"])
         self.assertEqual(d["keywords"], ["甲"])
         self.assertEqual(len(list_topics(self.meta)), 3)
+
+
+class TestTopicRenameDelete(unittest.TestCase):
+    """#10 的另一半：改名（保留 id，chain 仍对得上）与删除（带快照留痕）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.meta = ensure_topics_db(Path(self.tmp.name) / "topics_meta.db")
+        self.a = register_topic(self.meta, "旧名", keywords=["k1"])
+        self.b = register_topic(self.meta, "另一个", keywords=["k2"])
+        add_members(self.meta, self.a, ["src:1"], evidence="e")
+
+    def tearDown(self):
+        try:
+            self.tmp.cleanup()
+        except OSError:
+            pass
+
+    def test_rename_keeps_id_and_members(self):
+        r = rename_topic(self.meta, self.a, "新名")
+        self.assertEqual(r["old_name"], "旧名")
+        self.assertEqual(r["new_name"], "新名")
+        d = show_topic(self.meta, self.a)          # id 未变
+        self.assertEqual(d["name"], "新名")
+        self.assertEqual([m["sid"] for m in d["members"]], ["src:1"])
+        self.assertEqual(d["keywords"], ["k1"])
+
+    def test_rename_conflict_and_missing_fail_loud(self):
+        with self.assertRaises(KeyError):          # 与既有主题重名
+            rename_topic(self.meta, self.a, "另一个")
+        with self.assertRaises(KeyError):          # 主题不存在
+            rename_topic(self.meta, "tp-nonexistent", "x")
+        with self.assertRaises(ValueError):        # 空名
+            rename_topic(self.meta, self.a, "   ")
+        # 失败路径不改动任何行
+        self.assertEqual(show_topic(self.meta, self.a)["name"], "旧名")
+        self.assertEqual(len(list_topics(self.meta)), 2)
+
+    def test_rename_to_same_name_is_noop(self):
+        rename_topic(self.meta, self.a, "旧名")     # 与自身同名不报错
+        self.assertEqual(show_topic(self.meta, self.a)["name"], "旧名")
+
+    def test_delete_returns_snapshot_and_removes_row(self):
+        snap = delete_topic(self.meta, self.a)
+        self.assertEqual(snap["name"], "旧名")
+        self.assertEqual(snap["keywords"], ["k1"])
+        self.assertEqual([m["sid"] for m in snap["members"]], ["src:1"])
+        self.assertTrue(snap["created"])
+        self.assertEqual({t["id"] for t in list_topics(self.meta)}, {self.b})
+        with self.assertRaises(KeyError):          # 再删即报错（不静默）
+            delete_topic(self.meta, self.a)
 
 
 class TestTranscriptRawFirst(unittest.TestCase):

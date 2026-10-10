@@ -501,15 +501,40 @@ def api_cards(con: sqlite3.Connection, db: Path,
 
 # ---------- HTTP 层（薄壳） ----------
 
+def _chain_display_name(fm: dict, body: str, path) -> str:
+    """chain 显示名：正文 H1 优先（同主题多条 chain 靠它区分），
+    其次 frontmatter.topic，再次文件名。"""
+    h1 = re.search(r"^#\s+(.+)$", body, re.M)
+    return ((h1.group(1).strip() if h1 else None)
+            or fm.get("topic") or Path(path).stem)
+
+
 def api_topics(con: sqlite3.Connection, db: Path,
-               topics_meta: Path | None) -> dict:
+               topics_meta: Path | None,
+               chain_root: Path | None = None) -> dict:
     """T3：主题注册表 + 簇统计（additive；api_version=1 不动）。
 
     topics_meta 未配置或文件缺失 → 空表 + hint（降级不炸，view 需兼容
     旧上游，红线 §5.2）。
+
+    v0.25 additive：给了 chain_root 时，每个主题额外带
+    `chains_count` / `chain_names`（该主题在 chain_root 下有几条 chain 长文）
+    —— 主题列表据此显示"这条主题有几条思维链"。
     """
     topics: list[dict] = []
     hint = None
+    chain_index: dict[str, list[str]] = {}
+    if chain_root and Path(chain_root).is_dir():
+        from .topicchain import load_chain
+        for p in sorted(Path(chain_root).glob("chain-*.md")):
+            try:
+                cdoc = load_chain(p)
+            except (ValueError, RuntimeError, OSError):
+                continue
+            cfm = cdoc["fm"]
+            if isinstance(cfm, dict) and cfm.get("topic_id"):
+                chain_index.setdefault(cfm["topic_id"], []).append(
+                    _chain_display_name(cfm, cdoc["body"], p))
     if not topics_meta or not Path(topics_meta).is_file():
         hint = ("topics_meta 未配置或不存在（启动时加 "
                 "--topics-meta <topics_meta.db>）")
@@ -536,7 +561,9 @@ def api_topics(con: sqlite3.Connection, db: Path,
                     "id": row["id"], "name": row["name"],
                     "keywords": row["keywords"], "created": row["created"],
                     "members_count": len(member_sids),
-                    "first_activity": first_at, "last_activity": last_at})
+                    "first_activity": first_at, "last_activity": last_at,
+                    "chains_count": len(chain_index.get(row["id"], [])),
+                    "chain_names": chain_index.get(row["id"], [])})
         finally:
             mcon.close()
     r = {"api_version": API_VERSION, "topics": topics,
@@ -549,12 +576,18 @@ def api_topics(con: sqlite3.Connection, db: Path,
 def api_topic_chain(con: sqlite3.Connection, db: Path, topic_id: str,
                     topics_meta: Path | None, chain_root: Path | None) -> dict | None:
     """T3：chain 长文结构化。在 chain_root 下扫 chain-*.md，按
-    frontmatter.topic_id 匹配。未找到/未配置 → None（HTTP 404）。"""
+    frontmatter.topic_id 匹配。未找到/未配置 → None（HTTP 404）。
+
+    v0.25 additive：**一个主题可以有多条 chain**（合并主题后即有），
+    故除旧字段（= 文件名序第一条）外新增 `chains`（全量）与 `chain_count`。
+    旧字段语义不变（仍是第一条），旧上游不受影响。
+    """
     from .topicchain import load_chain
     root = Path(chain_root) if chain_root else None
     if not root or not root.is_dir() or not topics_meta \
             or not Path(topics_meta).is_file():
         return None
+    matches: list[dict] = []
     for p in sorted(root.glob("chain-*.md")):
         try:
             d = load_chain(p)
@@ -562,10 +595,23 @@ def api_topic_chain(con: sqlite3.Connection, db: Path, topic_id: str,
             continue  # 坏文档跳过：暴露端点不因单文件失败而 500
         fm = d["fm"]
         if isinstance(fm, dict) and fm.get("topic_id") == topic_id:
-            return {"api_version": API_VERSION, "topic_id": topic_id,
-                    "fm": fm, "body": d["body"], "chain_path": str(p),
-                    "db_fingerprint": db_fingerprint(db, con=con)}
-    return None
+            anchors = fm.get("anchors") or []
+            matches.append({
+                "fm": fm, "body": d["body"], "chain_path": str(p),
+                "name": _chain_display_name(fm, d["body"], p),
+                "stages": len(anchors),
+                "nodes": sum(len(s.get("nodes") or []) for s in anchors
+                             if isinstance(s, dict)),
+                "prompt_version": fm.get("prompt_version"),
+            })
+    if not matches:
+        return None
+    first = matches[0]
+    return {"api_version": API_VERSION, "topic_id": topic_id,
+            "fm": first["fm"], "body": first["body"],
+            "chain_path": first["chain_path"],
+            "db_fingerprint": db_fingerprint(db, con=con),
+            "chain_count": len(matches), "chains": matches}
 
 
 def api_keywords(con: sqlite3.Connection, db: Path,
@@ -704,7 +750,7 @@ def make_handler(db: Path, token: str | None,
                     self._json(api_reports_agents(con, db, qs,
                                                   meta_db=suggestions_meta))
                 elif path == "/api/topics":
-                    self._json(api_topics(con, db, topics_meta))
+                    self._json(api_topics(con, db, topics_meta, chain_root))
                 elif (m2 := re.fullmatch(r"/api/topic/(.+)/chain", path)):
                     doc = api_topic_chain(con, db, unquote(m2.group(1)),
                                           topics_meta, chain_root)
