@@ -342,8 +342,10 @@ def apply_plan(meta_path: Path, plan: dict, dry_run: bool = True,
                 "preview": _preview(plan, have)}
 
     backup_dir = Path(backup_dir) if backup_dir else meta_path.parent
+    # 命名与既有约定一致（`<库>.bak-<时间>-pre-apply`）：.gitignore 的
+    # `*.db.bak*` 才盖得住，否则备份文件会以未跟踪状态冒出来（本轮踩过）
     bak = backup_dir / (meta_path.name + time.strftime(
-        "-bak-%Y%m%d-%H%M%S-pre-apply"))
+        ".bak-%Y%m%d-%H%M%S-pre-apply"))
     shutil.copy2(meta_path, bak)
     tmp = meta_path.with_name(meta_path.name + ".tmp-apply")
     shutil.copy2(meta_path, tmp)
