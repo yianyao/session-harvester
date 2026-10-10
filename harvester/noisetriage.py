@@ -157,8 +157,13 @@ def _topic_keyword_index(meta_path: Path) -> list[tuple[str, str]]:
                     out.append((k, r["name"]))
     finally:
         con.close()
-    # 长关键词优先，避免"对比"这类短词抢走命中
-    return sorted(set(out), key=lambda kv: -len(kv[0]))
+    # 长关键词优先，避免"对比"这类短词抢走命中。
+    # **必须是全序**（v0.41 修）：原先是 `sorted(set(out), key=lambda kv: -len(kv[0]))`
+    # ——同长度关键词之间的顺序来自 **set 迭代顺序**，而字符串哈希按进程随机化
+    # （PYTHONHASHSEED），于是**同一库同一输入、两次独立进程可能命中不同主题**
+    # （实测 65 条并列里有 2 条真的翻了：072↔010、009↔007）。补上主题名与关键词
+    # 作为次级/三级键，使顺序成为输入的纯函数。
+    return sorted(set(out), key=lambda kv: (-len(kv[0]), kv[1], kv[0]))
 
 
 def triage(db_path: Path, meta_path: Path | None = None,
@@ -322,8 +327,12 @@ def render_brief(t: dict, only: str | None = None, chars: int = 60) -> str:
                                            key=lambda kv: -kv[1])),
          "# verdict\tsid\tcreated\thint\tfirst_user"]
     for r in rows:
-        hint = (r["reason"].replace("命中主题关键词：", "")
-                if r["verdict"] == "topic_hint" else "")
+        # 按标记切分取主题名；**深会话也要填**（`deep_topic_hint` 的 reason 带前缀
+        # "深会话（…），机械命中主题关键词：X"，只认 topic_hint 会让深会话那列全空
+        # ——v0.40 子代理复盘时实测 65 条一行都没值）
+        marker = "命中主题关键词："
+        reason = r["reason"]
+        hint = reason.split(marker, 1)[1].strip() if marker in reason else ""
         txt = " ".join((r.get("first_user") or "").split())[:chars]
         L.append(f"{r['verdict']}\t{r['sid']}\t{r['created_at']}\t{hint}\t{txt}")
     return "\n".join(L) + "\n"
