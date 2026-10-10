@@ -1,5 +1,36 @@
 # AGENTS.md — agent 工作规则
 
+## 0. 开工第一件事（**先读这一段，不要直接开工**）
+
+> 背景：`WorkBuddy\<会话时间戳>\` 是**按会话隔离**的工作区，新会话看不到上一个会话的
+> 目录。因此**唯一可靠的状态入口是本文件这一段**（它会被自动注入），以及仓库内
+> **已提交**的交接文档。详见 `$DSH_HOME/AGENTS.md` §六。
+
+- **当前状态快照**（每次收尾必须更新本段；最后更新 2026-10-10）：
+
+  | 项 | 值 |
+  |---|---|
+  | 后端 head | `5dde45f`（v0.31 工具化补齐：chain-audit） |
+  | 后端测试基线 | **520 例全绿**（venv，见 §「环境」；须带沙箱补丁，见交接 H53） |
+  | 无 PyYAML 门禁 | `Ran 511 / FAILED (errors=45)`（设计行为） |
+  | 前端 | 仓库 `..\harvester-view`，head `7066e5e`，**24 例全绿** |
+  | 主题注册表 | 13 个主题（语义梳理后；零散登记 120 条） |
+  | 交接文档（正文） | `docs/HANDOFF-v0.24-next.md`（§0 总览、§7.4 待办）+ `docs/HANDOFF-v0.22-next.md` §2 事实台账 H1–H66 |
+
+- **下一件事（按序，详见 `docs/HANDOFF-v0.24-next.md` §7.4）**：
+  1. 把 `docs/reports/` 里**每轮都要跑**的两个脚本提升为工具：
+     `topic dedupe`（H40 会话级去重）、`topic turns`（回合索引 / raw 全文导出）；
+  2. 语义分诊：对 `--triage` 产出的 109 条 `topic_hint` + 142 条 `craft_material`
+     （+ 41 条 `noise_high`）做一次判定，产出 `assign` + `noise` 的 plan（走 `topic-consolidate`）；
+  3. V3 剩余产物：给人读的 `topic.md`（给机器的 `topic.json` 已完成，见 `topic export`）。
+
+- **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
+  `$env:PYTHONPATH = "<repo>\docs\reports"` 后
+  `& $venv -m unittest discover -s tests` → 预期 **520 例 OK**。
+
+- **收尾纪律**：交接正文写进仓库并**提交**（必要时 push）+ 更新本段快照 +
+  同轮 `read` 读回验证后再声称"已生成"（`$DSH_HOME/AGENTS.md` §六 17/18 条）。
+
 ## 开工前上下文自检（强制）
 
 1. **触发条件**：任务预计修改 ≥4 个文件，或需要多轮"修改→测试→验证"循环（如跨端点/跨仓库的功能改造）。
