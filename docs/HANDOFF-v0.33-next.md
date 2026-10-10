@@ -76,9 +76,24 @@ $env:PYTHONPATH = "<repo>\docs\reports"      # 沙箱补丁，见 §2
 - **已完成**：主题语义梳理（126→14）、`topic merge/rename/delete/keywords/
   export/md/dedupe/turns`、`topic-consolidate`（出包/执行/零散登记/分诊+JSON）、
   `chain-audit`、`noisetriage`、`topicexport`、多链 API、view 多链渲染与人读形态。
-- **未完成**：§0 表里的四件。另：`docs/reports/` 下仍有 `consolidate-topics.py` /
-  `finalize-keywords.py` / `make-noise-plan.py` 属**一次性数据操作**（通用形态已进
-  `topic-consolidate`，不必再工具化）。`check-api-chain.py` 待移（见 §0 表 4）。
+- **未完成**：§0 表里的四件（`noise_maybe` 30 条 / `check-api-chain.py` 搬家 /
+  M1 关键词裁决 / 继续审一次性脚本）。
+- **`docs/reports/` 一次性脚本清账**（按用户 2026-10-10 第 1 点要求逐个体检；判定
+  口径：**这个动作下次采集/起草还会不会重跑**）——本轮**已删 12 个被工具取代的**：
+  `anchor-audit.py`/`check-quotes.py` → `chain-audit`；`dedupe-topic.py` → `topic dedupe`；
+  `turn-index.py`/`dump-user-turns-raw.py` → `topic turns`；`run-triage.py`/
+  `make-noise-plan.py` → `topic-consolidate`；`consolidate-topics.py`/
+  `finalize-keywords.py`/`fix-keywords.py`/`register-topics.py`/`move-039-to-T9.py`
+  → `topic-consolidate` 的 plan 与 `topic keywords`。**留下的都有理由**：
+
+  | 留下的 | 为什么 |
+  |---|---|
+  | `check-api-chain.py` | 下一个搬家对象（§0 表 2） |
+  | `deadcode-scan.py` | **下一个工具化候选**：全局记忆 §四 12 是"每轮收尾的固定动作"，真的会重跑 |
+  | `sitecustomize.py` | **不是一次性**：沙箱补丁，全量套件靠它跑（H53）——该写进 README |
+  | `run_tests.py` | 文档里的备用跑法（HANDOFF-v0.24 环境节） |
+  | `probe-*.py` / `resolve-members.py` / `topic-overlap.py` | 一次性**探查**（回答当时的具体问题），属报告；**别再当工具用** |
+  | `verify-planseed-*.py` / `judgment-v0*.yaml` | 本轮迁移验证 + **逐轮判断文件**（允许保留的一次性形态） |
 - **③ 前端集成门搬家（本轮已完成，`harvester-view` 提交 `533a18d`）**：
   1. `docs/reports/check-view-real.py` → `harvester-view/tests/check_real_payload.py`
      （取数逻辑改为**选链最多的主题**而非写死 `tp-20261008-010`；新增退出码 **3 =
