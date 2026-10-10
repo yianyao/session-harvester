@@ -29,8 +29,9 @@
   python -m harvester triage [--db] [--since 7d] [--cards-root 目录] [--min-count 2] [--out 文件]
   python -m harvester draft --sid <sid> [--type pitfall] [--out 文件] [--max-chars 24000]
       蒸馏队列：新会话确定性初筛（新错误pattern/旧坑重现/Skill行为链/高信号会话）
-  python -m harvester cards validate --root 目录 [--db]
-      知识卡片 §8 规范校验（frontmatter 完整性 + 锚点有效性）（G3）
+  python -m harvester cards validate --root 目录 [--db] [--topics-meta 库]
+      知识卡片 §8 规范校验（frontmatter 完整性 + 锚点有效性）（G3）；
+      给了 --topics-meta 时追加「卡片 ↔ 主题注册表」一致性核对
   python -m harvester cards new --sid <sid> --root 目录 [--type pitfall] [--turn N]
       从索引库会话生成卡片脚手架（evidence 留白，人工补全后 validate）
   python -m harvester kb-init [--root ~/.workbuddy/knowledge]
@@ -687,6 +688,55 @@ def cmd_deadcode_scan(args) -> int:
     return 0
 
 
+def cmd_regress(args) -> int:
+    """端到端回归语料（v0.43）——从空库跑完整条链路，逐项核对关键数字。
+
+    **本命令不读真库**：全部在 `tempfile` 里用语料造临时索引库 + 临时 meta 库
+    （`indexing.SCHEMA` + `index_session`），跑完即删。没有 `--db` / `--meta`
+    参数是**故意的**——给一个"顺手指向真库"的入口，等于给这条铁律留后门。
+
+    退出码：0 全通过 / 1 有断言失败 / 3 **未执行**（前置缺失，不是通过）。
+    """
+    from .regress import (CORPUS_VARIANTS, EXIT_FAIL, EXIT_NOT_RUN, EXIT_OK,
+                          corpus_by_name, dump_json, render_report, run_regress)
+    if args.corpus not in CORPUS_VARIANTS:
+        print(f"错误: 未知语料 {args.corpus!r}（可选："
+              + "、".join(sorted(CORPUS_VARIANTS)) + "）", file=sys.stderr)
+        return 2
+    r = run_regress(Path(args.temp_base) if args.temp_base else Path.cwd(),
+                    corpus=corpus_by_name(args.corpus),
+                    keep_temp=args.keep_temp)
+    text = render_report(r)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"[regress] 人读报告已写入: {out}", file=sys.stderr)
+    if args.json:
+        jout = Path(args.json)
+        jout.parent.mkdir(parents=True, exist_ok=True)
+        jout.write_text(dump_json(r), encoding="utf-8", newline="\n")
+        print(f"[regress] 机读结果已写入: {jout}"
+              f"（{r['assertions']} 条断言，失败 {r['failed_assertions']}）",
+              file=sys.stderr)
+    if not args.out and not args.json:
+        print(text)
+    elif args.list:
+        print(text)
+    summary = (f"[regress] {r['status_cn']}｜步骤：通过 {r['counts']['pass']} / "
+               f"失败 {r['counts']['fail']} / 未执行 {r['counts']['not_run']} / "
+               f"不适用 {r['counts']['not_applicable']}｜断言 "
+               f"{r['assertions']} 条，失败 {r['failed_assertions']} 条"
+               + (f"｜临时目录 {r['temp_dir']}" if r.get("temp_dir") else ""))
+    print(summary, file=sys.stderr)
+    for s in r["steps"]:
+        if s["status"] != "pass":
+            print(f"  - {s['step']}：{s['failed'] or s['why']}",
+                  file=sys.stderr)
+    return {"pass": EXIT_OK, "fail": EXIT_FAIL,
+            "not_run": EXIT_NOT_RUN}[r["status"]]
+
+
 def cmd_topic_candidates(args) -> int:
     """T5 自动聚类候选推荐器：标题 n-gram + 任务签名产候选。
 
@@ -807,14 +857,25 @@ def cmd_suggest_status(args) -> int:
 
 
 def cmd_cards(args) -> int:
-    """知识卡片校验（G3 确定性一半）：§8 frontmatter 规范 + 锚点有效性。"""
+    """知识卡片校验（G3 确定性一半）：§8 frontmatter 规范 + 锚点有效性
+    （+ 给了 --topics-meta 时的「卡 ↔ 主题」一致性核对，v0.43）。"""
     from .cards import render_report, validate_cards
     root = Path(args.root)
     if not root.is_dir():
         print(f"错误: 卡片目录不存在: {root}", file=sys.stderr)
         return 2
     dbp = Path(args.db) if args.db else None
-    results, summary = validate_cards(root, dbp)
+    tm = Path(args.topics_meta) if args.topics_meta else None
+    if tm is not None and not tm.is_file():
+        # fail loud：声明要核对主题却给不出注册表 → 报错退出，不当成
+        # "没有主题"（那会把没执行的检查伪装成通过）。
+        print(f"错误: 主题注册表不存在: {tm}", file=sys.stderr)
+        return 2
+    try:
+        results, summary = validate_cards(root, dbp, topics_meta=tm)
+    except (FileNotFoundError, ValueError, RuntimeError) as e:
+        print(f"错误: 主题核对无法执行: {e}", file=sys.stderr)
+        return 2
     report = render_report(results, summary, root)
     _emit_report(report, args)
     return 1 if summary["error"] else 0
@@ -1466,6 +1527,29 @@ def main(argv=None) -> int:
     pdc.add_argument("--out", default=None, help="报告输出路径（缺省打印到 stdout）")
     pdc.set_defaults(func=cmd_deadcode_scan)
 
+    pgr = sub.add_parser(
+        "regress",
+        help="端到端回归语料（v0.43）：**从空库**跑 "
+             "分诊（含 --triage-deep）→ --plan-seed → --apply dry-run/真写 → "
+             "topic export/md → H87 跨进程确定性，逐项核对关键数字。"
+             "全程只用临时库（造自 indexing.SCHEMA + index_session），"
+             "**真 harvester.db / topics_meta.db 一字节不动**")
+    pgr.add_argument("--out", default=None,
+                     help="人读报告输出路径（缺省打印到 stdout）")
+    pgr.add_argument("--json", default=None,
+                     help="机读结果（JSON）输出路径；人读/机读分出口"
+                          "（下游是程序就别给人读那份）")
+    pgr.add_argument("--keep-temp", dest="keep_temp", action="store_true",
+                     help="保留临时库目录（报告里给出路径），缺省跑完即删")
+    pgr.add_argument("--temp-base", dest="temp_base", default=None,
+                     help="--keep-temp 时临时目录的父目录（缺省当前目录）")
+    pgr.add_argument("--list", action="store_true",
+                     help="同时把报告打印到 stdout（配合 --out）")
+    pgr.add_argument("--corpus", default="default",
+                     help="语料变体：default（内置 12 条）/ drift（**故意漂移**："
+                          "多一条会话，用来实测「断言失败 → 退出码 1」这条路是通的）")
+    pgr.set_defaults(func=cmd_regress)
+
     pk = sub.add_parser("keywords",
                         help="n-gram 关键词统计（只统计 messages.raw，"
                              "H3 契约；落 keywords_meta.db）")
@@ -1529,6 +1613,10 @@ def main(argv=None) -> int:
     pcap = pcdsub.add_parser("validate", help="校验卡片目录")
     pcap.add_argument("--root", required=True, help="卡片库根目录")
     pcap.add_argument("--db", help="索引库路径（给定时校验锚点 session_id）")
+    pcap.add_argument("--topics-meta", dest="topics_meta", default=None,
+                      help="主题注册表 topics_meta.db（可选；给定时追加"
+                           "「卡片声明主题 ↔ 注册表成员资格」一致性核对，"
+                           "缺省不做该检查，行为与旧版一致）")
     pcap.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pcap.set_defaults(func=cmd_cards)
     pcn = pcdsub.add_parser("new", help="从索引库会话生成卡片脚手架")
