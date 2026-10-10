@@ -117,6 +117,68 @@ def remove_member(meta_path: Path, topic_id: str, sid: str) -> None:
         con.close()
 
 
+def merge_topics(meta_path: Path, target_id: str, source_ids: list[str],
+                 delete_sources: bool = True) -> dict:
+    """把 source_ids 的成员/关键词并入 target_id（单事务，幂等安全）。
+
+    口径（#10 主题增删合并的确定性一半；语义边界仍由用户裁决）：
+    - 成员按 sid 去重：target 已有者**保留其原证据**（不被覆盖）；
+      新并入者证据追加来源尾注「（合并自 <源 id>）」——合并可追溯，不丢出处。
+    - 关键词按顺序取并集（target 优先），不做同义归并。
+    - delete_sources=True 时删除源主题行；合并是"并成一个主题"，
+      源 id 不保留影子条目。
+    - 源 id 不存在、源 id 等于 target → KeyError（fail loud，不静默跳过）；
+      整个操作在一个事务内完成，中途异常不留半合并状态。
+
+    返回 {target, added, kept, keywords, sources, deleted}。
+    """
+    meta_path = Path(meta_path)
+    ensure_topics_db(meta_path)
+    if target_id in source_ids:
+        raise KeyError(f"源主题包含目标自身: {target_id}")
+    con = _con(meta_path)
+    try:
+        row = con.execute("SELECT keywords, members FROM topics WHERE id=?",
+                          (target_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"主题不存在: {target_id}")
+        kws = json.loads(row["keywords"])
+        members = json.loads(row["members"])
+        have = {m["sid"] for m in members}
+        added = 0
+        src_rows = []
+        for src in source_ids:
+            srow = con.execute("SELECT keywords, members FROM topics WHERE id=?",
+                               (src,)).fetchone()
+            if srow is None:
+                raise KeyError(f"源主题不存在: {src}")
+            src_rows.append(src)
+            for k in json.loads(srow["keywords"]):
+                if k not in kws:
+                    kws.append(k)
+            for m in json.loads(srow["members"]):
+                if m["sid"] in have:
+                    continue
+                ev = (m.get("evidence") or "").strip()
+                ev = f"{ev}（合并自 {src}）" if ev else f"合并自 {src}"
+                members.append({"sid": m["sid"], "evidence": ev})
+                have.add(m["sid"])
+                added += 1
+        con.execute("UPDATE topics SET keywords=?, members=? WHERE id=?",
+                    (json.dumps(kws, ensure_ascii=False),
+                     json.dumps(members, ensure_ascii=False), target_id))
+        if delete_sources:
+            con.executemany("DELETE FROM topics WHERE id=?",
+                            [(s,) for s in src_rows])
+        con.commit()
+        return {"target": target_id, "added": added,
+                "kept": len(members) - added, "keywords": kws,
+                "sources": src_rows,
+                "deleted": src_rows if delete_sources else []}
+    finally:
+        con.close()
+
+
 def list_topics(meta_path: Path) -> list[dict]:
     if not Path(meta_path).is_file():
         return []
