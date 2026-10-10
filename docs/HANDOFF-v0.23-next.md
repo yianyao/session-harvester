@@ -4,7 +4,7 @@
 > （用户 2026-10-10 指定两个主题：`吾好梦中救人` / `Skill 自学习进化与跨平台设计`）。
 > **当前有效交接见 `docs/HANDOFF-v0.24-next.md`**；本文件保留作历史记录
 > （H 台账正文仍在 `HANDOFF-v0.22-next.md` §2）。
-> 测试基线同步：后端 **485 例全绿**（2026-10-10），前端 **24 例全绿**。
+> 测试基线同步：后端 **496 例全绿**（2026-10-10），前端 **24 例全绿**。
 >
 > 交接时点：2026-10-09 末。上游 head：`0397974`。
 > 前置阅读顺序：`docs/HANDOFF-v0.22-next.md`（H1–H50 事实台账，**禁止重复验证**）
@@ -21,7 +21,7 @@
 | 项 | 值 |
 |---|---|
 | 后端 head | `0397974`（v0.23 五项全部落地），工作树干净 |
-| 后端测试基线 | **485 例全绿**（v0.24 同步；venv 解释器，见 §4。原 457 例为 v0.23 时点） |
+| 后端测试基线 | **496 例全绿**（v0.24 同步；venv 解释器，见 §4。原 457 例为 v0.23 时点） |
 | 前端 head | `4ba4932`（view 工作树干净） |
 | 前端测试基线 | **24 例全绿** |
 | 门禁（无 PyYAML 解释器） | 预期 **FAILED (errors=34)**——**这是设计行为，不是坏了**（T3 拒绝降级解析） |
@@ -174,7 +174,7 @@ AGENTS.md 内容由**人**决定并写入（工具绝不代改，红线）。
 | 项 | 值 |
 |---|---|
 | venv Python（**一切测试/CLI 用它**） | `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`（3.13.14 + PyYAML 6.0.3） |
-| 后端测试 | `& $venv -m unittest discover -s tests` → 预期 **485 例 OK**（v0.24 同步） |
+| 后端测试 | `& $venv -m unittest discover -s tests` → 预期 **496 例 OK**（v0.24 同步） |
 | 前端测试 | 同解释器，在 `harvester-view/` 下 → 预期 **24 例 OK** |
 | meta 库（均 gitignore） | `topics_meta.db` / `suggestions_meta.db` / `artifacts_meta.db` / `keywords_meta.db` |
 | 卡片主库 | `~/.workbuddy/knowledge/cards/`（`--cards-root` 已对齐，P0-4） |

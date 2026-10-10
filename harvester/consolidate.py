@@ -35,12 +35,15 @@ from .topics import (add_members, delete_topic, ensure_topics_db,
 
 PLAN_VERSION = 1
 
-#: 「零散会话候选」的显式规则（工具只做筛，不做判断；理由随条目带出）
+#: 「零散会话候选」的显式规则（工具只做筛，不做判断；**三条必须同时成立**）
 NOISE_RULES = (
-    ("单轮短问答", "user 回合数 = 1 且首条 user 正文 < 40 字符"),
+    ("单轮短问答", "user 回合数 = 1 且首条 user 正文 < 阈值字符"),
     ("无主题归属", "不属于任何已注册主题的成员"),
-    ("无工具步", "steps 表里该会话 0 步（无工具使用的纯聊天）"),
+    ("无工具步", "steps 表里该会话 0 步（纯聊天，没驱动过工具）"),
 )
+
+#: 候选阈值默认值（字符）。用户 2026-10-10 裁决"只登记最窄的一批" → 用 --noise-max-chars 调小
+NOISE_MAX_CHARS = 40
 
 _NOISE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions_noise (
@@ -115,7 +118,8 @@ def noise_sids(meta_path: Path | None) -> set[str]:
 # ── 梳理包（确定性一半） ───────────────────────────────────────────────
 def build_plan_packet(meta_path: Path, db_path: Path | None = None,
                       chain_root: Path | None = None,
-                      member_preview: int = 3) -> str:
+                      member_preview: int = 3,
+                      noise_max_chars: int = NOISE_MAX_CHARS) -> str:
     """产「梳理包」：主题信号表 + 零散会话候选 + 待填的执行模板。
 
     信号全部可核对：成员数、关键词、前 N 个成员标题、活跃区间、已有 chain 数。
@@ -177,25 +181,40 @@ def build_plan_packet(meta_path: Path, db_path: Path | None = None,
                      f"{r['name']} | {' / '.join(titles_of[r['id']])} |")
 
     if con is not None:
-        # 零散会话候选：单轮短问答 且 无主题归属（两条规则同时成立才算候选）
+        # 零散会话候选：**三条规则同时成立**才算候选（规则名见 NOISE_RULES）
+        #   ① 单轮短问答：user 回合 = 1 且首条正文 < 阈值
+        #   ② 无主题归属：不是任何已注册主题的成员
+        #   ③ 无工具步：steps 0 步（纯聊天，没驱动过任何工具/文件操作）
+        # 只上前两条会把"短提问但真干了活"的会话误判成噪声（实测：
+        # "Skill编写规范提炼""检查skill并提出建议"都只 11~13 字符，却是真工作）
         for r in con.execute(
                 "SELECT s.sid, s.title, s.created_at, COUNT(m.rowid) n, "
                 "(SELECT raw FROM messages WHERE sid=s.sid AND role='user' "
-                " ORDER BY rowid LIMIT 1) fu "
+                " ORDER BY rowid LIMIT 1) fu, "
+                "(SELECT COUNT(*) FROM steps WHERE sid=s.sid) nstep "
                 "FROM sessions s JOIN messages m ON m.sid=s.sid "
                 "WHERE m.role='user' GROUP BY s.sid"):
             fu = (r["fu"] or "").strip()
-            if r["n"] == 1 and len(fu) < 40 and r["sid"] not in known:
+            if r["n"] == 1 and len(fu) < noise_max_chars \
+                    and r["sid"] not in known and r["nstep"] == 0:
                 noise_rows.append({
                     "sid": r["sid"],
-                    "reason": f"单轮短问答且无主题归属（{len(fu)} 字符）",
+                    "reason": f"单轮短问答（{len(fu)} 字符 < {noise_max_chars}）"
+                              f"·无主题归属·零工具步",
                     "title": (r["title"] or "")[:40],
                     "created_at": (r["created_at"] or "")[:10]})
         con.close()
 
     lines += ["", f"## 零散会话候选（{len(noise_rows)} 个，规则显式、供你筛）",
-              "", "规则：user 回合 = 1 且首条正文 < 40 字符 且 不属于任何主题。",
-              "登记只写 meta 库（`sessions_noise`），**采集库只读、不删会话**。", ""]
+              "",
+              f"规则（**三条同时成立**）：user 回合 = 1 且首条正文 < "
+              f"{noise_max_chars} 字符；不属于任何主题；**steps 0 步**"
+              f"（纯聊天，没驱动过工具）。",
+              "登记只写 meta 库（`sessions_noise`），**采集库只读、不删会话**。",
+              f"阈值可用 `--noise-max-chars` 调（当前 {noise_max_chars}）。",
+              "⚠ 只上「单轮短问答」会把**短提问但真干了活**的会话误判成噪声"
+              "（实测「Skill编写规范提炼」11 字符却是真工作）——所以必须有零工具步"
+              "这一条。", ""]
     for r in noise_rows[:80]:
         lines.append(f"- `{r['sid']}` （{r['created_at']}）{r['title']}")
     if len(noise_rows) > 80:

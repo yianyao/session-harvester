@@ -533,8 +533,8 @@ def cmd_topic_consolidate(args) -> int:
     确定性一半 + Agent 一半：工具只按显式规则缩小候选范围并确定性执行，
     语义归组一律来自人填的 plan（不写死主题）。
     """
-    from .consolidate import (apply_plan, build_plan_packet, list_noise,
-                              load_plan)
+    from .consolidate import (NOISE_MAX_CHARS, apply_plan, build_plan_packet,
+                              list_noise, load_plan)
     meta = Path(args.meta)
     if args.noise_list:
         rows = list_noise(meta)
@@ -568,7 +568,10 @@ def cmd_topic_consolidate(args) -> int:
     # 缺省：出梳理包
     dbp = Path(args.db) if args.db else None
     root = Path(args.chain_root) if args.chain_root else None
-    packet = build_plan_packet(meta, db_path=dbp, chain_root=root)
+    packet = build_plan_packet(
+        meta, db_path=dbp, chain_root=root,
+        noise_max_chars=(args.noise_max_chars
+                         if args.noise_max_chars else NOISE_MAX_CHARS))
     if args.plan_out:
         out = Path(args.plan_out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -797,6 +800,41 @@ def cmd_topic(args) -> int:
             outp.write_text(_json.dumps(snap, ensure_ascii=False, indent=2),
                             encoding="utf-8", newline="\n")
             print(f"[topic] 快照已写入: {outp}")
+        return 0
+    if args.cmd == "keywords":
+        # 关键词定稿（覆盖式）：合并会把各源的聚类碎片关键词并进来，
+        # 去噪属语义判断 → 由人给最终列表，工具只写。
+        from .topics import set_keywords
+        if not args.id_ or args.keywords is None:
+            print("错误: keywords 需要 --id <主题> 与 --keywords \"k1,k2\""
+                  "（空串 = 清空）", file=sys.stderr)
+            return 2
+        kws = [k.strip() for k in args.keywords.split(",") if k.strip()]
+        r = set_keywords(meta, args.id_, kws)
+        print(f"[topic] {r['id']} 关键词：{len(r['old'])} 个 → "
+              f"{len(r['new'])} 个（{'、'.join(r['new']) or '（清空）'}）")
+        return 0
+    if args.cmd == "export":
+        # 主题结构化导出（v0.29）：给 Agent/机器读的 topic.json
+        from .consolidate import noise_sids
+        from .topicexport import render_topic_json, topic_bundle
+        dbp = Path(args.db)
+        if not args.id_:
+            print("错误: export 需要 --id <主题>", file=sys.stderr)
+            return 2
+        root = Path(args.chain_root) if args.chain_root else None
+        bundle = topic_bundle(meta, dbp, args.id_, chain_root=root,
+                              noise_sids=noise_sids(meta))
+        text = render_topic_json(bundle)
+        if args.out:
+            outp = Path(args.out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic] 结构化导出已写入: {outp}（{len(text)} 字符，"
+                  f"成员 {bundle['topic']['members_count']}、"
+                  f"链 {len(bundle['chains'])}）", file=sys.stderr)
+        else:
+            print(text)
         return 0
     if args.cmd == "list":
         for t in list_topics(meta):
@@ -1171,6 +1209,10 @@ def main(argv=None) -> int:
                       help="被舍弃主题的快照输出目录")
     pcon.add_argument("--noise-list", dest="noise_list", action="store_true",
                       help="列出已登记的零散会话")
+    pcon.add_argument("--noise-max-chars", dest="noise_max_chars", type=int,
+                      default=None,
+                      help="梳理包里「零散会话候选」的字符阈值（默认 40；"
+                           "调小 = 只挑最窄的一批）")
     pcon.set_defaults(func=cmd_topic_consolidate)
 
     pk = sub.add_parser("keywords",
@@ -1263,16 +1305,16 @@ def main(argv=None) -> int:
     ptp = sub.add_parser(
         "topic",
         help="主题注册表（T1/T2）：register/add/remove/merge/rename/delete/"
-             "list/show/chain/pack")
+             "list/show/export/chain/pack")
     ptp.add_argument("cmd", choices=["register", "add", "remove", "merge",
-                                     "rename", "delete", "list", "show",
-                                     "chain", "pack"])
+                                     "rename", "delete", "keywords", "list",
+                                     "show", "export", "chain", "pack"])
     ptp.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
     ptp.add_argument("--name", help="register：主题名称；rename：新名称")
     ptp.add_argument("--keywords", help="register：逗号分隔关键词")
     ptp.add_argument("--id", dest="id_",
-                     help="add/remove/merge/show/chain：主题 id")
+                     help="add/remove/merge/show/export/chain：主题 id")
     ptp.add_argument("--from", dest="from_",
                      help="merge：逗号分隔源主题 id（成员并入 --id 后删除）")
     ptp.add_argument("--keep-sources", action="store_true",
@@ -1282,7 +1324,9 @@ def main(argv=None) -> int:
                      help="add：成员证据说明（如关键词命中口径）")
     ptp.add_argument("--sid", help="remove/fine/artifact 档：成员 sid")
     ptp.add_argument("--db", default="harvester.db",
-                     help="chain/pack：索引库路径（只读）")
+                     help="chain/pack/export：索引库路径（只读）")
+    ptp.add_argument("--chain-root", dest="chain_root", default=None,
+                     help="export：chain 正式位目录（合并各链锚点用）")
     ptp.add_argument("--out", help="chain/pack：产物输出路径（缺省打印）")
     ptp.add_argument("--level", default="title",
                      choices=["title", "coarse", "mid", "fine", "artifact"],

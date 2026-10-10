@@ -229,6 +229,27 @@ def delete_topic(meta_path: Path, topic_id: str) -> dict:
         con.close()
 
 
+def set_keywords(meta_path: Path, topic_id: str, keywords: list[str]) -> dict:
+    """定稿主题关键词（覆盖式）。合并会把各源的自动聚类关键词全部并进来，
+    其中大量是标题 bigram 碎片（"织的/与现/随嗞"）——**去噪是语义判断，
+    由人定稿**，工具只负责确定性写入。返回 {"id","old","new"}。
+    """
+    kws = [k.strip() for k in (keywords or []) if k and k.strip()]
+    con = _con(meta_path)
+    try:
+        row = con.execute("SELECT keywords FROM topics WHERE id=?",
+                          (topic_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"主题不存在: {topic_id}")
+        old = json.loads(row["keywords"])
+        con.execute("UPDATE topics SET keywords=? WHERE id=?",
+                    (json.dumps(kws, ensure_ascii=False), topic_id))
+        con.commit()
+        return {"id": topic_id, "old": old, "new": kws}
+    finally:
+        con.close()
+
+
 def list_topics(meta_path: Path) -> list[dict]:
     if not Path(meta_path).is_file():
         return []
