@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -167,3 +168,146 @@ def _howto(topic_id: str, name: str) -> dict:
 def render_topic_json(bundle: dict) -> str:
     """稳定序列化：键序固定（sort_keys），UTF-8 不转义，供 Agent 解析。"""
     return json.dumps(bundle, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+# ── 人读那一半（v0.33）：一页速览 ──────────────────────────────────────
+_H2 = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.M)
+
+#: 从 chain 正文里取这两节。取不到就**明说没生成**，不用成员标题凑内容
+_SECTION_ALIASES = {
+    "结论": ("元结论", "结论"),
+    "未决": ("待补", "限制", "未决"),
+}
+
+#: 单节引用上限（一页要能读完；超了指向 chain 全文）
+SECTION_CAP = 1200
+
+
+def _h2_sections(body: str) -> list[tuple[str, str]]:
+    """按二级标题切 chain 正文 → [(标题, 正文)]。"""
+    marks = list(_H2.finditer(body or ""))
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(marks):
+        if len(m.group(1)) != 2:
+            continue
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(body)
+        out.append((m.group(2), body[m.end():end].strip()))
+    return out
+
+
+def _pick_section(sections: list[tuple[str, str]],
+                  prefixes: tuple[str, ...]) -> tuple[str, str] | None:
+    for title, text in sections:
+        if any(title.startswith(p) for p in prefixes):
+            return title, text
+    return None
+
+
+def _bar(v: int, mx: int, width: int = 20) -> str:
+    return "█" * max(1, round(v / mx * width)) if mx else ""
+
+
+def render_topic_md(bundle: dict, chain_root: Path | None = None) -> str:
+    """把主题渲染成**一页**给人读的速览。
+
+    与 `render_topic_json` 的分工：JSON 要给机器（含逐条成员，可能上千行）；
+    这一页只回答四件事——**是什么 / 跨多久 / 关键转折 / 结论与未决**，
+    **不列成员**（列了就不是一页了）。
+
+    「关键转折 / 结论 / 未决」只从**已发布 chain** 来：
+      - 没传 `chain_root` → 说明"没去读"（未执行）；
+      - 传了但没有该主题的链 → 说明"确实还没有"（不适用）。
+    两者混为一谈会让人以为主题没内容，故在页面上分开写。
+    """
+    t, act, h = bundle["topic"], bundle["activity"], bundle["health"]
+    L = [f"# {t['name']}", "",
+         f"> 主题 `{t['id']}` 一页速览（人读）；机器读那一半："
+         f"`python -m harvester topic export --id {t['id']}`",
+         f"> 生成 {bundle['generated_at']}；库指纹 `{bundle['db_fingerprint']}`", "",
+         "## 是什么", "",
+         f"- 关键词：{'、'.join(t['keywords']) or '（无）'}",
+         f"- 成员：**{t['members_count']}** 个会话；注册于 {t['created']}"]
+    if bundle["sources"]:
+        L.append("- 来源：" + "、".join(
+            f"{k} {v}" for k, v in bundle["sources"].items()))
+    missing = h["members_not_in_index"]
+    L.append(f"- 健康：不在索引库 **{len(missing)}** 个"
+             + (f"（如 {missing[0]}）" if missing else "（无）"))
+    if h["noise_registered_members"]:
+        L.append(f"- ⚠ 被登记为零散的成员 **{len(h['noise_registered_members'])}** 个"
+                 "（应为 0：既入主题又登记零散是自相矛盾）")
+    L.append("")
+
+    L += ["## 跨多久", ""]
+    if act["first"]:
+        months = act["months"]
+        mx = max(months.values()) if months else 0
+        L.append(f"- {act['first'][:10]} ~ {act['last'][:10]}"
+                 f"，覆盖 **{len(months)}** 个月")
+        recent = sorted(months.items())[-12:]
+        if len(months) > 12:
+            L.append(f"- 最近 12 个月（另有更早 {len(months) - 12} 个月）")
+        for k, v in recent:
+            L.append(f"  - {k} {_bar(v, mx)} {v}")
+    else:
+        L.append("- **无法判定**：成员都没有 `created_at`")
+    L.append("")
+
+    chains = bundle.get("chains") or []
+    L += ["## 关键转折", ""]
+    if not chains:
+        if chain_root is None:
+            L.append("- **未执行**：本次没传 `--chain-root`，没去读已发布的 chain"
+                     "（不等于「该主题没有链」）")
+        else:
+            L.append("- **尚未生成**：该主题还没有已发布的 chain"
+                     f"（已查 `{chain_root}`）")
+        L += [f"- 生成入口：`{bundle['howto']['pack_coarse']}` → 写链 → "
+              f"`{bundle['howto']['validate_chain']}`", ""]
+    else:
+        anchors = bundle.get("anchors") or []
+        for c in chains:
+            L.append(f"### {c['name']}")
+            L.append(f"- {c['stages']} 个阶段 / {c['nodes']} 个锚点节点"
+                     + (f"；prompt `{c['prompt_version']}`"
+                        if c.get("prompt_version") else ""))
+            mine = [a for a in anchors if a["chain"] == c["name"]]
+            for a in mine:
+                L.append(f"  - {a['span']} ｜ {a['stage']}"
+                         f"（锚点 {len(a['nodes'])}）")
+            if not mine:
+                L.append("  - （该链 frontmatter 无 anchors）")
+            L.append("")
+
+    for label in ("结论", "未决"):
+        L += [f"## {label}", ""]
+        found_any = False
+        for c in chains:
+            try:
+                body = Path(c["path"]).read_text(encoding="utf-8",
+                                                 errors="replace")
+            except OSError:
+                continue
+            got = _pick_section(_h2_sections(body), _SECTION_ALIASES[label])
+            if not got:
+                continue
+            found_any = True
+            title, text = got
+            if len(text) > SECTION_CAP:
+                text = text[:SECTION_CAP].rstrip() + \
+                    f"\n\n…（截断；全文见 `{c['path']}`）"
+            L += [f"### 来自《{c['name']}》的「{title}」", "", text, ""]
+        if not found_any:
+            why = ("未传 `--chain-root`（未执行）" if chain_root is None
+                   else "该主题的 chain 正文里没有对应小节（不适用）")
+            if chains and chain_root is not None:
+                why = "已发布的 chain 正文里没有取到对应小节（不适用）"
+            L += [f"- 未生成：{why}。**不用成员标题凑内容**——人读那一页宁可空着。",
+                  ""]
+
+    L += ["## 下一步", ""]
+    for k, v in bundle["howto"].items():
+        L.append(f"- {v}" if k == "note" else f"- `{v}`")
+    L += ["", "## 口径与限制", ""]
+    L += [f"- {x}" for x in bundle["limits"]]
+    return "\n".join(L) + "\n"

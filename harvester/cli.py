@@ -903,6 +903,26 @@ def cmd_topic(args) -> int:
         else:
             print(text)
         return 0
+    if args.cmd == "md":
+        # 主题人读那一半（v0.33）：一页速览（是什么/跨多久/关键转折/结论与未决）
+        from .consolidate import noise_sids
+        from .topicexport import render_topic_md, topic_bundle
+        if not args.id_:
+            print("错误: md 需要 --id <主题>", file=sys.stderr)
+            return 2
+        root = Path(args.chain_root) if args.chain_root else None
+        bundle = topic_bundle(meta, Path(args.db), args.id_, chain_root=root,
+                              noise_sids=noise_sids(meta))
+        text = render_topic_md(bundle, chain_root=root)
+        if args.out:
+            outp = Path(args.out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic] 人读速览已写入: {outp}（{len(text)} 字符，"
+                  f"链 {len(bundle['chains'])}）", file=sys.stderr)
+        else:
+            print(text)
+        return 0
     if args.cmd == "list":
         for t in list_topics(meta):
             print(f"- {t['id']}  {t['name']}  成员 {t['members']}  "
@@ -1422,17 +1442,17 @@ def main(argv=None) -> int:
     ptp = sub.add_parser(
         "topic",
         help="主题注册表（T1/T2）：register/add/remove/merge/rename/delete/"
-             "list/show/export/chain/pack")
+             "list/show/export/md/chain/pack")
     ptp.add_argument("cmd", choices=["register", "add", "remove", "merge",
                                      "rename", "delete", "keywords", "list",
-                                     "show", "export", "dedupe", "turns",
+                                     "show", "export", "md", "dedupe", "turns",
                                      "chain", "pack"])
     ptp.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
     ptp.add_argument("--name", help="register：主题名称；rename：新名称")
     ptp.add_argument("--keywords", help="register：逗号分隔关键词")
     ptp.add_argument("--id", dest="id_",
-                     help="add/remove/merge/show/export/chain：主题 id")
+                     help="add/remove/merge/show/export/md/chain：主题 id")
     ptp.add_argument("--from", dest="from_",
                      help="merge：逗号分隔源主题 id（成员并入 --id 后删除）")
     ptp.add_argument("--keep-sources", action="store_true",
@@ -1444,12 +1464,13 @@ def main(argv=None) -> int:
     ptp.add_argument("--db", default="harvester.db",
                      help="chain/pack/export：索引库路径（只读）")
     ptp.add_argument("--chain-root", dest="chain_root", default=None,
-                     help="export：chain 正式位目录（合并各链锚点用）")
+                     help="export/md：chain 正式位目录（合并各链锚点用；"
+                          "md 不给则关键转折/结论/未决标注为「未执行」）")
     ptp.add_argument("--cap", type=int, default=200,
                      help="turns：预览每回合截断字符数（默认 200）")
     ptp.add_argument("--full", action="store_true",
                      help="turns：输出 raw 全文（逐字引文用；体积大）")
-    ptp.add_argument("--out", help="chain/pack：产物输出路径（缺省打印）")
+    ptp.add_argument("--out", help="chain/pack/md：产物输出路径（缺省打印）")
     ptp.add_argument("--level", default="title",
                      choices=["title", "coarse", "mid", "fine", "artifact"],
                      help="chain/pack 分层：title(极粗~2K)/coarse(粗~10K)/"
