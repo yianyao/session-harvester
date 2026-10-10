@@ -21,9 +21,9 @@
   | 主题注册表 | **14 个主题**（成员总数 **997**）：小说 `010`=**411**、素材库 `005`=**199**、采集 `004`=**191**、心理 `003`=**69**、本机工具环境 `004-08`=43、SKILL `001`=**10**；零散登记 **163 条**（v0.42 用户裁决舍弃 9 条后） |
   | 分诊池 | **794 条** = substantive **502** + `deep_unassigned` **292**（`--triage-deep`）；**noise_high / noise_maybe / deep_topic_hint 均已归零**（v0.42 舍弃 9 条进零散；深会话两类永不参与零散判定的口径不变） |
   | 已发布 chain | 3 条；**叙事节奏链 v0.45 补做 + 引号已净化**：52 节点、有锚点成员 **39/55**、8 个标题级代表逐条标注；引号按规范统一（术语加粗、数据引文 `「」`）后**默认引文门真实生效**（`chain-audit` 不带 `--quotes-ascii`：`「」` 62 条全部逐字命中、锚点告警 0） |
-  | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（A 一行级 / B Agent 消费面 / C 质量欠账 / D 待裁决；含对第三方检查文档的逐条实测核对——其中 `regress` 那条**已过期**） |
+  | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（§1 逐条核对 / §2 两河判断 / §3 A/B/C/D 分组 / §4 顺手两件 / §5 **定期蒸馏 SOP** / **§6 下一批待办 v0.46（下周开工）** / §7 不做清单；A/B/C 已全部完成，D1/D2 暂缓） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做 |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H100** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.33-next.md`（最新，先读它）**；备档 `~/.workbuddy/knowledge/handoffs/session-harvester-v0.33.md`；事实台账 H1–**H102** 在 `docs/HANDOFF-v0.22-next.md` §2；待办细目在 `docs/HANDOFF-v0.24-next.md` §7.4 |
   | MCP 工具 | **10 个**（会话面 4 + 进化数据面 6：`topic_list`/`topic_export`/`chain_read`/`suggest_list`/`cards_list`/`artifacts_list`）；漂移门 `tests/test_v45_mcp_tools.py` 从 `apiserve.py` 源码 AST 抽 `/api/*` 双向核对 |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
@@ -38,6 +38,7 @@
   9. **D3 定期蒸馏 SOP 已落地（SOP §5）**：三触发 + 八步 + 每步记数字；**不含 chain 再生成**（D1 暂缓）；D2 暂缓；
   10. ✅ **C4 已闭环（v0.45 第七/八/九批，H98/H99/H100）**：三条轴都跑过——热跑（同进程，抓到并修掉一例：C3 新测试打桩 `dshmod.zstd_decompress` 未还原，已加门 `test_v45_no_monkeypatch_leak.py`）｜`--cold --clear-pycache`（首跑类）｜**旧版本树**（`git worktree add d9cac46`，574 例 × 13 轮全绿）。最终定位：那两次"红一次再跑全绿"是 **`deadcode-scan` 撞上并发编辑窗口**（半写/撕裂读 → 假红），机制已实测复现并**修掉**（不可信发现单列 + CLI 回 3 + 套件门可区分 skip）；
   11. **并发教训（v0.43）**：同一工作区并行子代理**会互相同改 `cli.py`/`README.md`**——下次派活要**按文件切分**或串行。
+  12. ⏭️ **下一批（v0.46，下周开工）= `docs/SOP-remaining-v045.md` §6**（综合最近几轮实测体检与评审遗留，7 项带验收）：**P0-1 索引侧增量**（采集侧水位 `sync.py:154/235-273` 已有；索引侧 `index_exports` 仍每次 `DELETE` 三表全量重建，本地源每次 `update` 重解压重解析 DSH 42.1 MB/9.1 s——`run_update` 手上已有 `new/updated/gone`，可直接喂 `index_session` 增量原语）｜**P0-2 库龄可见性**（`dbmeta` 增"语料比库新 ⇒ STALE" + `update` 打四计数；实测库 mtime 停在 10-09）｜**P1-3 结构化 `isError`**（鲁棒性；交叉表 201/0漏/1误 → 今天够用但文本判据脆）｜**P1-4 自进化评估闭环**（`adopted_at` + `harvest-eval --since` 三值判定 + 无变化即退休；工具不自动改 AGENTS.md）｜**P2-5 人账**（14 主题/117 候选簇裁决补进台账）｜P3-6 subagent 形态无真实数据（记录）｜watch C4。**§7 不做**：丢弃行前置过滤、解压缓存、D1/D2（仍暂缓）、第三方评审文档只当结构性判断/验收单用。
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
