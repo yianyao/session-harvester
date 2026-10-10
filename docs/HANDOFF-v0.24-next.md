@@ -14,9 +14,9 @@
 | 项 | 值 |
 |---|---|
 | 后端 head | `1a03fa5` + 本轮改动（未提交，见 §1） |
-| 后端测试基线 | **520 例全绿**（venv 解释器；**须带 §4 的沙箱补丁**，否则见 H53） |
+| 后端测试基线 | **529 例全绿**（venv 解释器；**须带 §4 的沙箱补丁**，否则见 H53） |
 | 前端 head | `4ba4932`（`..\harvester-view`，工作树干净）；测试 **24 例全绿**（同补丁） |
-| 无 PyYAML 门禁 | base 解释器 → `Ran 511 / FAILED (errors=45)`（**设计行为**） |
+| 无 PyYAML 门禁 | base 解释器 → `Ran 520 / FAILED (errors=45)`（**设计行为**） |
 | 主题注册表 | **126 个主题**（`topics_meta.db`：+2 新建 −3 合并；备份 `topics_meta.db.bak-20261010`） |
 | chain 长文 | **3 条**：既有 `chain-叙事节奏.md`（55 成员/7 阶段/30 节点）+ 本轮新增 2 条（§1） |
 | 库规模 | 1964 会话 / 62899 消息 / 36647 步骤 / 294 错误（`2026-10-09 10:17:07` 时点） |
@@ -70,7 +70,7 @@
 
 ### 1.4 文档同步
 
-- `README.md`：依赖边界段数字（417→**520**；`Ran 408/errors=23`→**`Ran 511/errors=45`**）、
+- `README.md`：依赖边界段数字（417→**529**；`Ran 408/errors=23`→**`Ran 520/errors=45`**）、
   资产行（1964 会话/62899 消息/36647 步/294 错误）、`topic merge` 用法与"关键词不代做语义去噪"提示。
 - `HANDOFF-v0.22-next.md` §2 台账：新增 **H51–H54**。
 - 本轮**死代码扫描**（AST 覆盖 `harvester/`+`tests/`+`harvester-view/`，89 文件）与
@@ -119,7 +119,7 @@
 | **沙箱 tempfile 限制（H53）** | 本会话沙箱下 `os.mkdir(p, 0o700)` 建出的目录**连本进程都写不进去**（`tempfile.mkdtemp/mkstemp` 因此必失败 → **所有基于 tempfile 的测试直接崩**，与项目代码无关） |
 | **绕过方式（推荐）** | `$env:PYTHONPATH = "<repo>\docs\reports"` → `sitecustomize.py` 在解释器启动时把传给 `os.mkdir`/`os.open` 的 mode 补组/其他位。**无需写目标目录**，故可用于工作区外的 `harvester-view` |
 | 备用方式 | `python docs/reports/run_tests.py discover -s tests`（需在目标项目内） |
-| 后端测试 | `& $venv -X utf8 -m unittest discover -s tests` → 预期 **520 例 OK**（带上述 PYTHONPATH） |
+| 后端测试 | `& $venv -X utf8 -m unittest discover -s tests` → 预期 **529 例 OK**（带上述 PYTHONPATH） |
 | 前端测试 | 同解释器，在 `..\harvester-view` 下 → 预期 **24 例 OK**（该目录在**工作区外，不可写**） |
 | meta 库（均 gitignore） | `topics_meta.db` / `suggestions_meta.db` / `artifacts_meta.db` / `keywords_meta.db`；本轮备份 `topics_meta.db.bak-20261010` |
 | 卡片主库 / chain 正式位 | `~/.workbuddy/knowledge/cards/`、`~/.workbuddy/knowledge/topics/`（**均在工作区外，写入需批准**） |
@@ -162,7 +162,7 @@
    （`AssertionError: 4 != 3`）。→ **"能说清什么情况会红"必须真的删一次代码来验证**，
    不能只靠读断言。
 5. **写测试基线数字必须带解释器口径**：同一份代码在 venv（有 PyYAML）是
-   `520 例全绿`，在 base（无 PyYAML）是 `Ran 511 / errors=45`——**写文档时不写解释器
+   `529 例全绿`，在 base（无 PyYAML）是 `Ran 520 / errors=45`——**写文档时不写解释器
    就是错的**。
 6. **跑套件时别把输出用 `Select-String` 只留摘要**（本轮踩到）：v0.29 提交后出现过一次
    `FAILED (failures=1)`，因为我只过滤了 `^(OK|FAILED|Ran )` 行，**失败用例名被丢掉**；
@@ -177,7 +177,7 @@
 ## 6. 开工流程
 
 1. 读本文件 → `HANDOFF-v0.22-next.md`（H1–H54）→ `PLAN-v0.22-unified.md` §0。
-2. 基线自查：`git log --oneline -1`；设 `PYTHONPATH` 后跑后端 **520** / 前端 **24**
+2. 基线自查：`git log --oneline -1`；设 `PYTHONPATH` 后跑后端 **529** / 前端 **24**
    （**先做这一步，否则会误以为项目坏了**，见 §4）。
 3. 先办 §2 的第 0 项（发布两条 chain），再做 #12 / #11；#13 需先另选带 skill 遥测的主题。
 4. 测试先行 + **可证伪验证**（改坏一次确认断言会红）+ 文档三处同步 + `-F 文件`提交。
@@ -194,7 +194,7 @@
 | `topic rename` / `topic delete` | rename 保 id（chain 不用重发）、delete 带快照；4 例测试 | **H56** |
 | 一个主题多条 chain（additive） | `/api/topic/<id>/chain` 新增 `chains[]`/`chain_count`，`/api/topics` 新增 `chains_count`/`chain_names`；chain 显示名取正文 H1；5 例测试 | **H57** |
 
-- 测试基线：**520 例全绿**（venv）；无 PyYAML → `Ran 511 / FAILED (errors=45)`（门禁）。
+- 测试基线：**529 例全绿**（venv）；无 PyYAML → `Ran 520 / FAILED (errors=45)`（门禁）。
 - 真实库端到端（进程内，未起服务）：`/api/topics` 13 主题；
   `tp-20261008-010`（小说，324 成员）`chain_count=2` 且两条 H1 名可区分。
 - **合并的已知代价**（不是 bug）：小说组 324 成员、采集组 185 成员 →
@@ -246,6 +246,6 @@
 | 零散会话登记 | meta 库 `sessions_noise`（只登记不删；采集库红线只读），`--noise-list` 可查 | **H59** |
 | 真实库实测 | 13 主题 + **448 个零散会话候选**（规则：单轮 + 首条 < 40 字符 + 无主题归属） | `docs/reports/consolidate-packet.md` |
 
-- 测试基线：**520 例全绿**（venv）；无 PyYAML → `Ran 511 / FAILED (errors=45)`。
+- 测试基线：**529 例全绿**（venv）；无 PyYAML → `Ran 520 / FAILED (errors=45)`。
 - **待办 V4**：把 `sessions_noise` 接到消费方（`topic-candidates`/`keywords`/卡片生成
   默认排除零散会话）——本轮**未接线**，不读它的调用方行为不变。

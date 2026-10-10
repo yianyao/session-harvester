@@ -20,7 +20,7 @@
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**520 例全绿**）。用无 PyYAML 的解释器会得到
+  （3.13 + PyYAML 6.0.3，**529 例全绿**）。用无 PyYAML 的解释器会得到
   `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
@@ -156,6 +156,8 @@ python -m harvester topic merge --meta topics_meta.db --id <目标> --from "<源
 python -m harvester topic rename --meta topics_meta.db --id <tp-id> --name "新名"        # 改名（保 id，已发布 chain 不受影响）
 python -m harvester topic delete --meta topics_meta.db --id <tp-id> --out <快照.json>    # 删除（先落快照，可回滚）
 python -m harvester topic keywords --meta topics_meta.db --id <tp-id> --keywords "k1,k2" # 关键词定稿（覆盖式；去噪是语义判断）
+python -m harvester topic dedupe --meta topics_meta.db --db harvester.db --id <tp-id> [--out f]  # 会话级去重（H40 口径；chain 必填口径来源）
+python -m harvester topic turns --meta topics_meta.db --db harvester.db --id <tp-id> [--full] [--cap N]  # 回合索引 / raw 全文（锚点与逐字引文来源）
 python -m harvester topic export --meta topics_meta.db --db harvester.db --id <tp-id> \
     --chain-root ~/.workbuddy/knowledge/topics --out docs/reports/topic-<tp-id>.json      # 给 Agent 的结构化导出
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）

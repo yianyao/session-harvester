@@ -833,6 +833,41 @@ def cmd_topic(args) -> int:
         print(f"[topic] {r['id']} 关键词：{len(r['old'])} 个 → "
               f"{len(r['new'])} 个（{'、'.join(r['new']) or '（清空）'}）")
         return 0
+    if args.cmd == "dedupe":
+        # 会话级去重（H40 口径）：每写一条 chain 都要跑的准备工作
+        from .topicprep import dedupe_topic, render_dedupe
+        if not args.id_:
+            print("错误: dedupe 需要 --id <主题>", file=sys.stderr)
+            return 2
+        r = dedupe_topic(meta, Path(args.db), args.id_)
+        text = render_dedupe(r)
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic] 去重报告已写入: {out}（成员 {r['members']} → "
+                  f"代表 {r['reps']}，重复 {r['duplicates']}）", file=sys.stderr)
+        else:
+            print(text)
+        return 0
+    if args.cmd == "turns":
+        # 回合索引 / raw 全文：chain 锚点与逐字引文的唯一来源
+        from .topicprep import render_turns, turns_of
+        if not args.id_:
+            print("错误: turns 需要 --id <主题>", file=sys.stderr)
+            return 2
+        t = turns_of(meta, Path(args.db), args.id_, cap=args.cap,
+                     full=args.full)
+        text = render_turns(t)
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8", newline="\n")
+            print(f"[topic] 回合索引已写入: {out}（成员 {t['members']}，"
+                  f"{'raw 全文' if t['full'] else '预览'}）", file=sys.stderr)
+        else:
+            print(text)
+        return 0
     if args.cmd == "export":
         # 主题结构化导出（v0.29）：给 Agent/机器读的 topic.json
         from .consolidate import noise_sids
@@ -1374,7 +1409,8 @@ def main(argv=None) -> int:
              "list/show/export/chain/pack")
     ptp.add_argument("cmd", choices=["register", "add", "remove", "merge",
                                      "rename", "delete", "keywords", "list",
-                                     "show", "export", "chain", "pack"])
+                                     "show", "export", "dedupe", "turns",
+                                     "chain", "pack"])
     ptp.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
     ptp.add_argument("--name", help="register：主题名称；rename：新名称")
@@ -1393,6 +1429,10 @@ def main(argv=None) -> int:
                      help="chain/pack/export：索引库路径（只读）")
     ptp.add_argument("--chain-root", dest="chain_root", default=None,
                      help="export：chain 正式位目录（合并各链锚点用）")
+    ptp.add_argument("--cap", type=int, default=200,
+                     help="turns：预览每回合截断字符数（默认 200）")
+    ptp.add_argument("--full", action="store_true",
+                     help="turns：输出 raw 全文（逐字引文用；体积大）")
     ptp.add_argument("--out", help="chain/pack：产物输出路径（缺省打印）")
     ptp.add_argument("--level", default="title",
                      choices=["title", "coarse", "mid", "fine", "artifact"],
