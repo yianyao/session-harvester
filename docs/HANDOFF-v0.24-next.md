@@ -194,13 +194,14 @@
   `topic pack --level coarse` 会按预算把整段截断（H27/H37）；做这两条的 chain 要用
   `--max-chars` 放大或先按 `--sid` 下钻。
 
-### 7.1 未做（下一批，按顺序）
+### 7.1 V1/V2 已做（view 主题页），V3/V4 未做
 
 | # | 事项 | 现状与做法 |
 |---|---|---|
-| V1 | **view 主题页仍只渲染单条 chain** | 后端字段已就绪（H57）。改 `harvester-view/static/index.html`：`renderTopics` 加“链”列（用 `chains_count`）、`openTopic`/`renderChain` 支持多链切换（用 `chains[]`）、0 成员类目灰显。改后**必须同步 `tests/render_smoke.js` 断言并重跑 view 24 例**（H22）。`harvester-view/` 在**工作区外**，写入需一次批准 |
-| V2 | 主题页信息仍偏少 | 建议加：成员活跃区间已有（`first/last_activity`）、关键词（`keywords` 是 JSON 字符串，view 侧需 parse）、以及“这条主题能产出什么”的指引（pack/chain 命令已在工具栏） |
-| V3 | 用户提到的“主题梳理出来的内容对个人/产出物/skill/Agent 都有用” | **尚未设计**。当前只有 chain（叙事复盘）一种产物；卡片校验与主题未打通。需要一轮专门设计（产物形态：给机器 = 结构化 JSON/schema，给人 = 可读页/清单；口径与验收标准需用户先定） |
+| V1 | view 主题页多链渲染 | **✅ 已完成**（view 仓库 `7066e5e`）：`renderTopics` 加「链」列 + 0 成员类目灰显；`renderChain(d,out,idx)` 支持 `chains[]` + 切换按钮；`bindChainSwitch` 接线。view 24 例 OK + 真实载荷渲染检查 14 项全过。详见 **H60** |
+| V2 | 关键词等机器字段的人读形态 | **✅ 已完成**（同提交）：`kwText` 把 JSON 字符串拆成「、」列表，解析失败原样显示 |
+| V4 | 零散会话接到消费方 | **未做**：`sessions_noise` 已能登记与查询（H59），但 `topic-candidates`/`keywords`/卡片生成**尚未**按它过滤。做法：各消费方启动时读 meta 表并排除命中 sid（additive，不读它的调用方行为不变） |
+| V3 | 用户提到的“主题梳理出来的内容对个人/产出物/skill/Agent 都有用” | **尚未设计**。当前只有 chain（叙事复盘）一种产物；卡片校验与主题未打通。需一轮专门设计：**给机器 = 结构化 JSON/schema（可被 Agent 直接消费），给人 = 可读清单/页面**；口径与验收标准需用户先定一层 |
 
 ### 7.2 本轮新增的环境事实
 

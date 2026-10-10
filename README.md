@@ -150,6 +150,9 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 - **一个主题可以有多条 chain**（`/api/topic/<id>/chain` 新增 `chains[]` 与
   `chain_count`，旧字段仍是第一条；`/api/topics` 带 `chains_count`）。
   多链时 chain 的显示名取正文首个 `#` 标题，否则同主题各链会显示成同一个名字。
+  view「主题」tab 据此显示**每条主题有几条链**（链列），多链时可切换查看；
+  0 成员类目灰显（那是尚未挂成员的种子类目）。`keywords` 在 API 里是 JSON
+  字符串（给机器用），页面渲染成人读的「、」列表。
 - 批量注册场景（117 簇级别）参考 `scripts/register_candidates_20261009.py`
   ——解析候选报告后逐簇调 `topics.register_topic` + `add_members`。
   语义梳理（把碎片并回类目）的范例见 `docs/reports/consolidate-topics.py`
