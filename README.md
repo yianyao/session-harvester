@@ -16,11 +16,11 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  35 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  44 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**485 例全绿**）。用无 PyYAML 的解释器会得到
+  （3.13 + PyYAML 6.0.3，**496 例全绿**）。用无 PyYAML 的解释器会得到
   `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
@@ -114,8 +114,14 @@ python -m harvester topic-consolidate --meta topics_meta.db --noise-list
 ```
 
 - **工具不判断语义**：归组/舍弃由人填的 plan 决定；工具只按**显式规则**缩小
-  候选范围（零散候选规则：user 回合 = 1 且首条正文 < 40 字符 且 不属于任何主题）
-  并做确定性执行。
+  候选范围并做确定性执行。零散会话候选需**三条规则同时成立**：user 回合 = 1
+  且首条正文 < 阈值字符（`--noise-max-chars`，默认 40）、不属于任何主题、
+  **steps 0 步**（纯聊天没驱动过工具）。第三条是必须的——只上"短提问"会把
+  「Skill编写规范提炼」（11 字符却是真工作）误判成噪声。
+- **关键词要人工定稿**：合并会把各源的自动聚类关键词并进来（实测小说主题
+  并成 237 个，大量是标题 bigram 碎片"织的/与现/随嗞"）。用
+  `topic keywords --id <tp> --keywords "k1,k2"` 覆盖式定稿（去噪是语义判断，
+  工具不代做）。全部 13 个主题定稿后合计 467 → 65 个关键词。
 - **文件级原子**：执行全程在 meta 库的临时副本上，全部成功才换入 ——
   中途任何异常，真库逐字节不变（v0.25 那次"合并落库后脚本崩"的教训）。
 - **完整性校验**：库内每个主题必须出现在 plan 的 target/from/discard/keep/
@@ -139,8 +145,21 @@ python -m harvester topic add --meta topics_meta.db --id <tp-id> --sids "<sid1>,
 python -m harvester topic merge --meta topics_meta.db --id <目标> --from "<源1>,<源2>"   # 并成一个主题（成员/关键词并入后删源）
 python -m harvester topic rename --meta topics_meta.db --id <tp-id> --name "新名"        # 改名（保 id，已发布 chain 不受影响）
 python -m harvester topic delete --meta topics_meta.db --id <tp-id> --out <快照.json>    # 删除（先落快照，可回滚）
+python -m harvester topic keywords --meta topics_meta.db --id <tp-id> --keywords "k1,k2" # 关键词定稿（覆盖式；去噪是语义判断）
+python -m harvester topic export --meta topics_meta.db --db harvester.db --id <tp-id> \
+    --chain-root ~/.workbuddy/knowledge/topics --out docs/reports/topic-<tp-id>.json      # 给 Agent 的结构化导出
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
 ```
+
+### 5. 主题结构化导出（给 Agent 用）
+
+`topic export` 产出 `harvester.topic/1` schema 的 JSON：主题是什么（id/名称/
+关键词/成员数）、时间跨度与月度分布、**成员逐条**（sid/来源/标题/时间/证据尾注，
+已入索引库的在前）、该主题的**链清单与锚点合并视图**（一个主题可有多条 chain）、
+来源分布、`health` 自检（不在索引库的成员、被登记为零散的成员）、以及
+`howto`（可复制的 pack/fine/chain-validate 命令，**只给文本不执行**）。
+
+同库快照重跑，除 `generated_at` 外逐字节一致（可复现红线）。
 
 - 注册库默认读 `topics_meta.db`（与 harvester.db 同目录）；**view 的
   「主题」tab 需要 api-serve 启动时带 `--topics-meta <topics_meta.db>`**
