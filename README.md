@@ -16,11 +16,11 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  34 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  35 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**472 例全绿**）。用无 PyYAML 的解释器会得到
+  （3.13 + PyYAML 6.0.3，**482 例全绿**）。用无 PyYAML 的解释器会得到
   `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
@@ -96,7 +96,34 @@ python -m harvester update    # 收件箱收割 -> 只导出新增/变更会话 
   文件；首跑无库 = 天然全量。
 - `sync` 保持全量语义，作为对账/rebuild 基线（怀疑漏数据时跑一次 sync 对账）。
 
-### 主题注册（T 轨）：发现簇 → 注册 → 页面出现
+### 3. 整理（每次采集之后跑一遍）
+
+采集只是入库；**入库之后要"整理"**：把新会话语义聚合成主题、把零散不成系统的
+挑出去。这一步是固定流程，不是一次性动作：
+
+```bash
+# ① 出「梳理包」：主题信号表 + 零散会话候选 + 待填的执行模板
+python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
+    --chain-root ~/.workbuddy/knowledge/topics --plan-out docs/reports/consolidate-packet.md
+# ② 由人/Agent 填 plan.yaml（哪些并成一个主题、哪些舍弃、哪些登记为零散）
+# ③ 先 dry-run 校验，再加 --yes 执行
+python -m harvester topic-consolidate --meta topics_meta.db --apply plan.yaml
+python -m harvester topic-consolidate --meta topics_meta.db --apply plan.yaml --yes \
+    --snap-dir docs/reports/deleted-topics
+python -m harvester topic-consolidate --meta topics_meta.db --noise-list
+```
+
+- **工具不判断语义**：归组/舍弃由人填的 plan 决定；工具只按**显式规则**缩小
+  候选范围（零散候选规则：user 回合 = 1 且首条正文 < 40 字符 且 不属于任何主题）
+  并做确定性执行。
+- **文件级原子**：执行全程在 meta 库的临时副本上，全部成功才换入 ——
+  中途任何异常，真库逐字节不变（v0.25 那次"合并落库后脚本崩"的教训）。
+- **完整性校验**：库内每个主题必须出现在 plan 的 target/from/discard/keep/
+  renames 之一，否则拒绝执行（防"漏掉一个悄悄留着"）。
+- **零散会话只登记、不删除**：写 meta 库的 `sessions_noise` 表
+  （`--noise-list` 可查）；`harvester.db` 始终只读。
+
+### 4. 主题注册（T 轨）：发现簇 → 注册 → 页面出现
 
 主题**不是固定清单**：由聚合数据中发现簇后注册进 meta 库，注册即出现在
 view「主题」tab；代码零写死主题名。命令：
@@ -190,7 +217,8 @@ python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长
 | 命令 | 用途 |
 |---|---|
 | `topic-candidates` | 自动聚类候选推荐：只产候选簇报告，不改注册表 |
-| `topic register/add/remove/merge/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源） |
+| `topic-consolidate` | 主题梳理流水线：出梳理包（信号表/零散候选/模板）→ 执行人填的 plan（完整性校验 + 文件级原子 + 快照）→ 查零散登记 |
+| `topic register/add/remove/merge/rename/delete/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源）；`rename` 保 id；`delete` 带快照 |
 | `chain-validate` | topic-chain 长文独立校验（frontmatter + 锚点可回溯） |
 
 ### 服务
