@@ -113,6 +113,8 @@ python -m harvester topic-consolidate --meta topics_meta.db --apply plan.yaml --
 python -m harvester topic-consolidate --meta topics_meta.db --noise-list
 python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
     --triage-out docs/reports/triage-report.md   # 零散分诊：取信息 vs 整合信息
+python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
+    --triage-json docs/reports/triage-full.json  # 分诊**全量** JSON（填 plan 用这个）
 ```
 
 - **零散分诊（取信息 vs 整合信息）**：按「只要求查询（是什么/含义/翻译/出处/
@@ -122,6 +124,10 @@ python -m harvester topic-consolidate --meta topics_meta.db --db harvester.db \
   `craft_material` 一类；多轮"前后不连贯"因字符 bigram 在中文短句上区分力弱
   （相关追问也可能零重叠），只作**报告信号**，不进高置信。分诊**只产判定与
   理由，登记与否由 plan 决定**。
+- **分诊有两个人读/机读出口，别混用**（v0.33）：`--triage-out` 是人读报告，
+  **每类最多 60 条**（`…另有 N 条`）；`--triage-json` 是**全量**（含 `first_user`
+  首条原文 200 字符，供复核机械关键词提示）。**填 plan 必须用 JSON** —— 照人读
+  报告填，尾部条目会静默漏掉且不报错。
 - **`assign`：把新会话并入已有主题**（采集后的主路径）。plan 里写
   `assign: [{target: tp-x, sids: [...], evidence: "口径"}]`；校验会挡住
   「已是别的主题成员」「既登记零散又并入主题」两种自相矛盾。

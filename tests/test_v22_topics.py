@@ -18,8 +18,9 @@ from pathlib import Path
 from harvester.dbmeta import db_fingerprint
 from harvester.indexing import SCHEMA, index_session
 from harvester.models import Message, SessionRecord
-from harvester.topics import (add_members, ensure_topics_db, register_topic,
-                              remove_member, show_topic, title_chain)
+from harvester.topics import (add_members, delete_topic, ensure_topics_db,
+                              register_topic, remove_member, show_topic,
+                              title_chain)
 
 
 def _fixture_db(tmp: Path) -> Path:
@@ -72,6 +73,25 @@ class TestTopicsRegistry(unittest.TestCase):
     def test_unknown_topic_raises(self):
         with self.assertRaises(KeyError):
             show_topic(self.meta, "tp-nope")
+
+    def test_register_after_gap_does_not_collide(self):
+        """同日删过主题后，新建主题不得撞已存在的 id。
+
+        上一版用 `COUNT(*)+1` 生成当日序号：只要当天发生过删除（`merge`/`discard`
+        都会删源主题）就留缺口，序号会算回一个已存在的 id →
+        `IntegrityError: UNIQUE constraint failed: topics.id`。
+        真库 2026-10-10 已有 002/003/004（001 缺）时，新建第一个主题即失败；
+        测试库此前从不删主题，所以一直是绿的——这条断言就是那个缺口。
+        """
+        a = register_topic(self.meta, "甲")
+        b = register_topic(self.meta, "乙")
+        c = register_topic(self.meta, "丙")
+        prefix = a.rsplit("-", 1)[0]
+        self.assertEqual([a, b, c], [f"{prefix}-{i:03d}" for i in (1, 2, 3)])
+        delete_topic(self.meta, b)                      # 留缺口 002
+        d = register_topic(self.meta, "丁")             # 旧实现会生成 003 撞车
+        self.assertEqual(d, f"{prefix}-004")
+        self.assertEqual(show_topic(self.meta, d)["name"], "丁")
 
 
 class TestTitleChain(unittest.TestCase):

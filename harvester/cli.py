@@ -535,25 +535,38 @@ def cmd_topic_consolidate(args) -> int:
     """
     from .consolidate import (NOISE_MAX_CHARS, apply_plan, build_plan_packet,
                               list_noise, load_plan)
-    from .noisetriage import render_triage, triage
+    from .noisetriage import dump_triage, render_triage, triage
     meta = Path(args.meta)
-    if args.triage or args.triage_out:
+    if args.triage or args.triage_out or args.triage_json:
         # 零散分诊（v0.30）：按"只要求查询 / 无整合诉求"判"取信息 vs 整合信息"
         t = triage(Path(args.db) if args.db else Path("harvester.db"), meta,
                    max_turns=args.triage_max_turns)
-        text = render_triage(t)
+        wrote = False
         if args.triage_out:
             out = Path(args.triage_out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(text, encoding="utf-8", newline="\n")
-            print(f"[topic-consolidate] 分诊报告已写入: {out}"
-                  f"（扫描 {t['scanned']} 条；"
-                  + "、".join(f"{k} {v}" for k, v in
-                              sorted(t["counts"].items(),
-                                     key=lambda kv: -kv[1])) + "）",
-                  file=sys.stderr)
+            out.write_text(render_triage(t), encoding="utf-8", newline="\n")
+            print(f"[topic-consolidate] 分诊报告已写入: {out}", file=sys.stderr)
+            wrote = True
+        if args.triage_json:
+            # 全量出口（不截断）：给人读的报告每类只 60 条，照它填 plan 会漏
+            import json as _json
+            out = Path(args.triage_json)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(_json.dumps(dump_triage(t), ensure_ascii=False,
+                                       indent=1),
+                           encoding="utf-8", newline="\n")
+            print(f"[topic-consolidate] 分诊 JSON 已写入: {out}"
+                  f"（{len(t['rows'])} 行，全量不截断）", file=sys.stderr)
+            wrote = True
+        summary = (f"[topic-consolidate] 分诊扫描 {t['scanned']} 条；"
+                   + "、".join(f"{k} {v}" for k, v in
+                               sorted(t["counts"].items(),
+                                      key=lambda kv: -kv[1])))
+        if wrote:
+            print(summary, file=sys.stderr)
         else:
-            print(text)
+            print(render_triage(t))
         return 0
     if args.noise_list:
         rows = list_noise(meta)
@@ -1311,6 +1324,9 @@ def main(argv=None) -> int:
                       help="零散分诊：按「只要求查询且无整合诉求」判定并打印")
     pcon.add_argument("--triage-out", dest="triage_out", default=None,
                       help="分诊报告输出路径（缺省打印到 stdout）")
+    pcon.add_argument("--triage-json", dest="triage_json", default=None,
+                      help="分诊结果 JSON 输出路径（**全量 rows，不截断**）；"
+                           "填 plan 要用它，别照人读报告（每类只印 60 条）")
     pcon.add_argument("--triage-max-turns", dest="triage_max_turns", type=int,
                       default=3,
                       help="分诊范围：user 回合数 ≤ 该值的会话（默认 3）")
