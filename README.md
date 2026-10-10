@@ -281,6 +281,54 @@ frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain �
   必须归位、否则拒绝执行——已内建为上述 plan 的完整性校验，口径见
   `docs/HANDOFF-v0.22-next.md` 台账 H55/H58。）
 
+### 5.2 卡片校验与主题注册表打通（V3，v0.43）
+
+> 缺口原文（HANDOFF-v0.24 §7.1 V3）：「当前只有 chain（叙事复盘）一种产物；
+> **卡片校验与主题未打通**」。打通前：卡片锚点指着会话、会话在主题注册表里
+> 有没有归属，卡片侧一无所知——`cards validate` 永远说不出"这张卡属于哪个主题"。
+
+判定口径（`--topics-meta` 给了才执行；**缺省不带 → 结果、报告、退出码与旧版
+逐字一致，结果里不会多出任何字段**）：
+
+| 情形 | 判定 |
+|---|---|
+| 未声明主题，锚点会话已在某主题 | **警告**：报出主题 `id（名称）`，提示可在 frontmatter 补 `topic_id` |
+| 未声明主题，锚点未登记任何主题/零散 | **警告**：卡片与注册表暂无关联可核对 |
+| 未声明主题，锚点为**已登记零散**会话 | **警告**（另一句）：零散是"已裁决不进主题"，与"漏归主题"是两回事 |
+| 声明 `topic_id`（或 `topic`），锚点确为该主题成员 | 通过（结果带 `topics`） |
+| 声明主题，但锚点会话不是该主题成员 | **错误**：卡片挂的会话与卡片声称的主题不一致 |
+| 声明主题，但该主题不在注册表 | **错误**：卡片指了一个不存在的主题 |
+| 声明主题，但卡片没有 anchors | **错误**：无法核对（不静默通过） |
+
+一致性只**报告**不自动修正（改卡还是改注册表是语义裁决）；`topic_id` **不是**
+必填字段——§8 冻结字段清单未含它，强制必填会让既有卡全红。
+
+两条实测踩到的坑（都有会红的测试钉住）：
+
+- **sid 双形态**：注册表成员一律用 `sessions.sid`（带源前缀，如
+  `workbuddy-transcript:xxx`），而卡片锚点可能是裸 `sessions.session_id`
+  （`cards new` 脚手架取的就是它）。只做精确比对会**静默漏判**——真实卡
+  `kc-20261006-0003/0004` 的锚点其实都在主题成员里却被判"未登记"。
+  给了 `--db` 时会把每个成员的两种写法都登记为同一主题的键（只读，
+  不写任何库），报告里以「另有 N 个 session_id 别名键」显式计数。
+- **fail loud**：`--topics-meta` 指了读不出来的库（不存在／不是 SQLite／
+  缺 `topics` 表／`members` 不是合法 JSON）→ 抛错、CLI 退出码 2；
+  **绝不静默返回空索引**（空注册表与不可读注册表必须能分开，否则一次
+  没执行的检查会被伪装成通过）。
+
+给机器的那一半：`validate_cards(..., topics_meta=...)` 的每张卡片结果
+additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary 多出
+`topic_reviewed` / `topics` / `topic_member_rows` / `topic_alias_keys` /
+`topic_anchors_checked` / `topic_anchor_hits` / `topic_anchor_noise` /
+`topic_undeclared_cards`（对账：命中 + 零散 + 未关联 = 核对过的锚点数）。
+给人那一半：报告里多一行「主题核对（`--topics-meta`）…」；没给时写
+**「主题核对：未执行」**——不许让人以为已经核对过主题。
+
+**未做**（明确不做，本轮不替人定口径）：`/api/cards` 的 additive 端点字段
+（要给每张卡带主题 id/名，得先定 api-serve 的 `--topics-meta` 拼接口径），
+以及 `cards new --topics-meta`（起卡时提示该会话属哪个主题——"要不要让机器
+替人猜主题"是语义裁决，先不猜）。
+
 ## 全命令速查表
 
 > `python -m harvester <命令> --help` 看完整参数。默认都读当前目录
@@ -333,7 +381,7 @@ frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain �
 | `triage` | 蒸馏队列：新错误 pattern/旧坑重现/Skill 行为链/高信号会话 |
 | `draft` | 蒸馏包：会话原文+卡片规范+指令 → 自包含 md 喂 Agent |
 | `artifacts` | 产物提取：Write/Edit args 回源 → artifacts_meta.db |
-| `cards validate` | 校验卡片目录（§8 规范 + 锚点真实命中索引库） |
+| `cards validate` | 校验卡片目录（§8 规范 + 锚点真实命中索引库）；可选 `--topics-meta topics_meta.db` 追加**卡 ↔ 主题一致性核对**（见「卡片校验与主题注册表打通」） |
 | `cards new` | 从索引库会话生成卡片脚手架（evidence 留白） |
 | `kb-init` | 建知识库骨架（幂等） |
 | `kb-stats` | 知识库盘点 |
@@ -353,6 +401,7 @@ frontmatter 锚点：阶段/跨度/锚点数）、**结论与未决**（chain �
 |---|---|
 | `api-serve` | 只读 HTTP JSON API（默认 127.0.0.1:8765；非回环 host 必须 --token；`--topics-meta/--cards-root/...` 启用对应端点） |
 | `deadcode-scan` | 死代码扫描（AST）：未用 import / 未被引用函数 / 未被引用常量。名字引用统计覆盖 `harvester`+`tests`+`harvester-view`（H48：只扫 `harvester/` 会把测试用到的 API 误判成死函数），默认只对 `harvester/` 报发现；缺省**只提示**，加 `--fail-on-found` 才判失败 |
+| `regress` | 端到端回归语料：**从空库**跑 分诊（含 `--triage-deep`）→ `--plan-seed` → `apply`（dry-run + 真写）→ `topic export`/`md` → H87 跨进程确定性，逐项核对关键数字。全程只用临时库（造自 `indexing.SCHEMA` + `index_session`），**真库一字节不动**；`--out` 人读 / `--json` 机读；退出码 0 通过 / 1 失败 / 3 未执行 |
 
 ## 死代码扫描（每轮收尾的固定动作）
 
@@ -376,6 +425,52 @@ python -m harvester deadcode-scan --root harvester --out docs/reports/deadcode.m
 
 套件里有一条 `test_harvester_package_has_no_dead_code`（`harvester/` 必须 0 条），
 所以这道例行检查不靠人记得跑。
+
+## 端到端回归语料（regress，改链路前后都该跑）
+
+```bash
+python -m harvester regress                                    # 跑一遍，打印人读报告
+python -m harvester regress --out docs/reports/regress.md      # 人读报告落盘
+python -m harvester regress --json docs/reports/regress.json   # 机读结果（下游是程序）
+python -m harvester regress --keep-temp --temp-base .          # 留临时库供人工翻查
+python -m harvester regress --corpus drift                     # 故意漂移语料：实测「会红」
+```
+
+**为什么有它**：`scan`→`triage`→`--plan-seed`→`topic-consolidate --apply`→
+`topic export` 每一步都有自己的单测，但**没有一条"从空库跑完整条链路、把中间数字
+与产物都核对一遍"的端到端回归**。项目里有大量"改了 A 结果 B 悄悄变了"的历史
+（H83 双出口漏条、H87 跨进程不确定），这类问题出在**步骤之间**，各自全绿的单测
+挡不住。
+
+跑哪几步、每步断言什么：
+
+| 步 | 断言 |
+|---|---|
+| `corpus` | 临时库建成：3 个固定 id 主题、12 条会话、各会话 user 回合数与语料自述一致、预置成员就位 |
+| `triage` | 浅分诊各判定类计数逐类对账；深分诊只多出 `deep_*` 两类且浅层逐 sid 判定不变（v0.39/v0.42 口径）；并列关键词会话的判定与归属被钉住 |
+| `plan_seed` | 覆盖统计 `_total`、assign 逐主题成员、noise、显式 skip 不进 unhandled、keep 覆盖剩余主题 |
+| `apply` | plan 过 `validate_plan`；dry-run 通过且**不写库**；真写库后成员数/主题数/零散登记逐项一致 |
+| `export` | `topic export` 的 `members_count` 与 meta 一致、`health` 为 0、JSON 可解析；`topic md` 非空且含主题名；产物落盘非空 |
+| `determinism` | **H87**：不同 `PYTHONHASHSEED` 的独立进程跑同一 meta，关键词次序与分诊结果必须逐 sid 相同 |
+
+两条口径：
+
+- **绝不碰真库**：全程在 `tempfile` 里用语料造临时索引库（`indexing.SCHEMA` +
+  `index_session`，与 `tests/test_v30_noisetriage.py` 同一套夹具构造方式）与临时
+  meta 库，跑完即删；真 `harvester.db` / `topics_meta.db` **一字节不动**。所以它
+  **没有** `--db` / `--meta` 参数——这是故意留白的，不给"顺手指向真库"的后门
+  （套件里有一条测试钉住这两个参数不许出现）。
+- **人读/机读分出口**：`--out` 给人（表格化、逐条列期望值 vs 实测值），`--json`
+  给程序（结构稳定、`sort_keys`）。**下游是程序就别给人读那份**。
+
+退出码：`0` 全通过 / `1` 有断言失败 / `3` **未执行**（前置缺失，例如缺 PyYAML
+——**未执行 ≠ 通过**，调用方据此 skip 而不是当绿灯）/ `2` 用法错误。
+与 `harvester-view/tests/check_real_payload.py` 的既有约定一致。
+
+明确没有覆盖：夹具里关键词都是 2 字，**"长关键词优先"那条规则没被测到**；
+链路只到 `topic export`/`topic md`（`chain-audit` 仍只有自己的单测）；
+不测性能；真库的"删过主题/跳号"那类状态不在范围内（详见
+`harvester/regress.py` 模块 docstring）。
 
 ## 沙箱环境适配（DSH 沙箱专用，**可选**）
 
@@ -425,7 +520,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"   # 加载 sitecustomize.py
 | 诊断 | `toolstats.py` / `errstats.py` | 工具失败率/重试放弃；错误三分类+位置分桶（均含按 Agent/数据源分组） |
 | 行为画像 | `behstats.py` | report-skill：按 skill 聚合调用/触发任务/调用后行为链（G4 确定性主干） |
 | 建议闭环 | `agent_suggest.py` | AGENTS.md 候选条目生成（建议池，人工并入） |
-| 卡片库 | `cards.py` | §8 frontmatter 校验（validate）+ 会话起卡脚手架（new）；工作流见 docs/CARD_WORKFLOW.md |
+| 卡片库 | `cards.py` | §8 frontmatter 校验（validate）+ 会话起卡脚手架（new）+ **卡↔主题一致性核对**（`--topics-meta`，只读，缺省不启用）；工作流见 docs/CARD_WORKFLOW.md |
 | 蒸馏队列 | `triage.py` | triage：新会话确定性初筛排队（新错误pattern/旧坑重现/Skill行为链/高信号会话，T1） |
 | 蒸馏包 | `drafting.py` | draft：会话原文+卡片规范+指令 → 自包含 md 喂任意 Agent 起草（T2 确定性一半；草稿落 cards_pending/，validate 照跑，并入人工） |
 | 蒸馏 | `distill.py` | 语料聚合、知识库骨架、盘点（机械部分） |
@@ -629,6 +724,11 @@ python -m harvester cards new --sid <search输出的sid> --turn N \
 # 其余=可并入主库。PyYAML 可选——无它时降级解析器照常校验锚点
 python -m harvester cards validate --root ~/.workbuddy/knowledge/cards \
     --db harvester.db
+
+# 卡片 ↔ 主题注册表打通（v0.43，V3）：加 --topics-meta 即追加一层一致性核对
+# （缺省不带 → 行为与旧版逐字一致，结果里不会多出任何字段）
+python -m harvester cards validate --root ~/.workbuddy/knowledge/cards \
+    --db harvester.db --topics-meta topics_meta.db
 
 # Skill 行为画像（G4）：按 skill 聚合调用/触发任务/调用后行为链；
 # --skill 深挖单技能 = 可喂给 Agent 蒸馏决策过程的会话清单；

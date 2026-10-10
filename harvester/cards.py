@@ -15,6 +15,7 @@ created。设计把 cards extract（调 LLM 生成卡片）划入可抛弃的提
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import time
@@ -359,15 +360,304 @@ def _evidence_warnings(fm: dict, warns: list[str], db: Path | None,
     return (checked, misses)
 
 
+# ---- V3：卡片 ↔ 主题注册表打通（只读交叉核对） ----
+#
+# 用途：卡片与主题此前是两套互不可见的产物——卡片锚点指着会话，会话在主题
+# 注册表里有没有归属，卡片侧一无所知（真实卡 kc-20261006-0001/0002 的锚点
+# 就在 tp-20261010-004/003 成员里，但没有任何出口说得出来）。本段把注册表
+# 的成员资格**只读**读进来做一致性核对：既不自动登记主题，也不猜主题归属。
+#
+# 口径（跨库一致性检查的三分法，见 README「卡片校验与主题注册表打通」）：
+#   卡片声明主题 且 声明值不在注册表     → 错误（卡片指了一个不存在的主题）
+#   卡片声明主题 且 锚点会话不是其成员   → 错误（卡片挂的会话与声明的主题不一致）
+#   卡片未声明主题 且 锚点会话已在某主题 → 警告（只提示，不替人改卡）
+#   卡片声明主题 且 锚点会话确是其成员   → 通过（报告出该主题）
+# 不一致一律报「错误」而非自动修正：改哪边（改卡还是改注册表）是语义裁决。
+
+
+def _load_topic_membership(topics_meta: Path,
+                           db: Path | None = None) -> dict:
+    """读主题注册表，建 sid → [主题…] 成员索引（**只读**，mode=ro）。
+
+    返回 {"map", "noise", "topics", "member_rows"}：
+    - map：注册成员 sid → [{"id", "name"}, …]（同 sid 属多主题时按主题 id 排序）；
+    - noise：零散登记（`sessions_noise`）sid 集合——它们**未被裁决进任何主题**，
+      与"漏归主题"不是一回事，故不产"未声明主题"警告；
+    - topics：注册表里主题条数（含零成员的主题）；
+    - member_rows：成员登记行数（同一 sid 属两个主题会计两行）。
+
+    **sid 双形态（v0.43 实测缺口）**：注册表成员一律以 `sessions.sid`
+    （带源前缀，如 `workbuddy-transcript:xxx`）登记；而卡片锚点可能是
+    `sessions.session_id`（裸 id，`cards new` 脚手架就取这个值）——
+    只按 sid 精确比对会**静默漏判**（真实卡 kc-20261006-0003/0004 的锚点
+    其实都在主题成员里，却被判"未登记"）。给了 db 时顺带查索引库，
+    把每个成员的 `session_id` 也登记为同一主题的别名键（不写任何库）。
+
+    fail loud：库不存在 / 不是 SQLite / 缺 topics 表 / members 列不是 JSON
+    → 抛异常，绝不静默当成"没有主题"返回空索引（那会把一次没执行的检查
+    伪装成检查通过——空注册表与不可读注册表必须能分开）。
+    """
+    meta_path = Path(topics_meta)
+    if not meta_path.is_file():
+        raise FileNotFoundError(
+            f"主题注册表不存在: {meta_path}（cards 的主题一致性核对无法执行）")
+    try:
+        con = sqlite3.connect(f"file:{meta_path.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:  # pragma: no cover - 连接失败极罕见
+        raise RuntimeError(f"主题注册表不可读: {meta_path}: {exc}") from exc
+    try:
+        try:
+            rows = con.execute("SELECT id, name, members FROM topics "
+                               "ORDER BY id").fetchall()
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(
+                f"主题注册表缺 topics 表或不可读: {meta_path}: {exc}") from exc
+    finally:
+        con.close()
+    member_map: dict[str, list[dict]] = {}
+    member_rows = 0
+    for tid, name, members in rows:
+        try:
+            parsed = json.loads(members or "[]")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"主题注册表 members 不是合法 JSON（主题 {tid}）: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise ValueError(f"主题注册表 members 非列表（主题 {tid}）: "
+                             f"{type(parsed).__name__}")
+        for m in parsed:
+            sid = str((m or {}).get("sid") or "") if isinstance(m, dict) else ""
+            if not sid:
+                continue
+            member_rows += 1
+            _add_topic_key(member_map, sid, tid, name)
+    alias_keys = _add_sid_aliases(member_map, db)
+    from .consolidate import noise_sids
+    noise = noise_sids(meta_path)
+    return {"map": member_map, "noise": _add_noise_aliases(noise, db),
+            "topics": len(rows), "member_rows": member_rows,
+            "alias_keys": alias_keys}
+
+
+def _add_topic_key(member_map: dict[str, list[dict]], key: str, tid: str,
+                   name: str) -> None:
+    """把 (tid, name) 挂到 key 下（同一 key 同一主题只登记一次，保持 id 序）。"""
+    if not key:
+        return
+    lst = member_map.setdefault(key, [])
+    if any(t["id"] == tid for t in lst):
+        return
+    lst.append({"id": tid, "name": name})
+    lst.sort(key=lambda t: t["id"])
+
+
+def _add_sid_aliases(member_map: dict[str, list[dict]],
+                     db: Path | None) -> int:
+    """把注册成员的 `sessions.session_id` 形态登记为别名键（只读）。
+
+    注册表用 `sessions.sid`（带源前缀）；卡片锚点可能是 `session_id`
+    （裸 id）。两种形态指向同一会话时都必须能解析到主题，否则"卡片挂了
+    成员会话"会被误判成"未登记"（真实卡 kc-20261006-0003/0004 实测）。
+    db 为 None（未给索引库）→ 跳过并返回 0，此时只有 sid 形态可解析
+    （报告里用 topic_alias_keys 显式计数，不许静默当全覆盖）。
+    返回新增的别名键数。
+    """
+    if db is None or not Path(db).is_file() or not member_map:
+        return 0
+    keys = list(member_map)
+    try:
+        con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error:  # pragma: no cover
+        return 0
+    try:
+        added = 0
+        for i in range(0, len(keys), 400):  # 躲 SQLite 变量数上限
+            chunk = keys[i:i + 400]
+            ph = ",".join("?" * len(chunk))
+            try:
+                rows = con.execute(
+                    f"SELECT sid, session_id FROM sessions "
+                    f"WHERE sid IN ({ph}) OR session_id IN ({ph})",
+                    chunk + chunk).fetchall()
+            except sqlite3.OperationalError:  # pragma: no cover - 旧库无列
+                return added
+            for sid, session_id in rows:
+                owners = [o for o in (sid, session_id)
+                          if o and o in member_map]
+                if not owners:
+                    continue
+                for alias in (sid, session_id):
+                    if not alias or alias in member_map:
+                        continue
+                    for o in owners:  # 同一会话的两种写法映射到同一主题
+                        for t in member_map[o]:
+                            _add_topic_key(member_map, alias, t["id"],
+                                           t["name"])
+                    added += 1
+        return added
+    finally:
+        con.close()
+
+
+def _sid_forms(db: Path, sids: set[str]) -> set[str]:
+    """把一批 sid 扩成「sid ∪ session_id」两形态（只读；无库/无列 → 原样）。
+
+    与 `_add_sid_aliases` 同一缺口的两侧：注册表与零散登记都用
+    `sessions.sid`，而卡片锚点可能是裸 `session_id`——零散判定也要
+    双形态，否则"锚点是已登记零散会话"会被误报成"完全没有关联"。
+    """
+    if not sids or db is None or not Path(db).is_file():
+        return set(sids)
+    keys = list(sids)
+    try:
+        con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error:  # pragma: no cover
+        return set(sids)
+    try:
+        out = set(sids)
+        for i in range(0, len(keys), 400):
+            chunk = keys[i:i + 400]
+            ph = ",".join("?" * len(chunk))
+            try:
+                rows = con.execute(
+                    f"SELECT sid, session_id FROM sessions "
+                    f"WHERE sid IN ({ph}) OR session_id IN ({ph})",
+                    chunk + chunk).fetchall()
+            except sqlite3.OperationalError:  # pragma: no cover - 旧库无列
+                return set(sids)
+            for sid, session_id in rows:
+                for v in (sid, session_id):
+                    if v:
+                        out.add(str(v))
+        return out
+    finally:
+        con.close()
+
+
+def _add_noise_aliases(noise: set[str], db: Path | None) -> set[str]:
+    """零散 sid 集合的双形态展开（见 `_sid_forms`）。"""
+    if not noise or db is None:
+        return set(noise)
+    return _sid_forms(Path(db), set(noise))
+
+
+def _anchor_sids(fm: dict) -> list[str]:
+    """卡片 anchor 的 session_id 列表（去重保序；非 dict 锚点跳过）。"""
+    anchors = fm.get("anchors")
+    if not isinstance(anchors, list):
+        return []
+    return list(dict.fromkeys(
+        str(a.get("session_id")) for a in anchors
+        if isinstance(a, dict) and a.get("session_id")))
+
+
+def _declared_topic(fm: dict) -> str:
+    """卡片声明的主题（`topic_id` 优先、`topic` 次之；都没有 → 空串）。
+
+    **不把 `topic` 列入必填字段**：§8 冻结字段清单未含它，强制必填会
+    让既有卡全红——声明主题是可选动作，只在声明了才核对一致性。
+    """
+    for key in ("topic_id", "topic"):
+        v = fm.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _topic_consistency(fm: dict, membership: dict) -> tuple[list[str], list[str],
+                                                            dict]:
+    """单卡的「卡 ↔ 主题」一致性核对。返回 (errors, warnings, info)。
+
+    errors/warnings 追加进调用方的列表（错误=可判定的不一致，须人工裁决）；
+    info 供 additive 结果字段与 summary 对账：
+
+    - declared_topic_id：卡片声明的主题（`topic_id` 优先、`topic` 次之）；
+    - topics：锚点命中的注册主题 [{id, name}]；
+    - undeclared：**存在**锚点既不在任何主题成员里、也不是已登记零散
+      （混合卡——部分锚点命中主题、部分没命中——也算）；
+    - noise_only：卡片有锚点，且**全部**锚点都是已登记零散会话。
+
+    警告分两类分别追加（混合卡两条都出），任何锚点都不静默丢失：
+    「未声明主题但已登记在主题 X」= 建议补 topic_id；
+    「锚点未登记任何主题/零散」= 卡片与注册表暂无关联。
+    """
+    errors: list[str] = []
+    warns: list[str] = []
+    member_map: dict[str, list[dict]] = membership["map"]
+    noise: set[str] = membership["noise"]
+    declared = _declared_topic(fm)
+    sids = _anchor_sids(fm)
+    hits: dict[str, dict] = {}
+    undeclared = False
+    for sid in sids:
+        topics = member_map.get(sid) or []
+        for t in topics:
+            hits.setdefault(t["id"], t)
+        if not topics and sid not in noise:
+            undeclared = True
+    noise_only = bool(sids) and not hits and not undeclared
+    if declared:
+        if declared not in {t["id"] for t in hits.values()}:
+            known_ids = sorted({t["id"] for t in hits.values()})
+            if not sids:
+                errors.append(
+                    f"卡片声明主题 {declared}，但没有 anchors 可供核对"
+                    "（无法确认该主题是否成立）")
+            elif not known_ids:
+                errors.append(
+                    f"卡片声明主题 {declared}，但锚点会话均不在该主题成员列表"
+                    "（卡片挂的会话与卡片声称的主题不一致；改卡或改注册表"
+                    "由人工裁决）")
+            else:
+                errors.append(
+                    f"卡片声明主题 {declared}，但锚点会话实际属 {known_ids}"
+                    "（卡片挂的会话与卡片声称的主题不一致）")
+    elif hits:
+        names = [f"{t['id']}（{t['name']}）" for t in
+                 (hits[k] for k in sorted(hits))]
+        warns.append("卡片未声明主题，锚点会话已登记在主题 " + "、".join(names)
+                     + "（可选：在 frontmatter 补 topic_id 声明归属）")
+    if not declared and undeclared:
+        warns.append("卡片锚点会话未登记于任何主题（也未登记零散）——"
+                     "卡片与主题注册表暂无关联可核对")
+    if not declared and noise_only:
+        warns.append("卡片锚点会话均为已登记零散会话——未被裁决进任何主题，"
+                     "故无主题归属可核对")
+    return errors, warns, {
+        "declared_topic_id": declared or None,
+        "topics": [{"id": hits[k]["id"], "name": hits[k]["name"]}
+                   for k in sorted(hits)],
+        "reviewed": True,
+        "undeclared": undeclared,
+        "noise_only": noise_only,
+    }
+
+
 def validate_cards(root: Path, db: Path | None = None,
-                   con: sqlite3.Connection | None = None
+                   con: sqlite3.Connection | None = None, *,
+                   topics_meta: Path | None = None
                    ) -> tuple[list[dict], dict]:
     """校验目录下全部卡片。返回 (results, summary)。
 
     results 每项 {path, errors, warnings}；summary 含 ok/warn/error 计数与
     anchor_misses（锚点不在索引库的卡片数）。
     con：外部连接（同 _anchor_known 口径），锚点校验复用调用方连接。
+
+    topics_meta（v0.43 additive，**缺省行为与不传完全一致**）：给了主题
+    注册表路径时追加一层「卡 ↔ 主题」一致性核对（口径见本模块顶部
+    `_topic_consistency`）。此时每张卡片的结果多带 `declared_topic_id` /
+    `topics`（锚点命中的注册主题），summary 多带 `topic_*` 计数键。
+    同时给了 db 时，注册成员的 `sessions.session_id` 写法也会被解析
+    （见 `_add_sid_aliases`）；只给 topics_meta 不给 db 时**只有
+    `sessions.sid` 精确形态可解析**，报告里的 `topic_alias_keys` 为 0。
+    传了但库不可读 → 抛异常（fail loud，不退化成"没有主题"的假通过）。
     """
+    membership: dict | None = None
+    if topics_meta is not None:
+        if db is not None and Path(topics_meta).resolve() == Path(db).resolve():
+            raise ValueError(f"--topics-meta 不能与 --db 指向同一文件: "
+                             f"{topics_meta}")
+        membership = _load_topic_membership(Path(topics_meta), db)
     results: list[dict] = []
     n_ok = n_warn = n_err = 0
     anchor_miss = 0
@@ -376,12 +666,31 @@ def validate_cards(root: Path, db: Path | None = None,
     evidence_misses = 0
     placeholder_cards = 0
     evidence_unchecked = 0
+    topic_anchors = 0
+    topic_anchor_hits = 0
+    topic_undeclared = 0
+    topic_noise_anchors = 0
     for p in sorted(root.rglob("*.md")):
         if p.name.upper() in ("INDEX.md", "README.md"):
             continue
         errors, warns, fm = validate_card(p)
         had_evidence = bool(str((fm or {}).get("evidence") or "").strip())
         c = 0
+        topic_info: dict | None = None
+        if membership is not None and fm is not None:
+            # 主题核对与索引库无关：没有 --db 时也要能核对注册表归属
+            # （注册表自证成员资格），故独立于下面的 db/con 分支。
+            terrs, twarns, topic_info = _topic_consistency(fm, membership)
+            errors.extend(terrs)
+            warns.extend(twarns)
+            for sid in _anchor_sids(fm):
+                topic_anchors += 1
+                if membership["map"].get(sid):
+                    topic_anchor_hits += 1
+                elif sid in membership["noise"]:
+                    topic_noise_anchors += 1
+            if topic_info["undeclared"]:
+                topic_undeclared += 1
         if fm and (db is not None or con is not None):
             anchors = fm.get("anchors")
             if isinstance(anchors, list):
@@ -414,7 +723,11 @@ def validate_cards(root: Path, db: Path | None = None,
         if had_evidence and c == 0:
             evidence_unchecked += 1
         rel = str(p.relative_to(root))
-        results.append({"path": rel, "errors": errors, "warnings": warns})
+        entry = {"path": rel, "errors": errors, "warnings": warns}
+        if topic_info is not None:
+            entry["declared_topic_id"] = topic_info["declared_topic_id"]
+            entry["topics"] = topic_info["topics"]
+        results.append(entry)
         if any(e.startswith("[占位符]") for e in errors):
             placeholder_cards += 1
         if errors:
@@ -430,6 +743,16 @@ def validate_cards(root: Path, db: Path | None = None,
                "evidence_misses": evidence_misses,
                "evidence_unchecked": evidence_unchecked,
                "placeholder_cards": placeholder_cards}
+    if membership is not None:
+        summary.update({
+            "topic_reviewed": True,
+            "topics": membership["topics"],
+            "topic_member_rows": membership["member_rows"],
+            "topic_alias_keys": membership["alias_keys"],
+            "topic_anchors_checked": topic_anchors,
+            "topic_anchor_hits": topic_anchor_hits,
+            "topic_anchor_noise": topic_noise_anchors,
+            "topic_undeclared_cards": topic_undeclared})
     return results, summary
 
 
@@ -449,6 +772,24 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
         f"- 引文核对 {summary.get('evidence_checked', 0)} 行，"
         f"未命中原文 {summary.get('evidence_misses', 0)} 行", "",
     ]
+    if summary.get("topic_reviewed"):
+        lines += [
+            f"- 主题核对（--topics-meta）：注册主题 "
+            f"{summary.get('topics', 0)} 个／成员登记 "
+            f"{summary.get('topic_member_rows', 0)} 行（另有 "
+            f"{summary.get('topic_alias_keys', 0)} 个 session_id 别名键）；"
+            f"锚点 {summary.get('topic_anchors_checked', 0)} 个中命中成员 "
+            f"{summary.get('topic_anchor_hits', 0)} 个、命中零散登记 "
+            f"{summary.get('topic_anchor_noise', 0)} 个；"
+            f"未声明主题的卡片 {summary.get('topic_undeclared_cards', 0)} 张",
+            "",
+        ]
+    else:
+        lines += [
+            "- 主题核对：**未执行**（未给 --topics-meta）——本次结论只覆盖 "
+            "§8 规范与锚点，**未**核对「卡片 ↔ 主题注册表」一致性",
+            "",
+        ]
     for r in results:
         if r["errors"] or r["warnings"]:
             lines.append(f"## {r['path']}")
