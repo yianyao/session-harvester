@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 
 from .errstats import clean_error_sample, pattern_stats
+from .suggestmeta import TOPIC_PREFIX
 
 # 模板表：正则（对归一模式或错误原文匹配）→ (规则句, 做法说明, owner)。
 # 每条模板都源自本库 steps 表真实踩过的错误，不是通用建议。
@@ -224,23 +225,36 @@ def build_suggestion_entries(errors: list[dict], min_count: int = 3,
 
 
 def coverage_report(entries: list[dict],
-                    statuses: dict[str, str]) -> dict:
-    """建议池 ↔ 台账覆盖核对（v0.45，SOP C2）。
+                    statuses: dict[str, str],
+                    accounts: dict | None = None) -> dict:
+    """建议池 ↔ 台账覆盖核对（v0.45，SOP C2；v0.46 P2-5 扩人账）。
 
     背景：台账（`suggestions_meta.db`）本应记录"人对每条建议的裁决"，
     但真库只有 8 条，而项目已归并 14 个主题、处置过 117 个候选簇——
     裁决留痕不全，于是"人的决策权限"没有完整记录。
 
-    本函数只做**机械对账**，返回三类：
+    本函数只做**机械对账**，返回四类：
     - `undecided`：当前建议里 status 仍为 `pending` 的键（**待人工裁决**）；
-    - `stale`：台账里有、当前建议池里没有的键——建议句被改写或条目退休后
-      **没清台账**（这类最容易被忽略：数字看着在涨，其实对不上）；
+    - `stale_adopted`：台账里已 **adopted** 但已不在建议池的键——**不是欠账**：
+      采纳后错误 pattern 消失，往往正说明规则生效了，该交 `harvest-eval`
+      判三值（改善/无变化/变差）；**删账反而丢掉 A/B 基线**；
+    - `stale_other`：台账里 pending/rejected 且已不在建议池的键——建议句被改写
+      或条目退休后**没清台账**（这类最容易被忽略：数字看着在涨，其实对不上）；
     - `decided`：当前建议里已有 adopted/rejected 的键。
+
+    `accounts`（可选）：人账总览的其他两本账 {"topics": n, "noise": m,
+    "topics_meta": 路径}——主题注册表与零散登记才是主题级裁决的 durable 留痕
+    （历史"117 候选簇"的逐条报告在 gitignore 目录里，不可回溯）。
 
     key = 建议的 `title`（H31 口径：key 是建议句原文，含句号）。
     """
     titles = [e.get("title") for e in entries if e.get("title")]
-    ledger_keys = set(statuses or {})
+    all_keys = set(statuses or {})
+    # v0.46 P2-5：`topic:` 是**另一个命名空间**（主题级裁决，由 ledger-sync 从
+    # 注册表派生）。它天然不会出现在建议池里——若混进 stale，14 个主题会被
+    # 误报成"台账陈旧"，对账立刻变成噪音。故分开统计。
+    topic_keys = sorted(k for k in all_keys if k.startswith(TOPIC_PREFIX))
+    ledger_keys = all_keys - set(topic_keys)
 
     def _st(t: str) -> str:
         # 缺键**必须**当 pending：`.get(t)` 返回 None，用 `!= "pending"` 判
@@ -250,12 +264,18 @@ def coverage_report(entries: list[dict],
     decided = sorted(t for t in titles if _st(t) != "pending")
     undecided = sorted(t for t in titles if _st(t) == "pending")
     stale = sorted(ledger_keys - set(titles))
+    stale_adopted = [k for k in stale if (statuses or {}).get(k) == "adopted"]
+    stale_other = [k for k in stale if (statuses or {}).get(k) != "adopted"]
     counts: dict[str, int] = {}
-    for v in (statuses or {}).values():
+    for k, v in (statuses or {}).items():
+        if k in topic_keys:      # 人账总览里主题单列，不混进建议句计数
+            continue
         counts[v] = counts.get(v, 0) + 1
     return {"suggestions": len(titles), "ledger": len(ledger_keys),
             "decided": decided, "undecided": undecided, "stale": stale,
-            "ledger_counts": counts}
+            "stale_adopted": stale_adopted, "stale_other": stale_other,
+            "topic_keys": topic_keys, "ledger_counts": counts,
+            "accounts": accounts}
 
 
 def render_coverage(cov: dict) -> str:
@@ -267,14 +287,35 @@ def render_coverage(cov: dict) -> str:
         f"（{cov['ledger_counts'] or '空'}）",
         f"- 已裁决 **{len(cov['decided'])}** 条｜待裁决 "
         f"**{len(cov['undecided'])}** 条｜台账陈旧（已不在建议池）"
-        f"**{len(cov['stale'])}** 条",
+        f"**{len(cov['stale'])}** 条"
+        f"（其中 adopted {len(cov.get('stale_adopted') or [])} / "
+        f"其他 {len(cov.get('stale_other') or [])}）",
         "", "## 待裁决（建议池里有、台账里 pending）", ""]
     lines += [f"- {t}" for t in cov["undecided"]] or ["- （无）"]
-    lines += ["", "## 台账陈旧（建议句已不在当前建议池，应清账）", ""]
-    lines += [f"- {t}" for t in cov["stale"]] or ["- （无）"]
+    lines += ["", "## 台账陈旧·已采纳（不算欠账：疑似规则生效）", ""]
+    lines += [f"- {t}" for t in (cov.get("stale_adopted") or [])] or ["- （无）"]
+    lines += ["", "## 台账陈旧·其他（应清账）", ""]
+    lines += [f"- {t}" for t in (cov.get("stale_other") or [])] or ["- （无）"]
+    acct = cov.get("accounts")
+    if acct or cov.get("topic_keys"):
+        lines += ["", "## 人账总览（三本账，P2-5）", "",
+                  f"- 建议句台账：**{cov['ledger']}** 条"
+                  f"（{cov['ledger_counts'] or '空'}）",
+                  f"- 主题级台账：**{len(cov.get('topic_keys') or [])}** 条"
+                  "（`topic:` 命名空间，与建议句**分开对账**：主题天然不在建议池里，"
+                  "混算会全部误报成陈旧）",
+                  f"- 主题注册表：**{(acct or {}).get('topics', 0)}** 个已登记主题"
+                  f"（{(acct or {}).get('topics_meta', '?')}）",
+                  f"- 零散登记：**{(acct or {}).get('noise', 0)}** 条（同上库 "
+                  "`sessions_noise`）",
+                  "- 说明：**历史「117 候选簇」的逐条裁决不可回溯**（轮次报告在"
+                  " gitignore 的 `docs/reports/`）；它们的 durable 等价物就是"
+                  "上面两行（主题成员 + 零散登记）。以后必须当轮入账。"]
     lines += ["", "---", "",
-              "口径：key = 建议句原文（H31）；本核对只做机械对账，"
-              "**裁决本身仍由人做**（工具不代改 AGENTS.md，也不替人下判断）。"]
+              "口径：key = 建议句原文（H31）；主题级裁决用 `topic:<id>` 命名空间"
+              "（由 `ledger-sync` 从注册表派生，工具只抄录不代替判断）；"
+              "本核对只做机械对账，**裁决本身仍由人做**"
+              "（工具不代改 AGENTS.md，也不替人下判断）。"]
     return "\n".join(lines)
 
 

@@ -402,8 +402,10 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |
 | `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db）。**排序口径 doc_freq 优先**（= 含该词的消息条数），freq 为出现总次数。默认启用随包通用停用词表（`harvester/data/stopwords_zh.txt`，只含通用虚词）；人名/专名请用 `--stopwords PATH` 叠加私有表（可多次），`--no-stopwords` 关闭过滤。**ASCII 段按整词统计**（英文切片片段已消除）；CJK 段为 2/3 字滑窗，跨词边界的片段（如「上的」）属无分词器的固有代价。`--keep-runs N` + `--vacuum` 在统计后顺手回收旧 run |
 | `keywords-gc` | **回收 keywords_meta.db**（v0.45）：`keyword_stats` 是**累积表**（每跑一次 keywords 追加一整份 n-gram 表），不回收就随运行次数线性膨胀。`--keep-runs N`（缺省 1）只留最近 N 次 run 并**按 run 删净**统计行（不留孤儿），`--vacuum` 确有删除时回收磁盘。真库实测：4 次 run / 435,583 行 → 40.2 MB，`--keep-runs 1 --vacuum` 后 **18.4 MB**（其中 22 MB 是**空闲页**，只有 VACUUM 能回收） |
-| `suggest-agents` | 从错误模式生成 AGENTS.md 候选条目（建议池，不直改）。`--coverage` 追加**建议池 ↔ 台账**覆盖核对（v0.45）：列出`待裁决`与`台账陈旧`（建议句已不在池里）两类。真库实测：建议 8 条 / 台账 8 条看着对得上，实际**已裁决 6、待裁决 2、陈旧 2**——"数字相等"是巧合 |
-| `suggest-status` | 建议池状态落库（pending/adopted/rejected） |
+| `suggest-agents` | 从错误模式生成 AGENTS.md 候选条目（建议池，不直改）。`--coverage` 追加**建议池 ↔ 台账**覆盖核对，并给**人账总览**（v0.46 P2-5：建议句台账 / 主题级台账 / 主题注册表 / 零散登记四行）。陈旧条目**分两类**：已采纳的（疑似规则生效，交 `harvest-eval`，**不删账**）与其他的（应清账）。真库实测：建议 9 条 / 台账 8 条（建议句）+ 14 条（`topic:` 命名空间），已裁决 6 / 待裁决 3 / 陈旧·已采纳 2 / 陈旧·其他 0 |
+| `suggest-status` | 建议池状态落库（pending/adopted/rejected）。v0.46 可同时记 `--adopted-at`（A/B 分界 T，回填历史采纳日期）与 `--note`（人工说明；`harvest-eval` 认其中 `pattern: <错误pattern>` 那一行） |
+| `ledger-sync` | **人账同步**（v0.46 P2-5）：把**主题注册表**的既有裁决照抄进建议台账（`topic:<id>`，`adopted_at` = 登记时刻），并给"已采纳但没记分界"的存量行补 `adopted_at`（值取台账自己的 `updated_at`）。**默认 dry-run**，要写必须 `--apply`；幂等，且**绝不覆盖**人写下的 `adopted_at`/`note` |
+| `harvest-eval` | **自进化评估闭环**（v0.46 P1-4）：对每条 adopted 规则，按分界 T（`adopted_at`，或回退 `--since`）取前后各 `--window-days` 天，比较**未解决率**（主判据）与**复发率**（只报告），输出**三值判定**（改善/无变化/变差）＋样本量；样本不足或没有分界日期一律写**「不下结论」**（≠「无变化」）。判定→处置口径固定：无变化→可退休、变差→建议回滚、改善→保持。**工具只评估，绝不自动改 `AGENTS.md`** |
 | `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
 
 ### 蒸馏与知识库
@@ -768,6 +770,22 @@ python -m harvester suggest-agents --db harvester.db --min-count 3 \
 # 建议池条目用 title，待人工归因模式用 pattern）
 python -m harvester suggest-status --meta suggestions_meta.db \
     --key "Edit/Write 前必须先 Read 目标文件最新内容。" --status adopted
+# v0.46：可同时记 A/B 分界与说明。note 里写 `pattern: <错误pattern>` 时，
+# harvest-eval 就用该 pattern 匹配错误（key 仍是建议句原文，H31 口径不变）
+python -m harvester suggest-status --meta suggestions_meta.db \
+    --key "Edit/Write 前必须先 Read 目标文件最新内容。" --status adopted \
+    --adopted-at "2026-10-05 09:00:00" \
+    --note "pattern: File has not been read yet: <path> Read it first before writing to it."
+
+# 人账同步（P2-5）：主题注册表的裁决照抄进台账 + 存量条目补 adopted_at
+# 默认 dry-run，确认后加 --apply（幂等；不覆盖人写下的 adopted_at/note）
+python -m harvester ledger-sync --meta suggestions_meta.db \
+    --topics-meta topics_meta.db
+
+# 自进化评估（P1-4）：规则并入之后到底有没有变好——三值判定 + 样本量
+# 没有 adopted_at 的条目用 --since 兜底；样本不足一律「不下结论」
+python -m harvester harvest-eval --db harvester.db \
+    --meta suggestions_meta.db --since 2026-10-05 --window-days 14
 
 # 知识卡片（G3）：候选池 ↔ 主库归一，三条供卡通道详见 docs/CARD_WORKFLOW.md
 # 从索引库会话一键起卡（锚点自动填，evidence 留白待补）

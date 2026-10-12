@@ -63,6 +63,11 @@ from .adapters import PLUGIN_IDS, build_adapters, load_sources
 from .discovery import probe_and_write
 from .distill import KB_DEFAULT_ROOT, corpus_from_exports, corpus_from_sources, kb_init, kb_stats
 from .exporter import export, parse_selection
+# 评估口径的唯一来源（CLI 只引用，不写字面量——防两处漂移）
+from .harvesteval import DEFAULT_MIN_PER_WINDOW as _EVAL_MIN_PER_WINDOW
+from .harvesteval import DEFAULT_MIN_TOTAL as _EVAL_MIN_TOTAL
+from .harvesteval import DEFAULT_THRESHOLD as _EVAL_DEFAULT_THRESHOLD
+from .harvesteval import DEFAULT_WINDOW_DAYS as _EVAL_DEFAULT_WINDOW
 from .indexing import fts5_available, index_exports, index_sources, search, sessions_in_db
 from .outline import scan_all, write_outline
 from .pack import build_pack, write_pack
@@ -932,10 +937,17 @@ def cmd_suggest_agents(args) -> int:
     if getattr(args, "coverage", False):
         from .agent_suggest import build_suggestion_entries, coverage_report
         from .agent_suggest import render_coverage
+        from .suggestmeta import registry_counts
         entries = build_suggestion_entries(errors, min_count=args.min_count,
                                            max_items=args.max,
                                            statuses=statuses)["entries"]
-        cov = coverage_report(entries, statuses or {})
+        # 人账总览（v0.46 P2-5）：另两本账的行数从主题注册表读，缺库即 0
+        tmeta = getattr(args, "topics_meta", None)
+        accounts = None
+        if tmeta:
+            counts = registry_counts(Path(tmeta))
+            accounts = dict(counts, topics_meta=str(tmeta))
+        cov = coverage_report(entries, statuses or {}, accounts=accounts)
         target = Path(args.coverage_out) if getattr(args, "coverage_out",
                                                     None) else None
         if target:
@@ -964,14 +976,85 @@ def cmd_report_skill(args) -> int:
 
 
 def cmd_suggest_status(args) -> int:
-    """建议池状态落库（suggestion_status 表，独立 meta 库，不碰采集库）。"""
+    """建议池状态落库（suggestion_status 表，独立 meta 库，不碰采集库）。
+
+    v0.46 additive：可同时记 `--adopted-at`（A/B 评估的分界 T，回填历史采纳日期）
+    与 `--note`（人工说明；`harvest-eval` 认 `pattern: <错误pattern>` 那一行）。
+    """
     from .suggestmeta import set_status
     try:
-        set_status(Path(args.meta), args.key, args.status)
+        set_status(Path(args.meta), args.key, args.status,
+                   adopted_at=getattr(args, "adopted_at", None),
+                   note=getattr(args, "note", None))
     except ValueError as e:
         print(f"错误: {e}", file=sys.stderr)
         return 2
-    print(f"已记录: {args.key} -> {args.status}（{args.meta}）")
+    extra = []
+    if getattr(args, "adopted_at", None):
+        extra.append(f"adopted_at={args.adopted_at}")
+    if getattr(args, "note", None):
+        extra.append("note=已更新")
+    print(f"已记录: {args.key} -> {args.status}"
+          f"{('（' + '，'.join(extra) + '）') if extra else ''}（{args.meta}）")
+    return 0
+
+
+def cmd_harvest_eval(args) -> int:
+    """自进化评估闭环（v0.46 P1-4）：adopted 规则的 A/B 三值判定 + 样本量。
+
+    只读采集库（mode=ro）；报告头带库快照与 STALE 标记。工具**不自动改
+    AGENTS.md**——"自"= 评估自动化，退休/回滚由人决定后手动改。
+    """
+    from .harvesteval import render_report, run_eval
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester update）",
+              file=sys.stderr)
+        return 2
+    try:
+        result = run_eval(dbp, Path(args.meta), since=args.since,
+                          window_days=args.window_days,
+                          min_per_window=args.min_per_window,
+                          min_total=args.min_total,
+                          threshold=args.threshold)
+    except ValueError as e:
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    _emit_report(render_report(result), args)
+    return 0
+
+
+def cmd_ledger_sync(args) -> int:
+    """人账同步（v0.46 P2-5）：把**主题注册表**的既有裁决照抄进建议台账。
+
+    只做两件幂等的事：缺 `topic:<id>` 就建、已采纳但缺 `adopted_at` 就补；
+    **绝不覆盖**人已写下的 `adopted_at` / `note`，也**不代替人判断**。
+    默认 dry-run（只打印差异），要写必须显式 `--apply`。
+    """
+    from .suggestmeta import (backfill_adopted_at, registry_counts, sync_rows,
+                              topic_rows)
+    rows = topic_rows(Path(args.topics_meta))
+    if not rows:
+        print(f"主题注册表里没有可入账的主题（{args.topics_meta}）")
+        return 0
+    result = sync_rows(Path(args.meta), rows, apply=args.apply)
+    back = backfill_adopted_at(Path(args.meta), apply=args.apply)
+    counts = registry_counts(Path(args.topics_meta))
+    print(f"人账同步（{'已写入' if args.apply else 'dry-run，未写入'}）："
+          f"新建 {len(result['created'])} / 补分界 {len(result['filled'])}"
+          f" / 不动 {len(result['unchanged'])}"
+          f"（主题 {counts['topics']}，零散 {counts['noise']}）")
+    if back["filled"]:
+        print(f"存量已采纳条目补 adopted_at（取自各自台账 updated_at）"
+              f"{len(back['filled'])} 条：")
+        for key in back["filled"][:10]:
+            print(f"  ~ {key}")
+    for key in result["created"][:10]:
+        print(f"  + {key}")
+    for key in result["filled"][:10]:
+        print(f"  ~ {key}（补 adopted_at）")
+    if (result["would_write"] or back["filled"]) and not args.apply:
+        print("确认无误后加 --apply 写入。")
     return 0
 
 
@@ -1755,10 +1838,15 @@ def main(argv=None) -> int:
                      help="建议状态 meta 库路径（suggestion_status 表；"
                           "缺省不读状态，全部按 pending 渲染）")
     psa.add_argument("--coverage", action="store_true",
-                     help="追加「建议池 ↔ 台账」覆盖核对（v0.45）：列出待裁决与"
-                          "台账陈旧（建议句已不在池里）两类，只对账不代改")
+                     help="追加「建议池 ↔ 台账」覆盖核对（v0.45）：列出待裁决、"
+                          "台账陈旧·已采纳（疑似生效，不算欠账）与·其他（应清账），"
+                          "另附人账总览；只对账不代改")
     psa.add_argument("--coverage-out", dest="coverage_out", default=None,
                      help="覆盖核对报告输出路径（缺省打印）")
+    psa.add_argument("--topics-meta", dest="topics_meta",
+                     default="topics_meta.db",
+                     help="主题注册表库路径（--coverage 的人账总览用；"
+                          "V0.46 P2-5）")
     psa.set_defaults(func=cmd_suggest_agents)
 
     pss = sub.add_parser("suggest-status",
@@ -1771,7 +1859,52 @@ def main(argv=None) -> int:
     pss.add_argument("--status", required=True,
                      choices=["pending", "adopted", "rejected"],
                      help="审阅结论")
+    pss.add_argument("--adopted-at", dest="adopted_at", default=None,
+                     help="采纳时刻（YYYY-MM-DD 或 'YYYY-MM-DD HH:MM:SS'）；"
+                          "harvest-eval 用它当 A/B 分界 T。不传则首次采纳记当前时间、"
+                          "已有值保留（只增不减）")
+    pss.add_argument("--note", default=None,
+                     help="人工说明；推荐写法里含一行 `pattern: <错误pattern>`，"
+                          "harvest-eval 会用它做匹配（key 仍是建议句原文）")
     pss.set_defaults(func=cmd_suggest_status)
+
+    pls = sub.add_parser(
+        "ledger-sync",
+        help="人账同步（v0.46 P2-5）：把主题注册表的既有裁决照抄进建议台账"
+             "（topic:<id>），并回填已采纳条目的 adopted_at；默认 dry-run")
+    pls.add_argument("--meta", default="suggestions_meta.db",
+                     help="建议台账 meta 库路径")
+    pls.add_argument("--topics-meta", dest="topics_meta",
+                     default="topics_meta.db", help="主题注册表库路径")
+    pls.add_argument("--apply", action="store_true",
+                     help="真的写入（缺省只打印将要发生的变更）")
+    pls.set_defaults(func=cmd_ledger_sync)
+
+    phe = sub.add_parser(
+        "harvest-eval",
+        help="自进化评估闭环（v0.46 P1-4）：adopted 规则在分界 T 前后的"
+             "未解决率/复发率 A/B + 三值判定（改善/无变化/变差/不下结论）")
+    phe.add_argument("--db", default="harvester.db", help="索引库路径")
+    phe.add_argument("--meta", default="suggestions_meta.db",
+                     help="建议台账 meta 库路径")
+    phe.add_argument("--since", default=None, metavar="STAMP",
+                     help="未记 adopted_at 时的分界回退值"
+                          "（YYYY-MM-DD 或 'YYYY-MM-DD HH:MM:SS'）")
+    phe.add_argument("--window-days", dest="window_days", type=int,
+                     default=_EVAL_DEFAULT_WINDOW, help="前后窗口天数（默认 14）")
+    phe.add_argument("--threshold", type=float, default=_EVAL_DEFAULT_THRESHOLD,
+                     help="相对变化阈值（默认 0.10 = ±10%% 内算无变化）")
+    phe.add_argument("--min-per-window", dest="min_per_window", type=int,
+                     default=_EVAL_MIN_PER_WINDOW,
+                     help="样本门槛：每个窗口最少几条错误，达不到一律"
+                          "「不下结论（样本不足）」（默认 %d）"
+                          % _EVAL_MIN_PER_WINDOW)
+    phe.add_argument("--min-total", dest="min_total", type=int,
+                     default=_EVAL_MIN_TOTAL,
+                     help="样本门槛：两窗口合计最少几条错误（默认 %d）"
+                          % _EVAL_MIN_TOTAL)
+    phe.add_argument("--out", help="报告输出路径（缺省打印）")
+    phe.set_defaults(func=cmd_harvest_eval)
 
     pcd = sub.add_parser("cards",
                          help="知识卡片校验（§8 frontmatter 规范 + 锚点有效性）")

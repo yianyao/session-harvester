@@ -192,6 +192,48 @@ class IndexIncrementalTest(unittest.TestCase):
         self.assertEqual(len(st["missing"]), 1)      # 静默跳过 = 覆盖有洞
         self.assertEqual(st["parsed"], 0)
 
+    def test_update_scans_sources_once_not_twice(self):
+        """v0.46：`update` 只扫一遍源（第 3 步的扫描结果传给 export 复用）。
+
+        会红的情形：把 `run_update` 里的 `scanned=` 去掉（或 `export` 忽略它）
+        —— 那样 `export` 内部会自己再扫一次，下面的计数变成 **1**（真机实测
+        第二遍约 10 s）。
+        """
+        import harvester.exporter as E
+        orig = E.scan_all
+        calls = {"n": 0}
+
+        def counting(*a, **k):
+            calls["n"] += 1
+            return orig(*a, **k)
+
+        E.scan_all = counting
+        self.addCleanup(lambda: setattr(E, "scan_all", orig))
+        _write_inbox(self.root, [_conv(1, "福克斯"), _conv(2, "高尔夫")])
+        run_update(**_kwargs(self.root))
+        # 复用生效 = export **一次都不该**自己扫（扫描只发生在 run_update 里）
+        self.assertEqual(calls["n"], 0)
+        self.assertTrue(self.root.joinpath("harvester.db").is_file())
+
+    def test_prescan_gives_same_manifest_as_self_scan(self):
+        """复用扫描结果不许改变导出结果（同 sid 集合、同文件名）。"""
+        import harvester.exporter as E
+        from harvester.outline import scan_all
+        _write_inbox(self.root, [_conv(1, "旅馆")])
+        # 先跑一次 update，把 inbox 文件归档到 done/，两次导出才面对同一状态
+        run_update(**_kwargs(self.root))
+        src = {"plugins": [{"id": "deepseek-export",
+                            "paths": [str(_archive_file(self.root))]}]}
+        only = {"deepseek-export"}
+        a = E.export(self.root / "exp-a", sources=src, only=only,
+                     include_notes=True)
+        ads, items, reps = scan_all(sources=src, only=only)
+        b = E.export(self.root / "exp-b", sources=src, only=only,
+                     include_notes=True, scanned=(ads, items, reps))
+        self.assertEqual([e["file"] for e in a["exported"]],
+                         [e["file"] for e in b["exported"]])
+        self.assertEqual(a["count"], 1)
+
     # ---- 2. gone ----
 
     def test_gone_source_session_drops_all_three_tables(self):

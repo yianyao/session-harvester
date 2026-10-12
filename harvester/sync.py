@@ -318,11 +318,13 @@ def run_update(root: Path = Path("."),
             wanted.add(sid)
             updated_sids.append(sid)
 
-    # 4. 选择性导出（空集则跳过，连 scan 都省）
+    # 4. 选择性导出（空集则跳过，连 scan 都省）；复用第 3 步的扫描结果
+    #    （v0.46：此前 export 会再扫一遍全源，真机实测这第二遍 ~10 s）
     if wanted:
         manifest = export(exports_dir, selection=None,
                           include_notes=include_notes, verbose=verbose,
-                          sources=merged, only=only, select_sids=wanted)
+                          sources=merged, only=only, select_sids=wanted,
+                          scanned=(adapters, items, reports))
         export_count = manifest.get("count", 0)
         export_msg = manifest.get("message")
     else:

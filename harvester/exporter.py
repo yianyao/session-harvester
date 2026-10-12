@@ -95,9 +95,18 @@ def export(outdir: Path, selection: str | None = None,
            include_notes: bool = False, verbose: bool = False,
            sources: dict | None = None,
            only: set[str] | None = None,
-           select_sids: set[str] | None = None) -> dict:
-    adapters_list, items, reports = scan_all(verbose=verbose, sources=sources,
-                                             only=only)
+           select_sids: set[str] | None = None,
+           scanned: tuple | None = None) -> dict:
+    """scanned（v0.46，additive 可选）：调用方**已经扫过**的
+    `(adapters_list, items, reports)` 三元组，给 `run_update` 这类"先自己扫一遍
+    挑 sid、再进来导出"的增量入口复用——否则同一轮会把每个源扫两次
+    （真机实测第二遍 ~10 s，占 update 剩余耗时的大头）。None = 自己扫（既有行为）。
+    """
+    if scanned is None:
+        adapters_list, items, reports = scan_all(verbose=verbose,
+                                                 sources=sources, only=only)
+    else:
+        adapters_list, items, reports = scanned
     if not items:
         return {"exported": [], "message": "无可导出会话（各数据源均不可用或为空）"}
 
