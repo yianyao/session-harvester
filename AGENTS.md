@@ -11,7 +11,7 @@
   | 项 | 值 |
   |---|---|
   | 后端 head | v0.33 → **v0.46**（`786f5bb` P0-1+P0-2 → `89641db` P1-3 → `3a7ee00` 文档 → 本批收尾提交见 `git log -1`）；**版本号 0.46.0** |
-  | 后端测试基线 | **754 例全绿**（venv，见下「基线自查」；685 → 754，+69：P0-1 10 / P0-2 7 / P1-3 5 / P1-4 38 / P2-5 8） |
+  | 后端测试基线 | **761 例全绿**（venv，见下「基线自查」；685 → 761，+76：P0-1 10 / P0-2 7 / P1-3 5 / P1-4 38 / P2-5 8 / CLI 层 7） |
   | 无 PyYAML 门禁 | **`GATE ran=713 failures=0 errors=61 skipped=0`**（须 0 failures；61 errors 是缺 PyYAML 的设计行为）。脚本：`& $venv -X utf8 scripts\gate_no_yaml.py`；flake 复现 `scripts\flake_hunt.py`（热/冷）、旧树 `docs/reports/probe-history-flake.py` |
   | 死代码门的并发保护 | v0.45：不可信发现单列 + CLI 回 3 + 套件门可区分 skip。**本轮再次验证其必要性**：子代理正在写文件时跑的全量套件出现 1 例 ERROR，它停手后复跑 754 例全绿（见交接 §2.8） |
   | 跨测试泄漏门 | `tests/test_v45_no_monkeypatch_leak.py`（AST 查模块级打桩无还原）；权威仍是动态的 `flake_hunt.py` |
@@ -27,7 +27,7 @@
   | 自进化闭环 | `suggestions_meta` 加 `adopted_at`/`note`（H31 key + `pattern:` 桥 + `topic:` 命名空间）；`harvest-eval` 出三值判定 + 样本门槛；**工具绝不自动改 AGENTS.md**。真机：7 条 adopted → 无变化 1（→ 建议退休）/ 不下结论 6 |
   | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（§5 定期蒸馏 SOP；**§6 = v0.46 待办，本轮 P0-1/P0-2/P1-3/P1-4/P2-5 已全部完成、P3-6 记录不修**；§7 不做清单） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做（本轮只需仓内写权限） |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.46-next.md`（最新，先读它）**；`docs/HANDOFF-v0.33-next.md` §0 保留为版本号来源（`test_v45_hygiene` 读它）；事实台账 H1–**H106** 在 `docs/HANDOFF-v0.22-next.md` §2 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.46-next.md`（最新，先读它）**；`docs/HANDOFF-v0.33-next.md` §0 保留为版本号来源（`test_v45_hygiene` 读它）；事实台账 H1–**H107** 在 `docs/HANDOFF-v0.22-next.md` §2 |
   | MCP 工具 | **10 个**（会话面 4 + 进化数据面 6）；漂移门 `tests/test_v45_mcp_tools.py` |
 
 - **下一件事（按序，详见 `docs/HANDOFF-v0.33-next.md` §0）**：
@@ -46,7 +46,7 @@
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **754 例 OK**；无 PyYAML 门禁用
+  `& $venv -m unittest discover -s tests` → 预期 **761 例 OK**；无 PyYAML 门禁用
   `& $venv -X utf8 scripts\gate_no_yaml.py`（须 **0 failures**，预期 `ran=713 errors=61`）。
   （补丁 = `scripts/sandbox/sitecustomize.py`：沙箱下 `os.mkdir(0o700)` 建出的目录
   连本进程都写不进 → `tempfile` 全崩。**普通机器上不需要**，见 README「沙箱环境适配」。）
