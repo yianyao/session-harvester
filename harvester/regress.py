@@ -244,6 +244,63 @@ EXPECT = {
     # H87：独立进程跑同一 meta，次序必须相同
     "hash_seeds": ["1", "7", "12345"],
     "triage_seeds": ["1", "424242"],
+    # ---- G1/G2 诊断层（B9，v0.47）----
+    # 口径见 `_STEP_FIXTURE`；这些数字由 `_step_diagnostics` 逐项核对。
+    # 数字**实测于加了 steps 的夹具**（首版靠"读代码猜键名"，5 条断言全是错的：
+    # `ToolStats.error` 才是**计数**、`ToolStats.errors` 是"错误原文 → 次数"的字典、
+    # 错误行的类别键叫 **`class`** 而不是 `cls`——先量再写，别猜）。
+    "diag_tools": {                       # 工具 → (调用数, 错误数)
+        "read_file": (4, 1),
+        "write_file": (2, 1),
+        "bash": (1, 1),
+    },
+    "diag_flow": {"retried": 1, "given_up": 2, "errors": 3},
+    "diag_err_classes": {"env": 1, "tool_interface": 1, "context": 1,
+                         "unclassified": 0},
+    "diag_err_buckets": {"开场": 2, "中途": 0, "收尾": 1},
+    "diag_err_patterns": {
+        "cannot read <q>: File not found": 1,
+        "cannot modify <q>: file has not been read — read the file, then retry": 1,
+        "bash: Permission denied": 1,
+    },
+    "diag_unresolved": 2,                 # 3 条错误里没有"后续再次调用"的那 2 条
+}
+
+#: G1/G2 诊断层的 steps 夹具（B9，v0.47）：(seq, ts, tool, phase, status, error)。
+#: 键是语料短 id（`sid_of` 转成真实 sid）。
+#:
+#: 设计（每个数字都要有**因果**，不是随便凑）：
+#: - `s01`：3 次成功调用（2×read_file + 1×write_file）→ G1 的成功侧非空；
+#: - `s02`：`context` 类错误（"File not found"）后**同一工具再次调用** →
+#:   `retried=1`（自愈）、`given_up` 不加；
+#: - `s03`：`tool_interface`（先写后读）与 `env`（Permission denied）各一条，
+#:   两条之后**都不再调用**对应工具 → `given_up=2`。
+#: 错误原文都是真库里的**真实形状**（真机 pattern 原文），不是我编的字符串；
+#: 三条恰好覆盖 G2 的三个非 unclassified 类别。
+_STEP_FIXTURE: dict[str, list[tuple]] = {
+    "s01": [
+        (0, "2026-01-01 10:00:01", "read_file", "call", None, None),
+        (1, "2026-01-01 10:00:02", "read_file", "result", "completed", None),
+        (2, "2026-01-01 10:00:03", "write_file", "call", None, None),
+        (3, "2026-01-01 10:00:04", "read_file", "call", None, None),
+        (4, "2026-01-01 10:00:05", "read_file", "result", "completed", None),
+    ],
+    "s02": [
+        (0, "2026-01-01 10:01:01", "read_file", "call", None, None),
+        (1, "2026-01-01 10:01:02", "read_file", "result", "error",
+         "cannot read \"a.md\": File not found"),
+        (2, "2026-01-01 10:01:03", "read_file", "call", None, None),
+        (3, "2026-01-01 10:01:04", "read_file", "result", "completed", None),
+    ],
+    "s03": [
+        (0, "2026-01-01 10:02:01", "write_file", "call", None, None),
+        (1, "2026-01-01 10:02:02", "write_file", "result", "error",
+         "cannot modify \"b.py\": file has not been read — read the file, "
+         "then retry"),
+        (2, "2026-01-01 10:02:03", "bash", "call", None, None),
+        (3, "2026-01-01 10:02:04", "bash", "result", "error",
+         "bash: Permission denied"),
+    ],
 }
 
 
@@ -280,6 +337,13 @@ def build_fixture(base: Path | str, corpus: list[SessionSpec] | None = None
 
     **只用 tests/ 里已有的夹具构造方式**（`indexing.SCHEMA` + `index_session`），
     不另起一套造库代码：临时库与测试库结构一致，回归才有意义。
+
+    v0.47（B9）**额外插入一组确定性的 steps 行**（G1/G2 诊断层）：
+    此前夹具只有对话消息、`steps` 表恒为空 → `report-tools` / `report-errors`
+    的数字**恒为 0**，回归里"数字对账"是空的（断言 0 == 0 永远不会红）。
+    现在写入 **13 行**（8 次 call + 5 次 result，其中 3 个 result 是 error：一处
+    "重试"、两处"放弃"），覆盖 G1 的重试/放弃与 G2 的三分类，
+    并由 `_step_diagnostics` 逐数字核对。
     """
     base = Path(base)
     db, meta = base / "harvester.db", base / "topics_meta.db"
@@ -294,6 +358,13 @@ def build_fixture(base: Path | str, corpus: list[SessionSpec] | None = None
                 updated_at="2026-01-01 10:00:00",
                 messages=[Message(role="user", text=t) for t in s.turns]
                 + [Message(role="assistant", text="答")]))
+        for sid, rows in _STEP_FIXTURE.items():
+            full = sid_of(sid)
+            for seq, ts, tool, phase, status, err in rows:
+                con.execute(
+                    "INSERT INTO steps(sid, seq, ts, tool, phase, status, error,"
+                    " detail) VALUES(?,?,?,?,?,?,?,NULL)",
+                    (full, seq, ts, tool, phase, status, err))
         con.commit()
     finally:
         con.close()
@@ -444,6 +515,7 @@ def run_regress(base: Path | str, corpus: list[SessionSpec] | None = None,
                 steps.append(seed["step"])
                 steps.append(_step_apply(work, seed))
                 steps.append(_step_export(work))
+                steps.append(_step_diagnostics(work))
                 steps.append(_step_determinism(work))
             else:
                 steps += _blocked_chain([st1])
@@ -462,6 +534,7 @@ _CHAIN_STEPS = (("triage", "分诊（含 --triage-deep）各判定类计数"),
                 ("plan_seed", "plan-seed 覆盖计数与逐 sid 归属"),
                 ("apply", "apply：dry-run 与真写库逐项对账"),
                 ("export", "topic export / topic md 产物核对"),
+                ("diagnostics", "G1/G2 诊断层：report-tools / report-errors 数字"),
                 ("determinism", "H87 并列关键词跨进程确定性"))
 
 
@@ -687,6 +760,61 @@ def _step_export(work: Path) -> Step:
         st.check(f"{tid} 两个产物都已落盘且非空", True,
                  (work / f"topic-{tid}.json").stat().st_size > 0
                  and (work / f"topic-{tid}.md").stat().st_size > 0)
+    return st
+
+
+def _step_diagnostics(work: Path) -> Step:
+    """G1/G2 诊断层数字对账（v0.47 / B9 / 评审 v5 第 7 条）。
+
+    **补的是什么洞**：`regress` 此前覆盖"分诊 → plan-seed → apply → 导出 →
+    跨进程确定性"，**不含** `report-tools` / `report-errors` 的一层；
+    而夹具的 `steps` 表恒为空 → 那两个报告在回归里永远是"0 步 / 0 错"，
+    等于**没测**（断言 `0 == 0` 永远不会红）。
+
+    判据（每一条都能说清何时会红）：断言的是**结构化出口的数字**
+    （`toolstats.collect_stats_from_db` / `errstats.collect_errors_from_db`），
+    **不是人读 markdown**——后者排版一改就成假红。改了夹具 steps、
+    改了重试/放弃口径、改了错误三分类规则，这里都会红。
+    """
+    from .errstats import CLASSES, collect_errors_from_db
+    from .toolstats import collect_stats_from_db
+    st = Step("diagnostics", "G1/G2 诊断层：report-tools / report-errors 数字")
+    db = work / "harvester.db"
+
+    stats, flow = _safe(st, collect_stats_from_db, db)
+    if not isinstance(flow, dict):
+        return st
+    got_tools = {name: (s.calls, s.error) for name, s in stats.items()}
+    st.check("G1 各工具 (调用数, 错误数)", EXPECT["diag_tools"], got_tools)
+    st.check("G1 失败后续行为（重试/放弃/错误总数）", EXPECT["diag_flow"],
+             {k: flow.get(k) for k in EXPECT["diag_flow"]})
+
+    errors, meta = _safe(st, collect_errors_from_db, db)
+    if not isinstance(errors, list):
+        return st
+    st.check("G2 步骤总数", sum(len(rows) for rows in _STEP_FIXTURE.values()),
+             meta.get("total_steps"))
+    st.check("G2 错误总数", EXPECT["diag_flow"]["errors"],
+             meta.get("error_count"))
+    st.check("G2 三分类计数", EXPECT["diag_err_classes"],
+             {c: sum(1 for e in errors if e.get("class") == c) for c in CLASSES})
+    st.check("G2 位置分桶（开场/中途/收尾）", EXPECT["diag_err_buckets"],
+             {b: sum(1 for e in errors if e.get("bucket") == b)
+              for b in EXPECT["diag_err_buckets"]})
+    st.check("G2 错误模式（归一后原文 → 命中数）", EXPECT["diag_err_patterns"],
+             {e["pattern"]: sum(1 for x in errors
+                                if x["pattern"] == e["pattern"])
+              for e in errors})
+    st.check("G2 未解决条数（无后续调用的错误）", EXPECT["diag_unresolved"],
+             sum(1 for e in errors if not e.get("resolved", True)))
+    # 两条报告都必须真的渲染出来（空报告会让上面的数字对账变成"测了个空库"）
+    from .errstats import render_report as render_err
+    from .toolstats import render_report as render_tool
+    tool_md = _safe(st, render_tool, stats, flow=flow)
+    err_md = _safe(st, render_err, errors, meta)
+    if isinstance(tool_md, str) and isinstance(err_md, str):
+        st.check("G1 报告渲染非空", True, len(tool_md) > 100)
+        st.check("G2 报告渲染非空", True, len(err_md) > 100)
     return st
 
 

@@ -32,9 +32,15 @@ A/B，给出**三值判定 + 样本量**，让"退休 / 回滚"有数据依据�
 - **未解决率** = 窗口内 `resolved == False` 的错误数 / 窗口内命中错误数
   （resolved 口径见 errstats：错误后同会话同工具是否再次调用）；
 - **复发率** = 窗口内"含该 pattern 的会话"里出现 **>= 2 次** 的会话占比；
-- 判定**以未解决率为主要判据**（复发率只报告、不参与判定，避免两个指标
-  各指一个方向时口径含糊）：相对变化 < 10% → 无变化，下降 >= 10% → 改善，
-  上升 >= 10% → 变差；未解决率从 0 变成 >0 记 +100%（"从无到有"）；
+- **判定用两个指标（v0.47 A1 裁决，2026-10-12）**：`未解决率` **与** `复发率`
+  **都要不升才算改善**；任一显著变差（>= +10%）即**变差**（保守优先）；
+  两项都在 ±10% 内 → 无变化；比率从 0 变成 >0 记 +100%（"从无到有"）。
+  **没数据的比率（某窗口没有错误 → None）不参与判定**：既不算改善也不算变差
+  ——"没复发"与"没数据"必须分得开。
+  *为什么改*：只盯未解决率会把"次数在降、每次都自愈"的规则误判成"无变化"
+  ——真机那条 `Edit/Write 前必须先 Read` 命中 64→41、复发率 80.0%→57.1%
+  都在变好，却因未解决率恒 0.0% 被判"无变化 → 可退休"。**改口径前先看这条**，
+  它是"设计选择"不是 bug 修复（历史报告口径与新版不可直接比较）。
 - **样本门槛优先于变化幅度**：两窗口各自命中错误数 < 5，或合计 < 20 →
   `不下结论（样本不足）`（哪怕未解决率翻了 10 倍——样本不足时那个数字不可信）。
 """
@@ -235,6 +241,29 @@ def relative_change(before: float | None, after: float | None) -> float | None:
     return (after - before) / before
 
 
+def _direction(before: float | None, after: float | None,
+               threshold: float) -> str | None:
+    """单个比率的走向：`improved` / `worsened` / `flat` / `None`（没数据）。
+
+    阈值**含等号**（下降 >= 10% 即改善）。比率是浮点除法的结果，恰好 ±10%
+    时可能算出 -0.09999999999999998（实测：100 条里 50→45 未解决），直接比较
+    会把"恰好 10%"误判成"无变化"——故向阈值内侧放宽 1e-9（两侧都用 `- eps`，
+    让浮点误差朝哪边都算命中）。
+
+    任一侧为 None（该窗口没有错误）→ 返回 None = **无判断**（既不改善也不变差；
+    "没数据"与"没有复发"是两回事，不许拿它去下结论）。
+    """
+    d = relative_change(before, after)
+    if d is None:
+        return None
+    eps = 1e-9
+    if d <= -(threshold - eps):
+        return "improved"
+    if d >= threshold - eps:
+        return "worsened"
+    return "flat"
+
+
 def judge(before: dict, after: dict, threshold: float = DEFAULT_THRESHOLD,
           min_per_window: int = DEFAULT_MIN_PER_WINDOW,
           min_total: int = DEFAULT_MIN_TOTAL) -> tuple[str, str]:
@@ -242,25 +271,40 @@ def judge(before: dict, after: dict, threshold: float = DEFAULT_THRESHOLD,
 
     **样本门槛先于幅度判定**：这是本模块最重要的一条——不放门槛，任何
     一两条的噪声都能刷出"改善 300%"。
+
+    **两条判据（v0.47 / A1 裁决，用户 2026-10-12）**：`未解决率` 与 `复发率`
+    **都要不升才算改善**，任一显著变差即变差。此前只盯未解决率，会把
+    "次数在降、每次都自愈"的规则误判成"无变化"——真机那条
+    `Edit/Write 前必须先 Read` 就是：命中 64→41、复发率 80.0%→57.1% 都在变好，
+    只因未解决率恒 0.0% 被判"无变化 → 可退休"。**这不是一行阈值调整**：
+    判据从"单指标"变成"两指标的方向合成"（见 `_direction`）。
+    **没数据的比率（None）不参与判定**：既不算改善也不算变差，
+    "没复发"与"没数据"必须分得开（§五 16）。
     """
     nb, na = before["errors"], after["errors"]
     if nb < min_per_window or na < min_per_window or nb + na < min_total:
         return VERDICT_INCONCLUSIVE, (
             f"{_REASON_FEW_SAMPLES}（前 {nb} / 后 {na} 条，合计 {nb + na}；"
             f"门槛：各 >= {min_per_window} 且合计 >= {min_total}）")
-    d = relative_change(before["unresolved_rate"], after["unresolved_rate"])
+    ru = _direction(before["unresolved_rate"], after["unresolved_rate"], threshold)
+    rr = _direction(before["recurrence_rate"], after["recurrence_rate"], threshold)
     text = (f"未解决率 {_pct(before['unresolved_rate'])} → "
-            f"{_pct(after['unresolved_rate'])}（{d:+.0%}）")
-    # 阈值**含等号**（下降 >= 10% 即改善）。比率是浮点除法的结果，恰好 ±10%
-    # 时可能算出 -0.09999999999999998（实测：100 条里 50→45 未解决），直接比较
-    # 会把"恰好 10%"误判成"无变化"——故向阈值内侧放宽 1e-9（两侧都用 `- eps`，
-    # 让浮点误差朝哪边都算命中）。
-    eps = 1e-9
-    if d <= -(threshold - eps):
-        return VERDICT_IMPROVED, text
-    if d >= threshold - eps:
+            f"{_pct(after['unresolved_rate'])}（{_delta_text(before['unresolved_rate'], after['unresolved_rate'])}）"
+            f" ｜ 复发率 {_pct(before['recurrence_rate'])} → "
+            f"{_pct(after['recurrence_rate'])}（{_delta_text(before['recurrence_rate'], after['recurrence_rate'])}）")
+    judged = [d for d in (ru, rr) if d is not None]
+    if "worsened" in judged:                 # 任一显著变差 → 变差（保守优先）
         return VERDICT_WORSENED, text
-    return VERDICT_UNCHANGED, f"{text}，在 ±{threshold:.0%} 内"
+    if "improved" in judged and all(d != "worsened" for d in judged):
+        return VERDICT_IMPROVED, text
+    extra = "" if judged else "（两窗口均无比率可比）"
+    return VERDICT_UNCHANGED, f"{text}，两项均在 ±{threshold:.0%} 内{extra}"
+
+
+def _delta_text(before: float | None, after: float | None) -> str:
+    """相对变化的展示文本（没数据时给「—」，不是 +0%）。"""
+    d = relative_change(before, after)
+    return "—" if d is None else f"{d:+.0%}"
 
 
 def _pct(rate: float | None) -> str:
@@ -425,7 +469,8 @@ def render_report(result: dict) -> str:
         f"{result.get('meta_db', '?')}｜库内错误 {result.get('errors_total', '?')} 条",
         f"- A/B：分界时刻 T 前后各 **{result['window_days']}** 天"
         f"（前 [T-N, T)、后 [T, T+N)）；阈值 ±{result['threshold']:.0%}"
-        f"（以**未解决率**为主判据，复发率只报告）",
+        f"（判据：**未解决率与复发率都要不升才算改善**，任一显著变差即变差"
+        f"——v0.47 A1 裁决；没数据的比率不参与判定）",
         f"- 样本门槛：两窗口各 >= {result['min_per_window']} 条**且**合计 >= "
         f"{result['min_total']} 条，否则一律「不下结论（样本不足）」",
         f"- 分界回退 `since`：{result.get('since') or '（未给）'}",

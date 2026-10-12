@@ -210,6 +210,69 @@ class TestJudge(unittest.TestCase):
         self.assertEqual(judge(self._stat(20, 0), self._stat(20, 20))[0], "变差")
 
 
+class TestTwoMetricJudge(unittest.TestCase):
+    """v0.47 A1 裁决的**回归钉子**：复发率也进判据（未解决率不再独家说了算）。
+
+    真机触发这条的情形（2026-10-12）：`Edit/Write 前必须先 Read` 命中
+    64→41、复发率 80.0%→57.1%、未解决率恒 0.0%——旧口径判「无变化 → 可退休」。
+    用户裁决：**未解决率与复发率都要不升才算改善**，任一显著变差即变差。
+
+    **故意破坏指引**：把 `judge` 里的复发率那一支去掉（改回只看
+    `unresolved_rate`）→ 下面 `test_recurrence_improvement_alone_is_improved`
+    必须变红（它会退回「无变化」）；这是这组测试存在的全部理由。
+    """
+
+    @staticmethod
+    def _stat(errors: int, unresolved: int, recurrence: float,
+              sessions: int | None = None) -> dict:
+        return {"errors": errors, "sessions": sessions or errors,
+                "unresolved": unresolved,
+                "unresolved_rate": unresolved / errors,
+                "recurrence_rate": recurrence}
+
+    def test_recurrence_improvement_alone_is_improved(self):
+        """未解决率不变 + 复发率显著下降 → **改善**（现口径的判「无变化」是钉子）。"""
+        b = self._stat(50, 0, 0.80)
+        a = self._stat(50, 0, 0.57)         # -28.75%
+        v, reason = judge(b, a)
+        self.assertEqual(v, "改善", reason)
+        self.assertIn("复发率", reason)
+
+    def test_recurrence_worsening_alone_is_worsened(self):
+        """未解决率不变 + 复发率显著上升 → **变差**（不许因为另一项没动就放过）。"""
+        b = self._stat(50, 0, 0.30)
+        a = self._stat(50, 0, 0.60)         # +100%
+        self.assertEqual(judge(b, a)[0], "变差")
+
+    def test_both_improve_is_improved(self):
+        b = self._stat(50, 25, 0.80)
+        a = self._stat(50, 10, 0.40)
+        self.assertEqual(judge(b, a)[0], "改善")
+
+    def test_conflict_resolves_to_worsened(self):
+        """一好一坏 → **变差**（保守优先：不能拿"另一项在变好"抵消）。"""
+        b = self._stat(50, 25, 0.50)
+        a = self._stat(50, 10, 0.90)        # 未解决率 -60%，复发率 +80%
+        self.assertEqual(judge(b, a)[0], "变差")
+
+    def test_both_flat_is_unchanged(self):
+        b = self._stat(50, 25, 0.50)
+        a = self._stat(50, 26, 0.52)        # 都在 ±10% 内
+        self.assertEqual(judge(b, a)[0], "无变化")
+
+    def test_missing_recurrence_is_not_judged(self):
+        """某窗口没有错误 → 该比率 None：**不参与判定**，而不是当成 0 或当成改善。
+
+        （"没复发"与"没数据"必须分得开——§五 16。）
+        """
+        b = self._stat(20, 10, 0.50)
+        a = {"errors": 20, "sessions": 0, "unresolved": 10,
+             "unresolved_rate": 0.5, "recurrence_rate": None}
+        v, reason = judge(b, a)
+        self.assertEqual(v, "无变化", reason)
+        self.assertIn("—", reason)          # 无数据展示为「—」，不是 0.0%
+
+
 class TestKeyMatching(unittest.TestCase):
     """key ↔ pattern 的匹配口径。"""
 

@@ -12,8 +12,10 @@
       仅显示各数据源探测状态（STUB 类附带登录态）
   python -m harvester weblogin check|init-config|prepare <product>
       网页/客户端 Chat 登录态三级流程（探测→账号配置→浏览器引导登录）
-  python -m harvester sync [--root .] [--db] [--inbox] [--exports] [--no-notes] [-v]
-      一键同步：收件箱收割 → 全量导出 → 整库重建索引（幂等，可挂定时）
+  python -m harvester sync [--root .] [--db] [--inbox] [--exports] [--no-notes]
+                           [--keywords-keep-runs N] [--no-prune-keywords] [-v]
+      一键同步：收件箱收割 → 全量导出 → 整库重建索引 → 收尾回收 keywords_meta
+      （幂等，可挂定时；GC 见 keywords-gc，--no-prune-keywords 可关闭）
   python -m harvester aggregate [--from exports/|--all] [--out corpus.md]
       聚合会话为语料（蒸馏第 1 步的机械部分，带 SRC 溯源锚点）
   python -m harvester report-tools [--sources] [--db] [--since 30d] [--out report.md]
@@ -191,7 +193,10 @@ def cmd_sync(args) -> int:
                  db_path=root / args.db,
                  inbox_dir=root / args.inbox,
                  exports_dir=root / args.exports,
-                 include_notes=not args.no_notes, verbose=args.verbose)
+                 include_notes=not args.no_notes, verbose=args.verbose,
+                 keywords_meta=(False if args.no_prune_keywords
+                                else root / args.keywords_meta),
+                 keep_keyword_runs=args.keywords_keep_runs)
     inbox = r["inbox"]
     for a in inbox["archived"]:
         tag = "重复跳过" if a.get("duplicate") else "已认领"
@@ -211,6 +216,15 @@ def cmd_sync(args) -> int:
     st = r["index"]
     print(f"  [索引] {st['sessions']} 会话 / {st['messages']} 消息 -> {r['db']}"
           + (f"（跳过损坏 {st['skipped']} 文件）" if st.get("skipped") else ""))
+    kw = r.get("keywords_gc") or {}
+    if kw.get("skipped"):
+        if args.verbose:
+            print(f"  [keywords GC] 未执行：{kw.get('reason', '')}")
+    else:
+        print(f"  [keywords GC] 保留最近 {kw['keep']} 次 run"
+              f"（keep={kw['kept']}）；删除 run {kw['deleted_runs']} 个 / "
+              f"统计行 {kw['deleted_stats']} 条"
+              f"{'，已 VACUUM' if kw['vacuumed'] else ''}")
     print(f"本次新增 {len(r['new'])} 个会话"
           + (f"（移除 {len(r['gone'])} 个）" if r["gone"] else ""))
     for sid in r["new"][:10]:
@@ -1539,13 +1553,31 @@ def cmd_export_analysis(args) -> int:
 
 
 def main(argv=None) -> int:
-    # Windows 原版解释器默认 cp936，report 输出含 emoji/特殊 Unicode 标题重定向
-    # 到文件/管道时会 UnicodeEncodeError——统一 UTF-8（DSH 等已全局 UTF-8 则无感）。
+    _force_utf8_streams()
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+def _force_utf8_streams() -> None:
+    """Windows 原版解释器默认 cp936，report 输出含 emoji/特殊 Unicode 标题重定向
+    到文件/管道时会 UnicodeEncodeError——统一 UTF-8（DSH 等已全局 UTF-8 则无感）。"""
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except AttributeError:  # 非 TextIOWrapper（如测试桩）
             pass
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """构造完整子命令解析器（**与 `main` 分离**，供测试直接检查参数）。
+
+    为什么抽出来（v0.47）：参数级别的东西（默认值、`--no-*` 开关）此前只能靠
+    **真跑一条命令**来验证，于是"参数存在但语义反了"没人测得到
+    （`test_v44_doc_cmds.py` 的漂移门只核对**子命令名**）。抽出来后测试可直接
+    `build_parser().parse_args(["sync", ...])` 断言默认值与开关——不启子进程、
+    不碰真库。纯重构，不改任何命令行为（UTF-8 流适配仍在 `main` 里做，
+    不藏进本函数，免得它带上流副作用）。
+    """
     p = argparse.ArgumentParser(prog="harvester", description="AI 会话历史提取与分类导出工具")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -1603,6 +1635,18 @@ def main(argv=None) -> int:
     psy.add_argument("--no-notes", action="store_true",
                      help="导出时排除 note 角色（默认包含——工具步骤藏在 "
                           "note 消息里，排除会导致 steps 表为空、分析失效）")
+    psy.add_argument("--keywords-meta", dest="keywords_meta",
+                     default="keywords_meta.db",
+                     help="keywords meta 库路径（相对 root）；sync 收尾会回收它"
+                          "（只留最近 N 次 run，见 --keywords-keep-runs）")
+    psy.add_argument("--keywords-keep-runs", dest="keywords_keep_runs", type=int,
+                     default=1, metavar="N",
+                     help="sync 收尾保留的 keywords run 数（默认 1：读路径只读最新"
+                          "一次，留多个只是把体积乘 N）")
+    psy.add_argument("--no-prune-keywords", dest="no_prune_keywords",
+                     action="store_true",
+                     help="关闭 sync 收尾的 keywords GC（默认开：keyword_stats 是"
+                          "累积表，靠人记得手动跑 keywords-gc = 库会一直涨）")
     psy.add_argument("-v", "--verbose", action="store_true")
     psy.set_defaults(func=cmd_sync)
 
@@ -2185,8 +2229,7 @@ def main(argv=None) -> int:
                      help="关键词 meta 库路径（可选；启用 /api/keywords）")
     pap.set_defaults(func=cmd_api_serve)
 
-    args = p.parse_args(argv)
-    return args.func(args)
+    return p
 
 
 def run() -> None:

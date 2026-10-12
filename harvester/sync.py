@@ -211,7 +211,9 @@ def run_sync(root: Path = Path("."),
              exports_dir: Path | str | None = None,
              include_notes: bool = True,
              only: set[str] | None = None,
-             verbose: bool = False) -> dict:
+             verbose: bool = False,
+             keywords_meta: Path | str | None = None,
+             keep_keyword_runs: int = 1) -> dict:
     """一键同步：收件箱收割 -> 全量导出 -> 整库重建索引 -> 差异报告。
 
     各路径默认相对 root。include_notes 默认 True——工具步骤记录藏在
@@ -219,6 +221,9 @@ def run_sync(root: Path = Path("."),
     报告失去数据源，v0.12 真机实测回归），分析口径必须包含。
     only: 限定启用的 adapter id（None=全部），测试或仅需导出型源时传入
     以避免触碰本机其他数据源。
+    keywords_meta: `keywords_meta.db` 路径（默认 `root/keywords_meta.db`；
+    **传 `False` 可关闭收尾 GC**）。
+    keep_keyword_runs: 收尾 GC 保留的 run 数（默认 1，见 `_gc_keywords`）。
     返回完整统计 dict（cli 负责渲染）。
     """
     root = Path(root)
@@ -247,6 +252,9 @@ def run_sync(root: Path = Path("."),
     wm = corpus_watermark(merged, only=only)
     record_corpus_watermark(db_path, wm)
 
+    # 5. 收尾 GC keywords_meta（B10：别再靠人记得跑 keywords-gc）
+    kw = _gc_keywords(root, keywords_meta, keep_keyword_runs)
+
     new_sids = sorted(after - before)
     gone_sids = sorted(before - after)
     return {
@@ -256,12 +264,45 @@ def run_sync(root: Path = Path("."),
                    "message": manifest.get("message")},
         "index": stats,
         "corpus": wm,
+        "keywords_gc": kw,
         "sessions_total": stats.get("sessions", len(after)),
         "new": new_sids,
         "gone": gone_sids,
         "db": str(db_path),
         "exports_dir": str(exports_dir),
     }
+
+
+def _gc_keywords(root: Path, keywords_meta: Path | str | None,
+                  keep: int) -> dict:
+    """`sync` 收尾回收 `keywords_meta.db`（v0.47 / 评审 v5 第 7 条）。
+
+    **为什么做进 sync 而不是留一条"记得手动跑 keywords-gc"**：`keyword_stats`
+    是**累积表**——每次 `keywords` 追加一整份 n-gram 表（真库实测 4 次 run =
+    435,583 行 / 40.2 MB，只有 VACUUM 能回收空闲页）。靠人记 = 库会一直涨
+    （v0.45 就是这么涨到 40.2 MB 才发现）。GC 是**幂等**的：库里只剩 1 个 run 时
+    它什么都不删、也不 VACUUM（`prune_runs` 保证），所以接在 sync 后面没有副作用。
+
+    **`keep=1` 的依据**：`keyword_stats` 里存的是该次 run 的**全量** n-gram 词表
+    （435,583 行），而读路径（`load_stats` / 报告 / API）**只读最新一次 run**；
+    保留多个历史 run 不提供任何能力，只把体积乘 N。要留历史请显式传更大的
+    `keep`。
+
+    **诚实边界**：这不改变 `keywords_meta.db` 的**口径**（仍是最新一次统计），
+    只是别再让无人读的旧 run 无限堆积。`False` = 明确不回收（调用方自己管）。
+    失败不抛：GC 是收尾动作，不该让整个 sync 报错（返回的 dict 里如实记原因）。
+    """
+    if keywords_meta is False:      # 显式关闭
+        return {"skipped": True, "reason": "调用方显式关闭（keywords_meta=False）"}
+    meta = Path(keywords_meta) if keywords_meta else root / "keywords_meta.db"
+    if not meta.is_file():
+        return {"skipped": True, "reason": f"没有 {meta.name}（尚未跑过 keywords）"}
+    from .kwstats import prune_runs
+    try:
+        r = prune_runs(meta, keep=keep, vacuum=True)
+    except (ValueError, sqlite3.Error) as exc:   # 收尾动作不宜让 sync 整体失败
+        return {"skipped": True, "reason": f"{type(exc).__name__}: {exc}"}
+    return {"skipped": False, "meta": str(meta), "keep": keep, **r}
 
 
 def run_update(root: Path = Path("."),

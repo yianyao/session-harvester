@@ -109,7 +109,19 @@ class SyncRowsTest(unittest.TestCase):
         self.assertEqual(after["note"], "人手写的说明")
 
     def test_backfill_uses_ledger_updated_at(self):
-        """存量"已采纳但没分界" → 用台账自己的 updated_at 回填（只补 NULL）。"""
+        """存量"已采纳但没分界" → 用台账自己的 `updated_at` 回填（只补 NULL）。
+
+        **修正过的 flaky 断言（v0.47）**：原版断言
+        `rec["adopted_at"] == rec["updated_at"]`——但 `backfill_adopted_at(apply=True)`
+        内部会 `set_status(...)`，那**同时把 `updated_at` 刷成"此刻"**。于是
+        "写裁决"与"回填"跨过一秒边界时，`adopted_at`（旧 updated_at）≠ `updated_at`（新）
+        → **偶发红**。它此前一直没被看见，直到 v0.47 的基线门把套件跑了两遍
+        （见 `tests/test_v48_test_baseline.py`），命中边界的概率上来才暴露。
+
+        现在改成：**先冻结回填时刻的 `updated_at`**，断言回填值等于它，
+        并如实断言"回填把 `updated_at` 推进了"（这才是那条刷新的真实语义）。
+        这样任何一秒跑都确定性通过，而且仍然钉住"取的是台账自己的时间"。
+        """
         set_status(self.meta, "s1", "adopted")           # 未显式给日期
         set_status(self.meta, "s2", "rejected")
         con = sqlite3.connect(str(self.meta))
@@ -119,12 +131,16 @@ class SyncRowsTest(unittest.TestCase):
             con.commit()
         finally:
             con.close()
+        frozen = load_records(self.meta)["s1"]["updated_at"]
         dry = backfill_adopted_at(self.meta)
         self.assertEqual(dry["filled"], ["s1"])
         self.assertIsNone(load_records(self.meta)["s1"]["adopted_at"])
         backfill_adopted_at(self.meta, apply=True)
         rec = load_records(self.meta)["s1"]
-        self.assertEqual(rec["adopted_at"], rec["updated_at"])
+        self.assertEqual(rec["adopted_at"], frozen,
+                         "回填必须取**台账自己的** updated_at（不是今天）")
+        self.assertGreaterEqual(rec["updated_at"], frozen,
+                                "回填本身是一次写库，updated_at 只前进")
         self.assertEqual(backfill_adopted_at(self.meta)["filled"], [])  # 幂等
 
 

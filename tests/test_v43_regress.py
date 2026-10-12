@@ -102,10 +102,15 @@ class TestRegressEndToEnd(unittest.TestCase):
         self.assertEqual(self.result["why"], "")
 
     def test_step_set_is_the_whole_chain(self):
-        """步骤集合就是链路本身；少一步（比如没人再跑 export）必须红。"""
+        """步骤集合就是链路本身；少一步（比如没人再跑 export）必须红。
+
+        v0.47 加了一步 `diagnostics`（G1/G2 诊断层数字，B9）——它是**并列的一步**，
+        不是"顺带在 export 里查两下"：报告数字有自己的夹具与口径，混进导出步会让
+        失败原因不可分辨。
+        """
         self.assertEqual([s["step"] for s in self.result["steps"]],
                          ["precondition", "corpus", "triage", "plan_seed",
-                          "apply", "export", "determinism"])
+                          "apply", "export", "diagnostics", "determinism"])
         self.assertEqual({s["status"] for s in self.result["steps"]},
                          {reg.S_PASS})
 

@@ -4,10 +4,11 @@
 建成**可全文检索的本地库**，并支撑后续蒸馏（思路过程 / 工具改进 / Harness
 踩坑 / 用户画像）。
 
-当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1978 会话 /
-72690 消息 / 43786 工具步 / 381 错误（截至 2026-10-12 库快照，随
-update/sync 持续增长；FTS5 中文可检索，sessions 含模型归属列）；另有
-6 个桩位留接口。
+当前资产：**9 个数据源已实装入库**，`harvester.db` 共 **1981 会话 /
+74364 消息 / 44969 工具步 / 381 错误**（截至 2026-10-12 库快照，`sync` 全量
+重建后；随 update/sync 持续增长）；另有 6 个桩位留接口，`dsh` 源 36 个会话。
+（FTS5 中文可检索，sessions 含模型归属列；**库体积 410.3 MB**——同日 VACUUM 前
+443.0 MB，回收了 32.8 MB 空闲页。）
 
 依赖边界（诚实声明）：
 
@@ -20,8 +21,8 @@ update/sync 持续增长；FTS5 中文可检索，sessions 含模型归属列）
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
-  （3.13 + PyYAML 6.0.3，**529 例全绿**）。用无 PyYAML 的解释器会得到
-  `Ran 469 tests / FAILED (errors=34)`——那 34 例全是 PyYAML 缺失所致。
+  （3.13 + PyYAML 6.0.3）。用无 PyYAML 的解释器会得到**设计行为**的
+  errors（见下「测试基线」），**不是安装坏了**。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
   **注意**：无 PyYAML 时 chain 相关 HTTP 端点会**静默降级为 404**（`api_topic_chain`
   对读不出的 chain 文档一律跳过）——"环境缺库"与"这个主题真没有 chain"在响应上
@@ -30,6 +31,51 @@ update/sync 持续增长；FTS5 中文可检索，sessions 含模型归属列）
   线，见下文），用独立 venv 运行，不污染包本体。
 - 敏感文件（`weblogin_profile/`、`webchat.accounts.json`）与运行产物已列入
   `.gitignore`。
+
+### 测试基线（用哪个解释器跑、什么算通过）
+
+> **"基线是多少"只有本节的数字算数**——命令行 `--help`、脚本 docstring 里的
+> 旧数字都不算。下面每个数字都由 `tests/test_v48_test_baseline.py` **实测对账**
+> 钉住（改坏任一处必红），所以加测试时改这里的数字是**必须做的动作**，不是可选项。
+
+```powershell
+$venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+# 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
+$env:PYTHONPATH = "<repo>\scripts\sandbox"
+
+# ① 权威基线：全套件。期望 Ran 785 tests ... OK
+& $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
+
+# ② 无 PyYAML 门禁：期望 GATE ran=744 failures=0 errors=61 skipped=2
+& $venv -X utf8 scripts\gate_no_yaml.py
+
+# ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
+& $venv -X utf8 -m harvester deadcode-scan
+```
+
+| 门 | 期望 | 判据（什么时候算失败） |
+|---|---|---|
+| ① 全套件（venv 有 PyYAML） | **Ran 785 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁 | **ran=744 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
+| ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
+
+**为什么 `ran` 会不一样（785 vs 744）**：无 PyYAML 时，依赖它的模块**在导入期整体
+失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
+"环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
+另有 `skipped=2`：`tests/test_v48_test_baseline.py` 的**两条实测用例**会**真跑一次
+套件 / 门禁**，递归回自己，故在子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip
+（`scripts/gate_no_yaml.py` 自己设这一位，所以门禁绝不会跑门禁）。
+**`skipped` 不等于通过**：被跳过的两条正是"实测↔README 对账"，它们只在
+**顶层**那一次运行里真正执行。
+
+**这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
+逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
+`--help` 或脚本 docstring 里的旧数字都不算。
+**注意自指**：该文件自己也会被计入 ① 的 785，所以它断言的是"含我自己的总数"
+——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
+
+**"红一次又好了"先查并发**：同一工作区里另有进程正在编辑文件时跑 ①/③，
+会读到半写状态而假红。判别方法：停手后复跑，或看死代码扫描是否回了 3。
 
 ## 快速开始
 
@@ -77,6 +123,17 @@ python -m harvester sync      # 收件箱收割 -> 全量导出 -> 整库重建�
 - 默认包含 note 消息（思考/工具步骤）——工具步骤藏在 note 的 raw 里，
   排除会让重建后的 steps 表为空、G1/G2/G4 分析失效；确要纯对话加
   `--no-notes`。
+- **收尾自动回收 `keywords_meta.db`**（v0.47，评审 v5 第 7 条）：
+  `keyword_stats` 是**累积表**（每次 `keywords` 追加一整份 n-gram 表，真库实测
+  4 次 run = **435,583 行 / 40.2 MB**，只有 VACUUM 能回收空闲页），靠人记得手动跑
+  `keywords-gc` 的结果就是它一直涨（v0.45 才发现）。现 `sync` 末尾自动
+  **只留最近 1 次 run** 并 `VACUUM`，行上打 `[keywords GC] 保留最近 1 次 run…`。
+  - 为什么 `keep=1` 是安全的：`keyword_stats` 存的是该次 run 的**全量**词表，
+    而读路径（`load_stats` / 报告 / API）**只读最新一次 run**——留历史 run
+    不提供任何能力，只把体积乘 N。
+  - 要留历史：`--keywords-keep-runs N`；要完全不回收：`--no-prune-keywords`
+    （此时也**不 VACUUM**——库里只剩 1 个 run 时 `prune_runs` 什么都不做）。
+  - 幂等：没有 `keywords_meta.db`（尚未跑过 `keywords`）时**跳过且不报错**。
 - 协议细节与采集/分析的正式接口边界见 **`docs/ADAPTER_CONTRACT.md`**。
 
 导出产物结构：`<大类>/<年-月>/<时间戳>__<来源>__<标题>.{md,json}` +
