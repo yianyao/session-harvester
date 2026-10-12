@@ -262,6 +262,18 @@ class VscodeCopilotAdapter(BaseAdapter):
                 out.append((wsdir.name, f.stem, f))
         return out
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat（不读 sqlite / 不解析 jsonl）——库龄判定用。
+
+        覆盖三处落点：session-store.db、emptyWindowChatSessions/*.jsonl、
+        workspaceStorage/*/chatSessions/*.jsonl。
+        """
+        files = [self.db]
+        if self.empty_dir.is_dir():
+            files.extend(self.empty_dir.glob("*.jsonl"))
+        files.extend(f for _ws, _sid, f in self._ws_files())
+        return self._stat_mtimes(files)
+
     def detect(self) -> DetectReport:
         found = []
         n = 0

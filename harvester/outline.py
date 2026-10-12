@@ -58,6 +58,52 @@ def scan_all(verbose: bool = False,
     return adapters, items, reports
 
 
+def corpus_watermark(sources: dict | None = None,
+                     only: set[str] | None = None,
+                     adapters: list[BaseAdapter] | None = None) -> dict:
+    """语料水位（v0.46 P0-2）：各源原始会话文件的**最新 mtime**。
+
+    只 stat、不解压不解析（`source_mtimes` 钩子），实测 DSH 34 文件毫秒级；
+    用于"语料比库新 ⇒ STALE"判定。**覆盖是不全的**：只有实现了钩子的源参与
+    判定，其余在 `uncovered` 里逐个列名——调用方必须显式呈现这个洞，不许
+    把"没实现"当成"已覆盖且无变化"（AGENTS.md §五 15/16）。
+
+    adapters：调用方若已经 `scan_all` 过（sync/update 都是），把它返回的实例
+    传进来复用，省一次构建。
+    返回：{mtime: float|None, mtime_str, by_source: {id: str}, covered: [id],
+           uncovered: [id], files: int}
+    """
+    ads = adapters if adapters is not None else build_adapters(sources, only=only)
+    by_source: dict[str, float] = {}
+    covered: list[str] = []
+    uncovered: list[str] = []
+    files = 0
+    for ad in ads:
+        try:
+            mts = ad.source_mtimes()
+        except NotImplementedError:
+            uncovered.append(ad.id)
+            continue
+        except Exception:  # noqa: BLE001 - 单源 stat 失败不影响其他源
+            uncovered.append(ad.id)
+            continue
+        covered.append(ad.id)
+        files += len(mts)
+        if mts:
+            by_source[ad.id] = max(mts)
+    newest = max(by_source.values()) if by_source else None
+    return {
+        "mtime": newest,
+        "mtime_str": (datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M:%S")
+                      if newest is not None else None),
+        "by_source": {k: datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
+                      for k, v in sorted(by_source.items())},
+        # 原始 epoch（逐源比较用；格式化串只给人看，比较要用原值）
+        "by_source_epoch": dict(sorted(by_source.items())),
+        "covered": covered, "uncovered": uncovered, "files": files,
+    }
+
+
 def render_outline_md(items: list[dict], reports: list[DetectReport]) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [

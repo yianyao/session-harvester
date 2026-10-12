@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from .adapters import PLUGIN_IDS, build_adapters, load_sources
@@ -244,15 +245,66 @@ def cmd_update(args) -> int:
     st = r["index"]
     print(f"  [索引] {st['sessions']} 会话 / {st['messages']} 消息 -> {r['db']}"
           + (f"（跳过损坏 {st['skipped']} 文件）" if st.get("skipped") else ""))
+    print(f"  [索引增量] 重解析 {st.get('parsed', 0)} 个文件"
+          f"（写入 {st.get('messages_parsed', 0)} 条消息）"
+          f" / 清掉 {st.get('dropped', 0)} 个已消失会话"
+          + (f" / 清单缺文件 {len(st['missing'])}" if st.get("missing") else ""))
+    print(f"  [清点] 新增 {len(r['new'])} / 更新 {len(r['updated'])}"
+          f" / 未变 {r['unchanged']} / 源已消失 {len(r['gone'])}")
     for sid in r["new"][:10]:
         print(f"  + {sid}")
     for sid in r["updated"][:10]:
         print(f"  ~ {sid}（updated_at 变化，重导）")
+    if r.get("gone"):
+        print("  已清出索引（exports 归档保留，全量 sync 会按归档重建）: "
+              + ", ".join(r["gone"][:5]) + (" ..." if len(r["gone"]) > 5 else ""))
+    for src in r.get("gone_protected", []):
+        print(f"      [warn] {src} 本次一条会话都没列出——按「读不到」处理，"
+              "未清理其历史行（避免误删）")
+    _print_db_age(Path(r["db"]), r.get("corpus") or {})
     if len(r["new"]) + len(r["updated"]) > 20:
         print("  ... 其余略")
-    print("增量口径：只获取未获取的（新 sid / updated_at 变化）；"
-          "全量对账请用 sync")
+    print("增量口径：只获取未获取的（新 sid / updated_at 变化）、"
+          "只索引本次写出的 json；全量对账请用 sync")
     return 0
+
+
+def _print_db_age(db: Path, wm: dict) -> None:
+    """库龄三行（v0.46 P0-2）：库文件时刻 / 语料最新 / 入库水位 + 谁更新。
+
+    与产物头同一判据（`dbmeta` 的 `index_meta` 水位），所以"命令行说新鲜"
+    与"报告头不显 STALE"永远一致。
+    """
+    from .dbmeta import read_corpus_watermark
+    stored = read_corpus_watermark(db)
+    try:
+        db_str = time.strftime("%Y-%m-%d %H:%M:%S",
+                               time.localtime(db.stat().st_mtime))
+    except OSError:
+        db_str = "（库文件不存在）"
+    print(f"  [库龄] 库文件 {db_str}")
+    if wm:
+        print(f"      语料最新 {wm.get('mtime_str') or '—'}"
+              f"（覆盖 {len(wm.get('covered') or [])} 源 / {wm.get('files', 0)} 文件；"
+              f"未覆盖 {'/'.join(wm.get('uncovered') or []) or '无'}）")
+    if stored["mtime"]:
+        print("      入库水位 "
+              + time.strftime("%Y-%m-%d %H:%M:%S",
+                              time.localtime(stored["mtime"]))
+              + "（本库索引时实际看到的语料时刻）")
+    else:
+        print("      入库水位 —（本库还没有水位记录，跑一次 update 即建立）")
+    if wm and stored["mtime"]:
+        # 逐源指出"谁比库新"——真机上正在写入的活会话会让语料永远比库新，
+        # 这时能一眼看出是哪条源，而不是笼统一句"库旧了"。
+        newer = [f"{k}（{v}）"
+                 for k, v in (wm.get("by_source") or {}).items()
+                 if (wm.get("by_source_epoch") or {}).get(k, 0) > stored["mtime"]]
+        if newer:
+            print("      [STALE] 以下源比入库水位新，建议再跑一次 update: "
+                  + "；".join(newer))
+        else:
+            print("      [新鲜] 所有已覆盖源的语料都不晚于入库水位")
 
 
 def cmd_kb_init(args) -> int:
@@ -1343,14 +1395,26 @@ def cmd_draft(args) -> int:
 
 
 def _emit_report(report: str, args) -> None:
-    """报告统一出口：库快照产物头（v0.19）+ 落盘/打印。
+    """报告统一出口：库快照产物头（v0.19）+ 库龄（v0.46 P0-2）+ 落盘/打印。
     产物头仅在 args 带 --db 且库文件存在时写入（report-traces 等
-    非库报告自动跳过）；只加行不改报告正文。"""
+    非库报告自动跳过）；只加行不改报告正文。
+
+    库龄：语料比库新 ⇒ 头部带 STALE 标记。语料 mtime 靠各源的
+    `source_mtimes()` 只 stat 取得（不解压）；拿不到就**不判定**
+    （stale=None，报告头不加噪音——但 JSON/API 里 null 仍与 false 可区分）。
+    """
     dbp = getattr(args, "db", None)
     if dbp and Path(dbp).is_file():
         from .dbmeta import db_fingerprint, fingerprint_line
+        from .outline import corpus_watermark
+        corpus_mtime = None
         try:
-            report = (f"> {fingerprint_line(db_fingerprint(Path(dbp)))}\n\n"
+            src = getattr(args, "sources", None) or "sources.json"
+            corpus_mtime = corpus_watermark(load_sources(src)).get("mtime")
+        except Exception:  # noqa: BLE001 - 库龄判定失败不阻断报告产出
+            corpus_mtime = None
+        try:
+            report = (f"> {fingerprint_line(db_fingerprint(Path(dbp), corpus_mtime=corpus_mtime))}\n\n"
                       + report)
         except sqlite3.Error:
             pass  # 指纹失败不阻断报告产出

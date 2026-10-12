@@ -385,6 +385,10 @@ class DshAdapter(BaseAdapter):
             session_count=len(files),
             schema_version=ver, schema_fingerprint=fp or None, schema_ok=True)
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat（不解压）——库龄判定用；`.zstd` 文件 mtime 即语料新鲜度。"""
+        return self._stat_mtimes(self._files())
+
     def list_sessions(self) -> list[dict]:
         items = []
         for f in self._files():

@@ -104,6 +104,33 @@ class BaseAdapter(abc.ABC):
         """加载完整会话。源数据无法完整还原时应在 SessionRecord.extra
         中注明 lossy=True 及原因，而不是抛异常。"""
 
+    def source_mtimes(self) -> list[float]:
+        """**可选**钩子（v0.46 P0-2）：只 stat、不解压地返回本源的原始
+        会话文件 mtime（epoch 秒），供"库龄 / 语料比库新 ⇒ STALE"判定用。
+
+        实现约束：不得解析内容（`list_sessions` 会解压/读全文件，太贵），
+        只允许目录列举 + stat。未实现的源抛 NotImplementedError——调用方
+        （`outline.corpus_watermark`）必须把未覆盖的源**逐个报出来**，
+        不许把它当成"已覆盖且无变化"。
+        """
+        raise NotImplementedError(
+            f"{self.id} 未实现 source_mtimes（库龄判定覆盖不到本源的原始文件）")
+
+    @staticmethod
+    def _stat_mtimes(paths) -> list[float]:
+        """只 stat 一批路径的 mtime（epoch 秒）；stat 不动的逐个跳过。
+
+        `source_mtimes()` 的实现一律走这里——**只允许目录列举 + stat**，
+        不许读文件内容（那是 `list_sessions` 的活，太贵）。
+        """
+        out: list[float] = []
+        for p in paths:
+            try:
+                out.append(Path(p).stat().st_mtime)
+            except OSError:
+                continue
+        return out
+
     # ---- 通用工具 ----
     @staticmethod
     def _read_text(path: str | Path, encoding: str = "utf-8") -> str:

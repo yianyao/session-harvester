@@ -208,6 +208,11 @@ class DoubaoRawAdapter(BaseAdapter):
         return DetectReport(self.id, self.name, "OK",
                             f"{d}（{n} 个 detail 文件）", session_count=n)
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat（不解析 detail 正文）——库龄判定用。"""
+        d = self._find_dir()
+        return self._stat_mtimes(d.glob("detail_*.json")) if d else []
+
     @staticmethod
     def _header(j: dict, session_id: str) -> dict:
         return {

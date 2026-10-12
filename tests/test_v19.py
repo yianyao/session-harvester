@@ -211,13 +211,20 @@ class TestFingerprint(unittest.TestCase):
 
     def test_fields(self):
         fp = db_fingerprint(self.db, con=self.con)
+        # v0.46 P0-2 additive：corpus_mtime / corpus_indexed_mtime / stale
+        # （口径与"未判定 None ≠ 新鲜 False"见 tests/test_v46_staleness.py）
         self.assertEqual(set(fp), {"sessions", "steps", "errors",
-                                   "db_mtime", "generated_at"})
+                                   "db_mtime", "generated_at",
+                                   "corpus_mtime", "corpus_indexed_mtime",
+                                   "stale"})
         self.assertEqual(fp["sessions"], 2)
         self.assertEqual(fp["steps"], 10)
         self.assertEqual(fp["errors"], 3)
         self.assertTrue(fp["db_mtime"])
         self.assertTrue(fp["generated_at"])
+        # 不传语料 = 不做库龄判定（"未判定"不能写成"新鲜"）
+        self.assertIsNone(fp["stale"])
+        self.assertIsNone(fp["corpus_mtime"])
 
     def test_endpoints_carry_fingerprint(self):
         self.assertIn("db_fingerprint", apiserve.api_meta(self.con, self.db))

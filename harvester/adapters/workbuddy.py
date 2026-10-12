@@ -63,6 +63,10 @@ class WorkBuddyAdapter(BaseAdapter):
         self._index = out
         return out
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat（不读日志正文）——库龄判定用。"""
+        return self._stat_mtimes(p for p, _ws, _d in self._find_logs())
+
     def list_sessions(self) -> list[dict]:
         items = []
         for path, ws, date in self._find_logs():

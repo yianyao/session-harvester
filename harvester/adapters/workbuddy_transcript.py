@@ -119,6 +119,10 @@ class WorkBuddyTranscriptAdapter(BaseAdapter):
             return ts / 1000.0
         return None
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat（不解析 jsonl）——库龄判定用。"""
+        return self._stat_mtimes(self._jsonl_files())
+
     # ---- protocol ------------------------------------------------
 
     def detect(self) -> DetectReport:

@@ -303,6 +303,10 @@ class DeepSeekExportAdapter(BaseAdapter):
         self._convs: list[dict] | None = None
         self._parse_warns: list[str] = []
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat 配置的导出文件（**不解压 zip、不解析 JSON**）——库龄判定用。"""
+        return self._stat_mtimes(self._candidates)
+
     def _ensure_parsed(self) -> list[dict]:
         if self._convs is not None:
             return self._convs

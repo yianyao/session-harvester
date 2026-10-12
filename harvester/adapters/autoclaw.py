@@ -188,6 +188,10 @@ class AutoClawAdapter(BaseAdapter):
                 continue  # 单个账号库打不开不拖垮其余库
             yield db, con
 
+    def source_mtimes(self) -> list[float]:
+        """只 stat 账号库文件（**不开 sqlite**）——库龄判定用。"""
+        return self._stat_mtimes(self._find_dbs())
+
     def list_sessions(self) -> list[dict]:
         if self._overview is not None:
             return self._overview

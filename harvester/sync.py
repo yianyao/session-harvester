@@ -18,7 +18,9 @@
 
 幂等性：
 - export 文件名由 (时间戳, adapter id, 标题, sid 哈希) 决定，重跑覆盖同名；
-- index 为整库重建（个人历史规模毫秒级，与 index 命令同一口径）；
+- index：`sync` 为整库重建（与 index 命令同一口径）；`update` 为增量
+  （v0.46 P0-1，只索引本次写出的 json，2026-10-12 实测全量 274.7 s ->
+  增量秒级）；
 - 新增会话判定 = 重建前后 sid 集合差，用于报告「本次新增 N 条」。
 """
 
@@ -30,9 +32,10 @@ from datetime import datetime
 from pathlib import Path
 
 from .adapters import PLUGIN_IDS, load_sources
+from .dbmeta import record_corpus_watermark
 from .exporter import export
-from .indexing import index_exports
-from .outline import scan_all
+from .indexing import index_exports, index_incremental
+from .outline import corpus_watermark, scan_all
 
 INBOX_DONE = "done"
 
@@ -164,6 +167,41 @@ def _db_updated(db: Path) -> dict[str, str | None]:
         con.close()
 
 
+def source_gone(high: dict[str, str | None], items: list[dict],
+                reports: list, only: set[str] | None = None) -> tuple[list[str], list[str]]:
+    """源侧已消失的 sid（索引行该清）与"源可疑、保守不清理"的源 id。
+
+    v0.46（P0-1）gone 判定。**两条安全闸**（宁可留脏行，也不误删）：
+    1. 只处理本次**真的扫到且 detect()==OK** 的源——源整体不可用（未装 /
+       MISSING / STUB / 被 `only` 挡掉）时一律不碰它的历史行；
+    2. 某个源**一条都没列出来**时跳过该源（列 0 条通常是"读不到"而不是
+       "用户删光了"），并把源 id 回报给调用方打警告。
+
+    已知口径差异（故意）：`update` 以**源**为准（gone 清行），
+    `sync`/`index --from` 以**exports 归档**为准（会把这些会话重新建回来）。
+    归档文件永不删除——所以 update 清掉的行是可恢复的，不是数据丢失。
+    """
+    seen = {f"{it['adapter']}:{it['session_id']}" for it in items}
+    ok = {rep.adapter_id for rep in reports if rep.status == "OK"}
+    by_source: dict[str, list[str]] = {}
+    for sid in high:
+        src = sid.split(":", 1)[0]
+        by_source.setdefault(src, []).append(sid)
+    gone: list[str] = []
+    protected: list[str] = []
+    for src, sids in sorted(by_source.items()):
+        if only is not None and src not in only:
+            continue
+        if src not in ok:
+            continue
+        listed = [s for s in seen if s.split(":", 1)[0] == src]
+        if not listed:
+            protected.append(src)
+            continue
+        gone.extend(s for s in sids if s not in seen)
+    return sorted(gone), sorted(protected)
+
+
 # ---- 主流程 ----
 
 def run_sync(root: Path = Path("."),
@@ -205,6 +243,9 @@ def run_sync(root: Path = Path("."),
     # 4. 索引（整库重建，与 index --from 同口径）
     stats = index_exports(exports_dir, db_path, verbose=verbose)
     after = _db_sids(db_path)
+    # 全量重建也是"库已跟上语料"的证据 → 同样落水位（sync 自己扫一遍源）
+    wm = corpus_watermark(merged, only=only)
+    record_corpus_watermark(db_path, wm)
 
     new_sids = sorted(after - before)
     gone_sids = sorted(before - after)
@@ -214,6 +255,7 @@ def run_sync(root: Path = Path("."),
         "export": {"count": manifest.get("count", 0),
                    "message": manifest.get("message")},
         "index": stats,
+        "corpus": wm,
         "sessions_total": stats.get("sessions", len(after)),
         "new": new_sids,
         "gone": gone_sids,
@@ -233,13 +275,13 @@ def run_update(root: Path = Path("."),
     """增量同步（v0.22，用户裁决 2026-10-09）：只获取未获取的。
 
     收件箱收割 -> 库水位对比 -> 仅导出新 sid / updated_at 变化的会话
-    -> 整库重建索引（毫秒级，与 sync 同口径）。
+    -> **只索引本次导出的 json**（v0.46 P0-1；此前是每次整库重建）。
 
     库即状态：水位 = sessions(sid, updated_at)，与导出 json 同源同值，
     字符串直比即可靠，不建独立水位文件。
     - 新 sid => 导出；
     - updated_at 与库不同 => 重导（续聊场景；库侧缺失时视为变更，宁多勿漏）；
-    - 其余跳过——不全量重取历史轨迹。
+    - 其余跳过——不全量重取历史轨迹，也不重解析。
     首跑无库 = 天然全量。sync 保持全量语义，作为对账/rebuild 基线。
     各路径默认相对 root，参数与 run_sync 一致；返回统计 dict。
     """
@@ -259,7 +301,10 @@ def run_update(root: Path = Path("."),
 
     # 3. 水位对比：只挑未获取 / 已变更的会话
     high = _db_updated(db_path)
-    _, items, _ = scan_all(verbose=verbose, sources=merged, only=only)
+    adapters, items, reports = scan_all(verbose=verbose, sources=merged, only=only)
+    # 语料水位在**扫描时刻**测（= 本次 update 真正消费到的语料状态），
+    # 索引成功后写进库当基准；此后语料再变 → 报告显 STALE。
+    wm = corpus_watermark(adapters=adapters)
     wanted: set[str] = set()
     new_sids: list[str] = []
     updated_sids: list[str] = []
@@ -273,7 +318,7 @@ def run_update(root: Path = Path("."),
             wanted.add(sid)
             updated_sids.append(sid)
 
-    # 4. 选择性导出（空集则跳过，连 scan 都省）；索引仍整库重建
+    # 4. 选择性导出（空集则跳过，连 scan 都省）
     if wanted:
         manifest = export(exports_dir, selection=None,
                           include_notes=include_notes, verbose=verbose,
@@ -281,8 +326,14 @@ def run_update(root: Path = Path("."),
         export_count = manifest.get("count", 0)
         export_msg = manifest.get("message")
     else:
-        export_count, export_msg = 0, None
-    stats = index_exports(exports_dir, db_path, verbose=verbose)
+        manifest, export_count, export_msg = {}, 0, None
+
+    # 5. 索引（v0.46 P0-1：只索引本次写出的 json + 清掉源侧消失的行）
+    idx_files = [e["file"] for e in manifest.get("exported", [])]
+    gone, protected = source_gone(high, items, reports, only=only)
+    stats = index_incremental(exports_dir, db_path, idx_files,
+                              drop_sids=gone, verbose=verbose)
+    record_corpus_watermark(db_path, wm)
 
     return {
         "mode": "incremental",
@@ -290,10 +341,13 @@ def run_update(root: Path = Path("."),
         "plugins": plugins,
         "export": {"count": export_count, "message": export_msg},
         "index": stats,
+        "corpus": wm,
         "sessions_total": stats.get("sessions", len(high) + len(new_sids)),
         "new": new_sids,
         "updated": updated_sids,
         "unchanged": len(items) - len(wanted),
+        "gone": gone,
+        "gone_protected": protected,
         "db": str(db_path),
         "exports_dir": str(exports_dir),
     }

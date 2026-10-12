@@ -4,10 +4,10 @@
 建成**可全文检索的本地库**，并支撑后续蒸馏（思路过程 / 工具改进 / Harness
 踩坑 / 用户画像）。
 
-当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1964 会话 /
-62899 消息 / 36647 工具步 / 294 错误（截至 2026-10-09 库快照，随 sync
-持续增长；FTS5 中文可检索，sessions 含模型归属列）；另有 6 个桩位
-留接口。
+当前资产：**9 个数据源已实装入库**，`harvester.db` 共 1978 会话 /
+72690 消息 / 43786 工具步 / 381 错误（截至 2026-10-12 库快照，随
+update/sync 持续增长；FTS5 中文可检索，sessions 含模型归属列）；另有
+6 个桩位留接口。
 
 依赖边界（诚实声明）：
 
@@ -87,13 +87,28 @@ python -m harvester sync      # 收件箱收割 -> 全量导出 -> 整库重建�
 ### B++. 日常增量（推荐）：update
 
 ```bash
-python -m harvester update    # 收件箱收割 -> 只导出新增/变更会话 -> 整库重建索引
+python -m harvester update    # 收件箱收割 -> 只导出新增/变更会话 -> 只索引这次写出的 json
 ```
 
 - **增量口径**（2026-10-09 用户裁决）：不全量重取历史轨迹，只获取未获取的
   ——新 sid 导出；`updated_at` 变化（续聊）重导该会话；其余跳过。
 - **库即水位**：高水位 = 索引库 `sessions(sid, updated_at)`，无独立状态
   文件；首跑无库 = 天然全量。
+- **索引侧也是增量**（v0.46 P0-1）：只解析本次写出的 json，**不再整库重建**。
+  真机实测（2026-10-12，exports 归档 1979 json / 244 MB）：全量重建索引
+  **274.7 s**、整个 `update` **315.7 s**；改增量后同一轮只解析 18 个文件，
+  索引耗时降到秒级（复现脚本 `docs/reports/probe-update-timing.py`）。
+  两条路径共用同一段单文件入库代码，并有"全量↔增量逐行对账"测试钉住口径
+  （`tests/test_v46_index_incremental.py`）。
+- **源侧消失的会话会被清出索引**（v0.46 P0-1 `gone`）：只对"本次真的扫到
+  且 detect()==OK"的源生效，某源一条都没列出时按"读不到"处理并打警告、
+  **不清理**（避免误删）。`exports/` 归档文件永不删除——所以这是
+  "update 以源为准、sync 以归档为准"的口径差，`sync` 会把这些会话按归档
+  重建回来（`tests/test_v46_index_incremental.py::test_sync_restores_pruned_session_from_archive`
+  钉住了这条）。
+- **库龄可见**（v0.46 P0-2）：`update` 末尾打「库文件 / 语料最新 / 入库水位」
+  三行，并逐源指出谁比库新；所有带 `--db` 的报告头在**语料比库新**时会带
+  `⚠ STALE` 标记。
 - `sync` 保持全量语义，作为对账/rebuild 基线（怀疑漏数据时跑一次 sync 对账）。
 
 ### 3. 整理（每次采集之后跑一遍）
@@ -360,7 +375,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `scan` | 扫描数据源并生成可导出会话纲要 |
 | `export` | 按纲要序号导出会话（`--select`/`--all`） |
 | `sync` | 一键同步（全量）：收件箱收割 → 导出 → 重建索引，幂等；对账/rebuild 基线 |
-| `update` | 一键同步（增量）：只导出新 sid/updated_at 变化的会话；日常更新用这条 |
+| `update` | 一键同步（增量）：只导出新 sid/updated_at 变化的会话，且只索引这次写出的 json（v0.46）；末尾报新增/更新/未变/源已消失四计数 + 库龄；日常更新用这条 |
 | `weblogin check` | 探测各网页 Chat 产品浏览器登录态 |
 | `weblogin init-config` | 生成账号密码配置模板（预留接口） |
 | `weblogin prepare <产品>` | 打开自动化浏览器完成人工登录 |
