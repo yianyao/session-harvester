@@ -10,7 +10,7 @@
 
   | 项 | 值 |
   |---|---|
-  | 后端 head | v0.33 → **v0.47 批次**（v0.46 链 `786f5bb`…`fa28fbc` + 本批收尾提交见 `git log -1`）；**版本号仍 0.46.0**（升版必须同改 `docs/HANDOFF-v0.33-next.md` §0 的 `→ **v0.46**`，否则 `test_v45_hygiene` 红） |
+  | 后端 head | v0.33 → **v0.47 批次**：v0.46 链 `786f5bb`…`fa28fbc`，**本批主提交 `3ff0252`**（+1100 −53）+ `03cf0c8`（交接口径更正）；**版本号仍 0.46.0**（升版必须同改 `docs/HANDOFF-v0.33-next.md` §0 的 `→ **v0.46**`，否则 `test_v45_hygiene` 红） |
   | 后端测试基线 | **785 例全绿**（venv，见下「基线自查」；761 → 785，+24：B8 基线门 12 / B10 keywords GC 8 / A1 判据钉子 6 等）——**数字的权威在 README 顶部「测试基线」一节**，由 `tests/test_v48_test_baseline.py` **真跑对账**钉住 |
   | 无 PyYAML 门禁 | **`GATE ran=744 failures=0 errors=61 skipped=2`**（须 0 failures；61 errors 是缺 PyYAML 的设计行为；**skipped=2 = 基线门的两条实测用例在嵌套层转 skip**，`skip ≠ 通过`）。脚本：`& $venv -X utf8 scripts\gate_no_yaml.py`；flake 复现 `scripts\flake_hunt.py`（热/冷）、旧树 `docs/reports/probe-history-flake.py` |
   | 死代码门的并发保护 | v0.45：不可信发现单列 + CLI 回 3 + 套件门可区分 skip。**本批再次踩到**：改了 `cli.py`/`sync.py` 之后仍在跑的全量套件结果作废，必须重跑 |
@@ -28,7 +28,7 @@
   | keywords 库 | `keywords_meta.db` **18.4 MB / 1 个 run / 435583 行**；**`sync` 收尾自动 GC（默认只留最近 1 次 run + VACUUM）**，见 H109 |
   | 剩余事项 SOP | **`docs/SOP-remaining-v045.md`**（§5 定期蒸馏 SOP；**§6 = v0.46 待办已全部完成或裁决**；§7 不做清单） |
   | 沙箱策略 | **每次会话都可能不同** → 跨仓库任务**先探一次写权限**再决定做不做（本批只需仓内写权限） |
-  | 交接文档（正文） | **`docs/HANDOFF-v0.47-next.md`（最新，先读它）**；`docs/HANDOFF-v0.46-next.md` 为上一批留档；`docs/HANDOFF-v0.33-next.md` §0 保留为版本号来源（`test_v45_hygiene` 读它）；事实台账 H1–**H115** 在 `docs/HANDOFF-v0.22-next.md` §2 |
+  | 交接文档（正文） | **`docs/HANDOFF-v0.47-next.md`（最新，先读它）**；`docs/HANDOFF-v0.46-next.md` 为上一批留档；`docs/HANDOFF-v0.33-next.md` §0 保留为版本号来源（`test_v45_hygiene` 读它）；事实台账 H1–**H116** 在 `docs/HANDOFF-v0.22-next.md` §2 |
   | MCP 工具 | **10 个**（会话面 4 + 进化数据面 6）；漂移门 `tests/test_v45_mcp_tools.py` |
   | 未推送 | `origin/main` 落后本地 **10 个提交**（沙箱无网络，两次 `git push` 均 `Failed to connect to github.com:443`）——**有网先 push** |
 
