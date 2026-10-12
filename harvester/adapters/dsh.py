@@ -261,6 +261,25 @@ def _model_from_lines(lines: list[dict]) -> tuple[str | None, dict]:
     return seen.most_common(1)[0][0], dict(seen)
 
 
+def error_signal(msg: dict, text: str) -> tuple[bool, str]:
+    """tool/result 的错误判据（v0.46 P1-3）：返回 `(is_err, judged_by)`。
+
+    `judged_by` ∈ {"isError", "text"}。判据优先级：
+    1. **结构化 `data.message.isError`**（布尔/整数；真机 8404/8404 条都带）
+       ——判据是数据里的字段，不随文案变；
+    2. 旧 frame / 非 DSH 形态没有该字段时，退回文本前缀
+       `text.lower().startswith("error")`（v0.46 之前的唯一判据，保留兜底）。
+
+    单独成函数是为了能被测试与变异检查直接钉住（旧判据只覆盖 ① 漏 / ② 误
+    两类反例，见 `tests/test_v46_dsh_error_signal.py`）。
+    """
+    flag = msg.get("isError")
+    if isinstance(flag, bool) or (isinstance(flag, int)
+                                  and not isinstance(flag, bool)):
+        return bool(flag), "isError"
+    return text.lower().startswith("error"), "text"
+
+
 class DshAdapter(BaseAdapter):
     """DSH session.v4.jsonl.zstd。id: dsh。"""
 
@@ -551,9 +570,23 @@ class DshAdapter(BaseAdapter):
                     b.get("text", "") for b in msg.get("content") or []
                     if isinstance(b, dict))
                 text = normalize_text(text).strip()
-                is_err = text.lower().startswith("error")
+                # v0.46 P1-3（鲁棒性，非纠错）：判据见 error_signal()——
+                # 结构化 data.message.isError 优先，文本前缀只作兜底。
+                is_err, judged_by = error_signal(msg, text)
                 status = "error" if is_err else "completed"
                 preview = text[:400] + ("…" if len(text) > 400 else "")
+                # 结构化错误对象（含 code/message）优先落 steps.error；没有它
+                # 时仍落文本预览，保证 errstats 的三分类判据不丢依据。
+                err_obj = (data.get("error")
+                           if isinstance(data.get("error"), dict) else None)
+                if not is_err:
+                    err_val = None
+                elif err_obj:
+                    err_val = " / ".join(
+                        str(err_obj[k]) for k in ("code", "message")
+                        if err_obj.get(k)) or preview
+                else:
+                    err_val = preview
                 # v4 的 tool/result 无 toolName，仅 toolCallId；
                 # 工具名从对应 tool/call 行回填（行序保证 call 在前）。
                 name = pending_calls.get(call_id, "unknown")
@@ -564,7 +597,8 @@ class DshAdapter(BaseAdapter):
                     timestamp=_iso(o),
                     raw={"kind": "tool_result", "tool": name,
                          "status": status,
-                         "error": preview if is_err else None,
+                         "error": err_val,
+                         "errorBy": judged_by,
                          "callId": call_id}))
                 continue
         warns: list[str] = []
