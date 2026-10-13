@@ -40,3 +40,5 @@ topics_meta.db
 suggestions_meta.db
 artifacts_meta.db
 *.db.bak*
+# 工程四件套按铁律 #1 留原地不入库（2026-10-13 会话 8c 误提交后纠正）
+_eng/
