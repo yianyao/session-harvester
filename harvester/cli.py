@@ -53,6 +53,9 @@
       MCP stdio server：任意 agent 运行时直查历史（list/search/read/pack）
   python -m harvester suppress list [--meta topics_meta.db]
       会话抑制（v0.49）：列出已抑制会话（谁 / 何时 / 为什么）
+  python -m harvester suppress candidates [--db harvester.db] [--meta topics_meta.db]
+      抑制候选清单（v0.52，只读）：重复会话 + 零 user 轮次；人按标题裁决、
+      复制命令，不用背 sid
   python -m harvester suppress add --sid <sid> --reason "..." [--apply]
       抑制会话：删**仓内副本**（库内三表行 + exports 副本），不删采集源；
       默认 dry-run。此后 sync/update 在导出步拦、索引侧兜底，不再入库
@@ -1135,6 +1138,39 @@ def cmd_suppress(args) -> int:
               "下次 sync/update 会重新导出并入库。")
         return 0
 
+    if args.action == "candidates":
+        from .suppress import find_candidates
+        dbp = Path(args.db)
+        known = suppressed_sids(meta)
+        r = find_candidates(dbp, known_sids=known)
+        n_cand = sum(len(c["candidates"]) for c in r["dup_clusters"])
+        print(f"[suppress] 候选清单（只读）：扫了 {r['scanned']} 个会话 → "
+              f"{len(r['dup_clusters'])} 个重复簇 / {n_cand} 条候选；"
+              f"零 user 轮次 {len(r['zero_user'])} 条；"
+              f"已在抑制表的 {len(known)} 条已剔除。")
+        print("[suppress] 裁决方式：看标题 → 复制下面的命令（默认 dry-run，"
+              "加 --apply 才真删）。拿不准就先在 view 里点开会话看内容——"
+              "会话详情页也有「删除（抑制）」按钮，同样不用记 sid。")
+        for i, c in enumerate(r["dup_clusters"], 1):
+            print(f"\n[重复簇 {i}] 代表（保留）：《{c['rep_title'] or '（无标题）'}》"
+                  f" {c['rep']}")
+            for cd in c["candidates"]:
+                jtxt = (f"J={cd['jaccard']}" if cd["jaccard"] is not None
+                        else "同簇链式重复")   # 经簇内其他成员 ≥0.90 间接相连
+                print(f"  - 《{cd['title'] or '（无标题）'}》 {cd['sid']}  {jtxt}")
+                print(f"    python -m harvester suppress add --sid \"{cd['sid']}\""
+                      f" --reason \"与 {c['rep'][:60]} 重复（{jtxt}）\"")
+        if r["zero_user"]:
+            print(f"\n[零 user 轮次] {len(r['zero_user'])} 条"
+                  "（库里只有 note/system 消息）：")
+            for z in r["zero_user"]:
+                print(f"  - 《{z['title'] or '（无标题）'}》 {z['sid']}")
+                print(f"    python -m harvester suppress add --sid \"{z['sid']}\""
+                      " --reason \"零 user 轮次（仅系统/工具消息）\"")
+        if not r["dup_clusters"] and not r["zero_user"]:
+            print("[suppress] 没有机械候选——没有要删的就不删，这是好结果。")
+        return 0
+
     if args.action == "remove":
         have = {r["sid"]: r for r in list_suppressed(meta)}
         print(f"[suppress] remove {len(sids)} 个 sid（抑制表现有 {len(have)} 条）"
@@ -2128,6 +2164,15 @@ def build_parser() -> argparse.ArgumentParser:
     psl.add_argument("--meta", default="topics_meta.db",
                      help="抑制表所在 meta 库（默认 topics_meta.db）")
     psl.set_defaults(func=cmd_suppress)
+
+    pscn = psub.add_parser(
+        "candidates",
+        help="抑制候选清单（只读，v0.52）：重复会话 + 零 user 轮次；"
+             "人按标题裁决、复制命令，不用背 sid")
+    pscn.add_argument("--db", default="harvester.db", help="索引库路径")
+    pscn.add_argument("--meta", default="topics_meta.db",
+                      help="抑制表所在 meta 库（默认 topics_meta.db）")
+    pscn.set_defaults(func=cmd_suppress)
 
     psa = psub.add_parser("add", help="抑制会话（默认 dry-run，--apply 才写）")
     psa.add_argument("--sid", action="append", dest="sids", required=True,

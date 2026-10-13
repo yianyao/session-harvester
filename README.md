@@ -43,10 +43,10 @@ $venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 817 tests ... OK
+# ① 权威基线：全套件。期望 Ran 822 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=776 failures=0 errors=61 skipped=2
+# ② 无 PyYAML 门禁：期望 GATE ran=781 failures=0 errors=61 skipped=2
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -55,8 +55,8 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 817 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁 | **ran=776 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 822 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁 | **ran=781 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
 **为什么 `ran` 会不一样（785 vs 744）**：无 PyYAML 时，依赖它的模块**在导入期整体
@@ -497,6 +497,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 
 | 命令 | 用途 |
 |---|---|
+| `suppress candidates [--db harvester.db] [--meta topics_meta.db]` | **抑制候选清单**（v0.52，只读）：扫出重复会话簇（会话级 user-raw bigram Jaccard ≥0.90，粗筛 + 逐对全量复核）与零 user 轮次会话，人按**标题**裁决、复制就绪命令——不用背 sid |
 | `suppress list` | 列出已抑制会话（谁 / 何时 / 为什么） |
 | `suppress add --sid <sid> [--sid ...] --reason "..."` | 抑制会话：写抑制表 + **立刻**删库内三表行 + 清该 sid 的旧 exports 副本。**默认 dry-run**（只印库内行数/将删的副本），`--apply` 才写 |
 | `suppress remove --sid <sid>` | 取消抑制（只删抑制表行）。**不恢复数据**：能否恢复只取决于**语料是否还在**——语料还在则下次 `sync`/`update` 会重新导出并入库，语料没了就真没了（**不设时限**） |

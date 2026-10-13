@@ -202,6 +202,135 @@ def suppress(meta_path: Path, db_path: Path, sids, reason: str = "",
             "created_by": created_by, "purged": purged, "pruned": pruned}
 
 
+def find_candidates(db_path: Path,
+                    known_sids=frozenset()) -> dict:
+    """抑制候选清单（**只读**，v0.52）：工具先出机械候选，人按标题裁决。
+
+    用户 2026-10-13 原话："我也不可能知道 sid 是哪些啊（这其实也是问题
+    所在，一般人谁记这个）"——原工作流要人点名 sid，反人类。本函数给
+    两类机械候选：
+
+      ① 重复会话：会话级 user-raw bigram Jaccard ≥DUP_THRESHOLD（H40
+         冻结口径，最终判定**逐对全量复核**）；每簇 **created_at 最早**
+         的一条为代表，其余为候选；
+      ② 零 user 轮次：没有任何 role='user' 消息的会话
+         （常见 = 纯背景噪声 / 只有系统与工具消息）。
+
+    规模安全（真库 1983 会话实测教训：全量 grams 常驻内存会被杀）：
+    两阶段——先对每会话**前 `DISCOVER_CHARS` 字符**的 bigram 粗筛出候选对
+    （配长度比窗口剪枝），再对候选对**逐对用全量 user raw** 重算 Jaccard
+    按 H40 阈值定案。粗筛阈值放宽到 `DISCOVER_J`（宁可多复核），
+    定案口径不打折。
+
+    `known_sids`（已在抑制表里的）直接剔除，不重复提名。
+    返回 `{"dup_clusters": [...], "zero_user": [...], "scanned": n}`；
+    库缺失/为空时各项为空、scanned=0。全程 mode=ro，一字节不写。
+    """
+    from .topicprep import DUP_THRESHOLD, _grams, _jaccard
+
+    DISCOVER_CHARS = 2000   # 粗筛只用每会话 user raw 拼接的前 N 字符
+    DISCOVER_J = 0.75       # 粗筛阈值（放宽，宁可多复核）；定案仍 ≥0.90
+    SIZE_RATIO = 0.70       # 长度比窗口（J≥0.90 必要条件的宽松版）
+
+    db_path = Path(db_path)
+    if not db_path.is_file():
+        return {"dup_clusters": [], "zero_user": [], "scanned": 0}
+    con = _read_con(db_path)
+    try:
+        sess = list(con.execute(
+            "SELECT sid, title, created_at FROM sessions "
+            "ORDER BY created_at, sid"))
+        # 单趟全表扫（messages 是 FTS5 虚表且 sid UNINDEXED——逐会话查询
+        # 等于 N 次全表扫，真库实测 463s；一趟拉回按 sid 分组只要几秒）。
+        joined_of: dict[str, str] = {}
+        user_seen: set[str] = set()
+        for r in con.execute("SELECT sid, role, raw FROM messages"):
+            if r["role"] != "user":
+                continue
+            user_seen.add(r["sid"])
+            joined_of[r["sid"]] = joined_of.get(r["sid"], "") + (r["raw"] or "")
+
+        items, zero_user = [], []
+        for r in sess:
+            if r["sid"] in known_sids:
+                continue
+            if r["sid"] not in user_seen:
+                zero_user.append({"sid": r["sid"], "title": r["title"] or ""})
+                continue
+            joined = joined_of.get(r["sid"], "")
+            items.append({"sid": r["sid"], "title": r["title"] or "",
+                          "created_at": r["created_at"] or "",
+                          "grams_disc": _grams(joined[:DISCOVER_CHARS]),
+                          "joined": joined})
+        del joined_of, user_seen
+
+        # ---- 粗筛：按 bigram 数降序 + 长度比窗口，找候选对 ----
+        by_size = sorted(items, key=lambda it: -len(it["grams_disc"]))
+        cand_pairs: set[tuple[str, str]] = set()
+        for i, a in enumerate(by_size):
+            na = len(a["grams_disc"])
+            if na == 0:
+                continue
+            for b in by_size[i + 1:]:
+                nb = len(b["grams_disc"])
+                if nb == 0 or nb < na * SIZE_RATIO:
+                    break                     # 后面只会更小
+                if _jaccard(a["grams_disc"], b["grams_disc"]) >= DISCOVER_J:
+                    cand_pairs.add((min(a["sid"], b["sid"]),
+                                    max(a["sid"], b["sid"])))
+        del by_size
+
+        # ---- 定案：候选对逐对用**全量** user raw 复核（H40 口径） ----
+        joined_of2 = {it["sid"]: it["joined"] for it in items}
+        verified: list[tuple[str, str, float]] = []
+        for sa, sb in sorted(cand_pairs):
+            ja = _jaccard(_grams(joined_of2.get(sa, "")),
+                          _grams(joined_of2.get(sb, "")))
+            if ja >= DUP_THRESHOLD:
+                verified.append((sa, sb, round(ja, 3)))
+        del joined_of2
+
+        # ---- 聚簇（沿用 dedupe_items 同款并查集语义，仅对涉事会话） ----
+        parent = {it["sid"]: it["sid"] for it in items}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        title_of = {it["sid"]: it["title"] for it in items}
+        created_of = {it["sid"]: it["created_at"] for it in items}
+        pair_j: dict[tuple[str, str], float] = {}
+        for sa, sb, j in verified:
+            pair_j[(sa, sb)] = j
+            pair_j[(sb, sa)] = j
+            ra, rb = find(sa), find(sb)
+            if ra != rb:
+                parent[ra] = rb
+        clusters: dict[str, list] = {}
+        for it in items:
+            clusters.setdefault(find(it["sid"]), []).append(it["sid"])
+        dup_clusters = []
+        for members in clusters.values():
+            if len(members) < 2:
+                continue
+            members.sort(key=lambda s: (created_of.get(s, ""), s))
+            rep = members[0]
+            cands = [{"sid": s, "title": title_of.get(s, ""),
+                      "jaccard": pair_j.get((rep, s))}
+                     for s in members[1:] if s not in known_sids]
+            if cands:
+                dup_clusters.append({"rep": rep,
+                                     "rep_title": title_of.get(rep, ""),
+                                     "candidates": cands})
+        dup_clusters.sort(key=lambda c: c["rep"])
+        return {"dup_clusters": dup_clusters, "zero_user": zero_user,
+                "scanned": len(sess)}
+    finally:
+        con.close()
+
+
 def unsuppress(meta_path: Path, sids) -> int:
     """取消抑制：只删抑制表行，**不恢复任何数据**（口径见模块 docstring）。
 

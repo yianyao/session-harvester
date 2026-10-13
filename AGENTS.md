@@ -11,8 +11,8 @@
   | 项 | 值 |
   |---|---|
   | 后端 head | v0.33 → **v0.49 批次**：v0.46 链 `786f5bb`…`fa28fbc`；v0.47 主提交 `3ff0252` + `03cf0c8`；v0.48 交接链 `4df962b`/`38c7712`/`52af86d`；**会话 6 新增**：会话抑制（`harvester/suppress.py` + 四挂点 + CLI + 32 例测试）。**版本号仍 0.46.0**（升版必须同改 `docs/HANDOFF-v0.33-next.md` §0 的 `→ **v0.46**`，否则 `test_v45_hygiene` 红） |
-  | 后端测试基线 | **817 例全绿**（venv，见下「基线自查」；785 → 817，+32 = 会话抑制测试）——**数字的权威在 README 顶部「测试基线」一节**，由 `tests/test_v48_test_baseline.py` **真跑对账**钉住 |
-  | 无 PyYAML 门禁 | **`GATE ran=776 failures=0 errors=61 skipped=2`**（须 0 failures；61 errors 是缺 PyYAML 的设计行为；**skipped=2 = 基线门的两条实测用例在嵌套层转 skip**，`skip ≠ 通过`）。脚本：`& $venv -X utf8 scripts\gate_no_yaml.py`；flake 复现 `scripts\flake_hunt.py`（热/冷）、旧树 `docs/reports/probe-history-flake.py` |
+  | 后端测试基线 | **822 例全绿**（venv，见下「基线自查」；817 → 822，+5 = suppress candidates 候选清单测试）——**数字的权威在 README 顶部「测试基线」一节**，由 `tests/test_v48_test_baseline.py` **真跑对账**钉住 |
+  | 无 PyYAML 门禁 | **`GATE ran=781 failures=0 errors=61 skipped=2`**（须 0 failures；61 errors 是缺 PyYAML 的设计行为；**skipped=2 = 基线门的两条实测用例在嵌套层转 skip**，`skip ≠ 通过`）。脚本：`& $venv -X utf8 scripts\gate_no_yaml.py`；flake 复现 `scripts\flake_hunt.py`（热/冷）、旧树 `docs/reports/probe-history-flake.py` |
   | 死代码门的并发保护 | v0.45：不可信发现单列 + CLI 回 3 + 套件门可区分 skip。**会话 6 又踩一次**：并发编辑 sibling 仓时门禁报 `errors=62`、deadcode 报「1 条不可信（`harvester/x.py`，其实是测试夹具）」——**串行重跑分别是 61 与 0/0/0**（连带教训：`Select-Object -First` 会打断上游进程并伪造 exit 1） |
   | 跨仓漂移门（**新，务必知道**） | **后端新增 CLI 子命令 → view 的 `test_v35_actions.test_no_drift_against_real_parser` 会红，这是正确行为**（会话 6 加 `suppress *` 时实测红了）。修法固定：`python -m actions.commandgen` 重生成 + 归并 `commandgen.COMMAND_CARD`/`TIER_OVERRIDE` + `registrygen` 重生成。**别为了绿去改门** |
   | 跨测试泄漏门 | `tests/test_v45_no_monkeypatch_leak.py`（AST 查模块级打桩无还原）；权威仍是动态的 `flake_hunt.py` |
@@ -59,8 +59,8 @@
 
 - **基线自查命令**（先设沙箱补丁，再跑，否则会误判"项目坏了"）：
   `$env:PYTHONPATH = "<repo>\scripts\sandbox"` 后
-  `& $venv -m unittest discover -s tests` → 预期 **817 例 OK**；无 PyYAML 门禁用
-  `& $venv -X utf8 scripts\gate_no_yaml.py`（须 **0 failures**，预期 `ran=776 errors=61 skipped=2`）。
+  `& $venv -m unittest discover -s tests` → 预期 **822 例 OK**；无 PyYAML 门禁用
+  `& $venv -X utf8 scripts\gate_no_yaml.py`（须 **0 failures**，预期 `ran=781 errors=61 skipped=2`）。
   **数字的权威是 README 顶部「测试基线」一节**（`tests/test_v48_test_baseline.py`
   会真跑这两条并与 README 对账；改测试却忘改 README → 它红）。
   ⚠ **基线必须串行跑，且跑的时候不要并发编辑任一仓的文件**——会话 6 的两次"假红"
