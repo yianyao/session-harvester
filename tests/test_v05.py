@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch  # noqa: E402
 
 from harvester.indexing import (
     _cjk_bigram,
@@ -22,7 +24,7 @@ from harvester.mcpserver import HarvesterMcpServer
 from harvester.models import Message, SessionRecord
 from harvester.toolstats import collect_stats, render_report
 
-TMP = Path(__file__).resolve().parent / "_tmp"
+TMP = _scratch.tmp_root()
 
 
 def _try_unlink(f: Path) -> None:

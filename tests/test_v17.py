@@ -22,7 +22,12 @@ from harvester import apiserve
 from harvester.indexing import SCHEMA, index_session, search
 from harvester.models import Message, SessionRecord
 
-_TMP = Path(__file__).parent / "_tmp"
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch  # noqa: E402
+
+_TMP = _scratch.tmp_root()
 
 
 def _record(sid_suffix: str, title: str, msgs: list[Message],

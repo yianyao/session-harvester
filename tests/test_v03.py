@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch  # noqa: E402
 
 from harvester.adapters.deepseek_export import (DeepSeekExportAdapter,
                                                 _content_text, _norm_time)
@@ -53,7 +55,7 @@ class TestDeepSeekParse(unittest.TestCase):
     def _adapter_with(self, data) -> DeepSeekExportAdapter:
         # 注意：沙箱对系统 Temp 的 unlink 有 shim 钩子（WinError 32），
         # 临时文件放项目内 tests/_tmp 并容错清理。
-        tmp = Path(__file__).resolve().parent / "_tmp"
+        tmp = _scratch.tmp_root()
         tmp.mkdir(exist_ok=True)
         f = tmp / f"export_{id(data):x}.json"
         f.write_text(json.dumps(data, ensure_ascii=False),

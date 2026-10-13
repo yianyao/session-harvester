@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch  # noqa: E402
 
 from harvester.adapters.dsh import DshAdapter, ZstdUnavailable, _split_frames  # noqa: E402
 from harvester.adapters.workbuddy_transcript import (  # noqa: E402
@@ -22,7 +24,7 @@ from harvester.toolstats import (collect_stats_from_db, render_flow,  # noqa: E4
                                  render_report)
 from harvester.tracestats import collect, render_report as rrep  # noqa: E402
 
-_TMP = Path(__file__).parent / "_tmp"
+_TMP = _scratch.tmp_root()
 
 
 # ---- 提取与映射 -----------------------------------------------------------

@@ -12,13 +12,15 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch  # noqa: E402
 
 from harvester.adapters.autoclaw import AutoClawAdapter
 from harvester.adapters.official_export import ChatGptExportAdapter, ClaudeExportAdapter
 from harvester.adapters.vscode_copilot import _replay_patches, _ws_extract
 from harvester.models import to_local_ts
 
-TMP = Path(__file__).resolve().parent / "_tmp"
+TMP = _scratch.tmp_root()
 
 
 def _try_unlink(f: Path) -> None:

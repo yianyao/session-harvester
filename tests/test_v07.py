@@ -9,11 +9,13 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch  # noqa: E402
 
 from harvester.adapters.deepseek_export import (  # noqa: E402
     DeepSeekExportAdapter, _ds_walk, _norm_time)
 
-_TMP = Path(__file__).parent / "_tmp"
+_TMP = _scratch.tmp_root()
 
 
 def _try_unlink(f: Path) -> None:
