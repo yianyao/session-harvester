@@ -33,11 +33,26 @@ from pathlib import Path
 
 from .adapters import PLUGIN_IDS, load_sources
 from .dbmeta import record_corpus_watermark
-from .exporter import export
+from .exporter import export, prune_suppressed
 from .indexing import index_exports, index_incremental
 from .outline import corpus_watermark, scan_all
+from .suppress import suppressed_sids
 
 INBOX_DONE = "done"
+
+
+def _suppress_meta_path(root: Path,
+                        suppress_meta: Path | str | None | bool) -> Path | None:
+    """抑制表所在 meta 库路径（v0.49）。
+
+    缺省 = `root/topics_meta.db`（提案 §5 ① 用户批准：复用现有 meta 库，
+    不新建一个库）。库不存在 / 没有抑制表 → `suppressed_sids` 返回空集，
+    即"没有任何抑制"，全套流水线行为与 v0.48 逐字一致。
+    **`False` = 显式关闭**（不看抑制表，与 `keywords_meta=False` 同款语义）。
+    """
+    if suppress_meta is False:
+        return None
+    return Path(suppress_meta) if suppress_meta else root / "topics_meta.db"
 
 
 # ---- 收件箱：识别与归档 ----
@@ -213,7 +228,8 @@ def run_sync(root: Path = Path("."),
              only: set[str] | None = None,
              verbose: bool = False,
              keywords_meta: Path | str | None = None,
-             keep_keyword_runs: int = 1) -> dict:
+             keep_keyword_runs: int = 1,
+             suppress_meta: Path | str | None | bool = None) -> dict:
     """一键同步：收件箱收割 -> 全量导出 -> 整库重建索引 -> 差异报告。
 
     各路径默认相对 root。include_notes 默认 True——工具步骤记录藏在
@@ -224,6 +240,10 @@ def run_sync(root: Path = Path("."),
     keywords_meta: `keywords_meta.db` 路径（默认 `root/keywords_meta.db`；
     **传 `False` 可关闭收尾 GC**）。
     keep_keyword_runs: 收尾 GC 保留的 run 数（默认 1，见 `_gc_keywords`）。
+    suppress_meta（v0.49）：抑制表所在 meta 库（默认 `root/topics_meta.db`；
+    **传 `False` 可显式关闭抑制拦截**）。抑制 sid 在三处同时生效——导出拦
+    （不产生文件）、清旧副本（**否则上一轮的文件还在，整库重建会把它建回来**）、
+    索引兜底。
     返回完整统计 dict（cli 负责渲染）。
     """
     root = Path(root)
@@ -242,11 +262,20 @@ def run_sync(root: Path = Path("."),
 
     # 3. 导出（全量；文件名确定性 => 幂等覆盖）
     before = _db_sids(db_path)
+    sup_meta = _suppress_meta_path(root, suppress_meta)
+    suppressed = suppressed_sids(sup_meta)
     manifest = export(exports_dir, selection=None, include_notes=include_notes,
-                      verbose=verbose, sources=merged, only=only)
+                      verbose=verbose, sources=merged, only=only,
+                      skip_sids=suppressed or None)
+
+    # 3b. 清掉被抑制会话的**旧** exports 副本（v0.49）
+    #     它们不在本次 manifest 里，但 index_exports 是按目录扫的——
+    #     文件还在就会被重新索引回来（"抑制了却又回来"的真正成因）。
+    pruned = prune_suppressed(exports_dir, suppressed)
 
     # 4. 索引（整库重建，与 index --from 同口径）
-    stats = index_exports(exports_dir, db_path, verbose=verbose)
+    stats = index_exports(exports_dir, db_path, verbose=verbose,
+                          skip_sids=suppressed or None)
     after = _db_sids(db_path)
     # 全量重建也是"库已跟上语料"的证据 → 同样落水位（sync 自己扫一遍源）
     wm = corpus_watermark(merged, only=only)
@@ -265,6 +294,14 @@ def run_sync(root: Path = Path("."),
         "index": stats,
         "corpus": wm,
         "keywords_gc": kw,
+        "suppress": {
+            "meta": str(sup_meta) if sup_meta else None,
+            "count": len(suppressed),
+            "sids": sorted(suppressed),
+            "export_skipped": len(manifest.get("skipped_suppressed") or []),
+            "index_skipped": stats.get("skipped_suppressed", 0),
+            "pruned": pruned,
+        },
         "sessions_total": stats.get("sessions", len(after)),
         "new": new_sids,
         "gone": gone_sids,
@@ -312,7 +349,8 @@ def run_update(root: Path = Path("."),
                exports_dir: Path | str | None = None,
                include_notes: bool = True,
                only: set[str] | None = None,
-               verbose: bool = False) -> dict:
+               verbose: bool = False,
+               suppress_meta: Path | str | None | bool = None) -> dict:
     """增量同步（v0.22，用户裁决 2026-10-09）：只获取未获取的。
 
     收件箱收割 -> 库水位对比 -> 仅导出新 sid / updated_at 变化的会话
@@ -325,6 +363,11 @@ def run_update(root: Path = Path("."),
     - 其余跳过——不全量重取历史轨迹，也不重解析。
     首跑无库 = 天然全量。sync 保持全量语义，作为对账/rebuild 基线。
     各路径默认相对 root，参数与 run_sync 一致；返回统计 dict。
+
+    suppress_meta（v0.49）：抑制表所在 meta 库（默认 `root/topics_meta.db`）。
+    抑制 sid：导出拦（`skip_sids`）、清旧副本（`prune_suppressed`），并**并进
+    既有 `drop_sids`**——抑制中的会话在库里每次 update 都该被清掉（它正是因为
+    「库里没有」才会被当成 `new` 反复挑出来）。
     """
     root = Path(root)
     inbox_dir = Path(inbox_dir) if inbox_dir else root / "inbox"
@@ -342,6 +385,8 @@ def run_update(root: Path = Path("."),
 
     # 3. 水位对比：只挑未获取 / 已变更的会话
     high = _db_updated(db_path)
+    sup_meta = _suppress_meta_path(root, suppress_meta)
+    suppressed = suppressed_sids(sup_meta)
     adapters, items, reports = scan_all(verbose=verbose, sources=merged, only=only)
     # 语料水位在**扫描时刻**测（= 本次 update 真正消费到的语料状态），
     # 索引成功后写进库当基准；此后语料再变 → 报告显 STALE。
@@ -365,17 +410,24 @@ def run_update(root: Path = Path("."),
         manifest = export(exports_dir, selection=None,
                           include_notes=include_notes, verbose=verbose,
                           sources=merged, only=only, select_sids=wanted,
-                          scanned=(adapters, items, reports))
+                          scanned=(adapters, items, reports),
+                          skip_sids=suppressed or None)
         export_count = manifest.get("count", 0)
         export_msg = manifest.get("message")
     else:
         manifest, export_count, export_msg = {}, 0, None
 
+    # 4b. 清掉抑制会话的旧 exports 副本（v0.49，理由同 run_sync 3b）
+    pruned = prune_suppressed(exports_dir, suppressed)
+
     # 5. 索引（v0.46 P0-1：只索引本次写出的 json + 清掉源侧消失的行）
+    #    抑制 sid 并进 drop_sids：它们不在本批文件里，但库里每次 update 都
+    #    可能被重新建/或本就有残留行（抑制是"此后不许在"的持续声明）。
     idx_files = [e["file"] for e in manifest.get("exported", [])]
     gone, protected = source_gone(high, items, reports, only=only)
     stats = index_incremental(exports_dir, db_path, idx_files,
-                              drop_sids=gone, verbose=verbose)
+                              drop_sids=gone + sorted(suppressed),
+                              verbose=verbose)
     record_corpus_watermark(db_path, wm)
 
     return {
@@ -385,6 +437,16 @@ def run_update(root: Path = Path("."),
         "export": {"count": export_count, "message": export_msg},
         "index": stats,
         "corpus": wm,
+        "suppress": {
+            "meta": str(sup_meta) if sup_meta else None,
+            "count": len(suppressed),
+            "sids": sorted(suppressed),
+            "export_skipped": len(manifest.get("skipped_suppressed") or []),
+            # drop_sids 是**条数**（并进去几个 sid），不是被删的行数——
+            # 行数在 index.dropped 里（那个口径把 gone 与抑制合在一起数）
+            "drop_sids": len(suppressed),
+            "pruned": pruned,
+        },
         "sessions_total": stats.get("sessions", len(high) + len(new_sids)),
         "new": new_sids,
         "updated": updated_sids,

@@ -232,22 +232,32 @@ def index_session(con: sqlite3.Connection, rec, file: str | None = None,
 
 
 def _index_json_file(con: sqlite3.Connection, p: Path, export_dir: Path,
-                     verbose: bool = False) -> tuple[str | None, int, bool]:
+                     verbose: bool = False,
+                     skip_sids: set[str] | None = None
+                     ) -> tuple[str | None, int, bool, bool]:
     """把单个 export json 索引进库（先按 sid 删行再插入）。
 
-    返回 `(sid, 消息条数, 是否解析失败)`；`sid is None` = 该文件被跳过
-    （损坏 / 非会话结构），与 v0.45 之前 `index_exports` 的行为逐字一致。
+    返回 `(sid, 消息条数, 是否解析失败, 是否因抑制被跳过)`；`sid is None` =
+    该文件被跳过（损坏 / 非会话结构 / **抑制命中**），v0.46 之前的调用方只看
+    前三项。
     **全量重建与增量两条路径都必须走本函数**——否则"增量"会悄悄换口径。
+
+    skip_sids（v0.49，additive）：抑制中的 sid 集合。命中即不入库
+    （提案 §2.2 挂点 C：**兜底**——即使旧文件没被清掉，索引也不收）。
     """
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         if verbose:
             print(f"  [skip] {p.name}: {e}")
-        return None, 0, True
+        return None, 0, True, False
     if not isinstance(data, dict) or "messages" not in data:
-        return None, 0, False
+        return None, 0, False, False
     sid = f"{data.get('source', '?')}:{data.get('session_id', p.stem)}"
+    if skip_sids and sid in skip_sids:
+        if verbose:
+            print(f"  [skip-suppressed] {p.name}: {sid}")
+        return None, 0, False, True
     # export 目录布局为 <category>/<YYYY-MM>/<file>.json，取首段为大类
     rel = p.relative_to(export_dir).parts
     category = rel[0] if len(rel) >= 3 else None
@@ -283,11 +293,17 @@ def _index_json_file(con: sqlite3.Connection, p: Path, export_dir: Path,
                     (sid, m.get("role", "note"), m.get("timestamp"),
                      _cjk_bigram(text), m.get("text", "")))
         n_msgs += 1
-    return sid, n_msgs, False
+    return sid, n_msgs, False, False
 
 
-def index_exports(export_dir: Path, db: Path, verbose: bool = False) -> dict:
-    """从 export 产物目录索引全部 *.json（排除 manifest）——整库重建。"""
+def index_exports(export_dir: Path, db: Path, verbose: bool = False,
+                  skip_sids: set[str] | None = None) -> dict:
+    """从 export 产物目录索引全部 *.json（排除 manifest）——整库重建。
+
+    skip_sids（v0.49，additive）：抑制中的 sid，命中的 json **不索引**
+    （兜底闸；正常流程里 `exporter.prune_suppressed` 已把旧文件清掉）。
+    返回里多一个 `skipped_suppressed` 计数，供 `sync` 报告与实际核对。
+    """
     export_dir = Path(export_dir)
     jsons = [p for p in export_dir.rglob("*.json")
              if p.name != "export_manifest.json"]
@@ -298,10 +314,14 @@ def index_exports(export_dir: Path, db: Path, verbose: bool = False) -> dict:
         con.execute("DELETE FROM steps")
         n_sessions, n_msgs = 0, 0
         n_bad = 0
+        n_sup = 0
         for p in jsons:
             # 单个文件损坏/读不出只跳过该文件，不拖垮整库重建
-            sid, n, bad = _index_json_file(con, p, export_dir, verbose=verbose)
+            sid, n, bad, sup = _index_json_file(con, p, export_dir,
+                                                verbose=verbose,
+                                                skip_sids=skip_sids)
             n_bad += 1 if bad else 0
+            n_sup += 1 if sup else 0
             if sid is None:
                 continue
             n_msgs += n
@@ -312,7 +332,7 @@ def index_exports(export_dir: Path, db: Path, verbose: bool = False) -> dict:
     finally:
         con.close()
     return {"sessions": n_sessions, "messages": n_msgs, "db": str(db),
-            "skipped": n_bad}
+            "skipped": n_bad, "skipped_suppressed": n_sup}
 
 
 def _resolve_export_json(export_dir: Path, ref) -> Path:
@@ -343,7 +363,8 @@ def index_incremental(export_dir: Path, db: Path, files=(),
             if not p.is_file():
                 missing.append(str(p))
                 continue
-            sid, n, bad = _index_json_file(con, p, export_dir, verbose=verbose)
+            sid, n, bad, _sup = _index_json_file(con, p, export_dir,
+                                                 verbose=verbose)
             n_bad += 1 if bad else 0
             if sid is None:
                 continue

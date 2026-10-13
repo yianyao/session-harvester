@@ -43,10 +43,10 @@ $venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 785 tests ... OK
+# ① 权威基线：全套件。期望 Ran 817 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=744 failures=0 errors=61 skipped=2
+# ② 无 PyYAML 门禁：期望 GATE ran=776 failures=0 errors=61 skipped=2
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -55,8 +55,8 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 785 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁 | **ran=744 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 817 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁 | **ran=776 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
 **为什么 `ran` 会不一样（785 vs 744）**：无 PyYAML 时，依赖它的模块**在导入期整体
@@ -487,6 +487,31 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `topic register/add/remove/merge/rename/delete/list/show/…` | 主题注册表：认可候选后注册进 topics_meta.db（注册即出现在 view 主题 tab）；`merge` 把多个主题并成一个（成员去重 + 证据带来源尾注 + 删源）；`rename` 保 id；`delete` 带快照；`export` 给机器（topic.json）、`md` 给人（一页速览，四问：是什么/跨多久/关键转折/结论与未决） |
 | `chain-validate` | topic-chain 长文独立校验（frontmatter + 锚点可回溯） |
 
+### 数据管理（会话抑制，v0.49）
+
+> 「抑制」= 把没营养的会话从**仓内副本**里移除，并保证此后的 `sync`/`update`
+> 不再把它建回来。**删的是仓内副本**（`harvester.db` 的三表行 + `exports/` 下的
+> `.json`/`.md`），**采集源一字节不动**（DSH/WorkBuddy 自己的会话文件）。
+> 抑制表建在 `topics_meta.db` 里，**与「零散登记」`sessions_noise` 分开建表**
+> ——后者是「不删、只排除分析」，混用会让「零散」从此等于「已删除」。
+
+| 命令 | 用途 |
+|---|---|
+| `suppress list` | 列出已抑制会话（谁 / 何时 / 为什么） |
+| `suppress add --sid <sid> [--sid ...] --reason "..."` | 抑制会话：写抑制表 + **立刻**删库内三表行 + 清该 sid 的旧 exports 副本。**默认 dry-run**（只印库内行数/将删的副本），`--apply` 才写 |
+| `suppress remove --sid <sid>` | 取消抑制（只删抑制表行）。**不恢复数据**：能否恢复只取决于**语料是否还在**——语料还在则下次 `sync`/`update` 会重新导出并入库，语料没了就真没了（**不设时限**） |
+| `suppress prune-exports` | 按抑制表清 `exports/` 里的旧副本（只清这些 sid 的文件；`sync` 每次也会自动做这一步）。默认 dry-run，`--apply` 才删 |
+
+**为什么必须四处齐做**（否则「抑制了又会回来」）：`sync` 每次都**重导出 +
+整库重建**，库内容完全由 `exports/` 目录决定（`indexing.index_exports` 先
+`DELETE` 三表再按目录重建）。所以：① 导出步拦（`export(skip_sids=...)`，
+不产生新文件）→ ② 清旧副本（`exporter.prune_suppressed`，**上一轮的文件还在
+就会被重建回来——这才是"又会回来"的真正成因**）→ ③ 索引侧兜底
+（`index_exports(skip_sids=...)`，文件没清干净也不收）→ ④ `sync`/`update`
+接线（`update` 另把抑制 sid 并进既有 `drop_sids`）。
+`sync`/`update` 可用 `--suppress-meta <路径>` 指定抑制表位置（默认
+`topics_meta.db`），`--no-suppress` 关闭拦截。
+
 ### 服务
 
 | 命令 | 用途 |
@@ -843,6 +868,22 @@ python -m harvester ledger-sync --meta suggestions_meta.db \
 # 没有 adopted_at 的条目用 --since 兜底；样本不足一律「不下结论」
 python -m harvester harvest-eval --db harvester.db \
     --meta suggestions_meta.db --since 2026-10-05 --window-days 14
+
+# 会话抑制（v0.49）：把没营养的会话从**仓内副本**里移除，并保证此后不再入库
+# 删的是仓内副本（库内三表行 + exports 下的 .json/.md），**采集源一字节不动**
+# 抑制表在 topics_meta.db 里（与「零散登记」sessions_noise 分开建表）
+python -m harvester suppress list --meta topics_meta.db
+python -m harvester suppress add --sid "<search输出的sid>" \
+    --reason "单轮查词，无营养" --db harvester.db --meta topics_meta.db \
+    --exports exports
+# 默认 dry-run（只印库内行数 / 将删的旧副本），确认后加 --apply 才写
+python -m harvester suppress add --sid "<search输出的sid>" \
+    --reason "单轮查词，无营养" --apply
+# 取消抑制：只删抑制表行，**不恢复数据**——能否恢复只取决于语料是否还在：
+# 语料还在 → 下次 sync/update 会重新导出并入库；语料没了 → 就真没了（不设时限）
+python -m harvester suppress remove --sid "<sid>" --apply
+# 清 exports 里的旧副本（只清抑制表里那些 sid 的；sync 每次也会自动做）
+python -m harvester suppress prune-exports --meta topics_meta.db --apply
 
 # 知识卡片（G3）：候选池 ↔ 主库归一，三条供卡通道详见 docs/CARD_WORKFLOW.md
 # 从索引库会话一键起卡（锚点自动填，evidence 留白待补）

@@ -51,6 +51,15 @@
       产出跨 agent 上下文交接包（ai-hist pack 式）
   python -m harvester mcp-serve [--sources] [--db]
       MCP stdio server：任意 agent 运行时直查历史（list/search/read/pack）
+  python -m harvester suppress list [--meta topics_meta.db]
+      会话抑制（v0.49）：列出已抑制会话（谁 / 何时 / 为什么）
+  python -m harvester suppress add --sid <sid> --reason "..." [--apply]
+      抑制会话：删**仓内副本**（库内三表行 + exports 副本），不删采集源；
+      默认 dry-run。此后 sync/update 在导出步拦、索引侧兜底，不再入库
+  python -m harvester suppress remove --sid <sid> [--apply]
+      取消抑制（不恢复数据；语料还在时下次 sync 会重新导出入库）
+  python -m harvester suppress prune-exports [--apply]
+      按抑制表清 exports 里的旧副本（默认 dry-run）
 """
 
 from __future__ import annotations
@@ -196,7 +205,9 @@ def cmd_sync(args) -> int:
                  include_notes=not args.no_notes, verbose=args.verbose,
                  keywords_meta=(False if args.no_prune_keywords
                                 else root / args.keywords_meta),
-                 keep_keyword_runs=args.keywords_keep_runs)
+                 keep_keyword_runs=args.keywords_keep_runs,
+                 suppress_meta=(False if args.no_suppress
+                                else root / args.suppress_meta))
     inbox = r["inbox"]
     for a in inbox["archived"]:
         tag = "重复跳过" if a.get("duplicate") else "已认领"
@@ -231,6 +242,17 @@ def cmd_sync(args) -> int:
         print(f"  + {sid}")
     if len(r["new"]) > 10:
         print(f"  ... 其余 {len(r['new']) - 10} 条略")
+    sup = r.get("suppress") or {}
+    if sup.get("count"):
+        pr = sup.get("pruned") or {}
+        print(f"  [抑制] 抑制中 {sup['count']} 条：导出拦下 {sup.get('export_skipped', 0)}"
+              f" / 索引兜底跳过 {sup.get('index_skipped', 0)}"
+              f" / 清掉 exports 旧副本 {len(pr.get('deleted') or [])}"
+              f"（清单摘掉 {pr.get('manifest_removed', 0)} 条）")
+        for sid in sup["sids"][:5]:
+            print(f"      - {sid}")
+        if len(sup["sids"]) > 5:
+            print(f"      ... 其余 {len(sup['sids']) - 5} 条略（suppress list）")
     print("后续: harvester report-tools / report-errors / report-skill / cards new "
           "均直接消费该索引库")
     return 0
@@ -242,7 +264,9 @@ def cmd_update(args) -> int:
                    db_path=root / args.db,
                    inbox_dir=root / args.inbox,
                    exports_dir=root / args.exports,
-                   include_notes=not args.no_notes, verbose=args.verbose)
+                   include_notes=not args.no_notes, verbose=args.verbose,
+                   suppress_meta=(False if args.no_suppress
+                                  else root / args.suppress_meta))
     inbox = r["inbox"]
     for a in inbox["archived"]:
         tag = "重复跳过" if a.get("duplicate") else "已认领"
@@ -280,6 +304,13 @@ def cmd_update(args) -> int:
     for src in r.get("gone_protected", []):
         print(f"      [warn] {src} 本次一条会话都没列出——按「读不到」处理，"
               "未清理其历史行（避免误删）")
+    sup = r.get("suppress") or {}
+    if sup.get("count"):
+        pr = sup.get("pruned") or {}
+        print(f"  [抑制] 抑制中 {sup['count']} 条：导出拦下 {sup.get('export_skipped', 0)}"
+              f" / 并进 drop_sids {sup.get('drop_sids', 0)} 条"
+              f"（本次共清掉 {r['index'].get('dropped', 0)} 个 sid 的行，含源侧消失）"
+              f" / 清掉 exports 旧副本 {len(pr.get('deleted') or [])}")
     _print_db_age(Path(r["db"]), r.get("corpus") or {})
     if len(r["new"]) + len(r["updated"]) > 20:
         print("  ... 其余略")
@@ -1072,6 +1103,130 @@ def cmd_ledger_sync(args) -> int:
     return 0
 
 
+def cmd_suppress(args) -> int:
+    """会话抑制（v0.49，提案 §2.4）：从**仓内副本**里移除没营养的会话。
+
+    默认 dry-run（与 `topic-consolidate` / `ledger-sync` 同款家规），
+    `--apply` 才写。删的是**仓内副本**——库内三表行 + exports 下的
+    `.json`/`.md`；**采集源（DSH/WorkBuddy 自己的会话文件）一字节不动**。
+
+    口径诚实（提案 §5 ⑧ 用户裁决：**不设时限**）：`remove` 本身不恢复数据，
+    能不能恢复**只取决于语料是否还在**——语料还在，下次 sync/update 会重新
+    导出并入库；语料没了就真没了。文案一律如此，不写任何「N 天内可恢复」。
+    """
+    from .exporter import prune_suppressed
+    from .suppress import (db_row_counts, list_suppressed, suppress,
+                           suppressed_sids, unsuppress)
+    meta = Path(args.meta)
+    sids = list(dict.fromkeys(getattr(args, "sids", None) or []))  # 去重保序
+
+    if args.action == "list":
+        rows = list_suppressed(meta)
+        if not rows:
+            print(f"[suppress] 抑制表为空（{meta}）。")
+        else:
+            print(f"[suppress] 已抑制 {len(rows)} 条（{meta}）：")
+            for r in rows:
+                print(f"  - {r['sid']}  {r['created']}"
+                      f"  by={r['created_by'] or '-'}"
+                      f"  reason={r['reason'] or '-'}")
+        print("[suppress] 抑制只作用于**仓内副本**（库内三表行 + exports 副本），"
+              "采集源不动；取消抑制本身不恢复数据——只要语料还在，"
+              "下次 sync/update 会重新导出并入库。")
+        return 0
+
+    if args.action == "remove":
+        have = {r["sid"]: r for r in list_suppressed(meta)}
+        print(f"[suppress] remove {len(sids)} 个 sid（抑制表现有 {len(have)} 条）"
+              + ("——dry-run，未写入" if not args.apply else ""))
+        for sid in sids:
+            print(f"  - {sid}  " + ("在抑制表里" if sid in have
+                                    else "**不在**抑制表里（这次不会删到任何行）"))
+        if not args.apply:
+            print("[suppress] 加 --apply 才真删抑制表行；取消后要让数据回来，"
+                  "得再跑一次 sync（前提是语料还在）。")
+            return 0
+        n = unsuppress(meta, sids)
+        print(f"[suppress] 已取消抑制 {n} 行。")
+        print("[suppress] 注意：取消抑制**不会**恢复已删的库内行与 exports 副本。"
+              "能不能恢复**只取决于语料是否还在**（DSH/WorkBuddy 自己的会话文件）："
+              "语料还在 → 下次 sync/update 会重新导出并入库；语料没了 → 就真没了。"
+              "本工具不设恢复时限。")
+        return 0
+
+    if args.action == "add":
+        dbp = Path(args.db)
+        exports = Path(args.exports)
+        counts = db_row_counts(dbp, sids)
+        preview = prune_suppressed(exports, set(sids), dry_run=True)
+        print(f"[suppress] add {len(sids)} 个 sid"
+              + ("——dry-run，未写入" if not args.apply else "——写入"))
+        for sid in sids:
+            c = counts[sid]
+            print(f"  - {sid}")
+            print(f"      库内行：sessions {c['sessions']} / messages "
+                  f"{c['messages']} / steps {c['steps']}"
+                  + ("" if c["found"] else "（库内没有这个 sid 的会话行）"))
+            if c["title"]:
+                print(f"      标题：{c['title']}")
+        for e in preview["deleted"]:
+            print(f"      exports 旧副本：{e['json']}"
+                  + (f" + {e['md']}" if e["md"] else ""))
+        if preview["unreadable"]:
+            print(f"      [warn] {len(preview['unreadable'])} 个 json 读不出 sid，"
+                  "未参与清理："
+                  + ", ".join(preview["unreadable"][:3]))
+        print(f"      （扫到 {preview['scanned']} 个 json；"
+              f"命中旧副本 {len(preview['deleted'])} 个）")
+        if not args.apply:
+            print("[suppress] dry-run：抑制表、库内行、exports 文件**都未动**；"
+                  "确认后加 --apply。")
+            return 0
+        r = suppress(meta, dbp, sids, reason=args.reason,
+                     created_by=args.created_by, exports_dir=exports)
+        del_s, del_m, del_p = 0, 0, 0
+        for c in r["purged"].values():
+            del_s += c["sessions"]
+            del_m += c["messages"]
+            del_p += c["steps"]
+        print(f"[suppress] 已抑制 {len(sids)} 条（抑制表新增 {r['added']} 行）；"
+              f"库内已删 sessions {del_s} / messages {del_m} / steps {del_p}；"
+              f"exports 已清旧副本 {len(r['pruned']['deleted'])} 个"
+              f"（清单摘掉 {r['pruned']['manifest_removed']} 条）")
+        if r["pruned"].get("manifest_error"):
+            print("      [warn] 导出清单未能更新："
+                  f"{r['pruned']['manifest_error']}（下次 export 会整份重写）")
+        print("[suppress] 删的是**仓内副本**（库内三表行 + exports 下的 "
+              ".json/.md），**不删采集源**（DSH/WorkBuddy 自己的会话文件一字节不动）。"
+              "此后 sync/update 会在导出步拦住它，不会再入库。")
+        return 0
+
+    if args.action == "prune-exports":
+        sids_all = suppressed_sids(meta)
+        exports = Path(args.exports)
+        r = prune_suppressed(exports, sids_all, dry_run=not args.apply)
+        print(f"[suppress] prune-exports（{exports}）：抑制表 {len(sids_all)} 条；"
+              f"扫到 {r['scanned']} 个 json；命中 {len(r['deleted'])} 个"
+              + ("——dry-run，未删任何文件" if not args.apply
+                 else f"；已删文件 + 清单摘掉 {r['manifest_removed']} 条"))
+        for e in r["deleted"]:
+            print(f"  - {e['json']}"
+                  + (f" + {e['md']}" if e["md"] else "（没有同名 .md）"))
+        if r["unreadable"]:
+            print(f"  [warn] {len(r['unreadable'])} 个 json 读不出 sid，"
+                  "未参与清理：" + ", ".join(r["unreadable"][:3]))
+        if r.get("manifest_error"):
+            print(f"  [warn] 导出清单未能更新：{r['manifest_error']}")
+        if not args.apply and r["deleted"]:
+            print("[suppress] 加 --apply 才真删这些文件。")
+        return 0
+
+    print(f"错误: 未知的 suppress 动作 {args.action!r}", file=sys.stderr)
+    # argparse 的 required=True 子解析器挡住了这条路；这里留着是为了**手工构造
+    # namespace 的调用方**（测试/脚本）也 fail loud，而不是静默什么都不做。
+    return 2
+
+
 def cmd_cards(args) -> int:
     """知识卡片校验（G3 确定性一半）：§8 frontmatter 规范 + 锚点有效性
     （+ 给了 --topics-meta 时的「卡 ↔ 主题」一致性核对，v0.43）。"""
@@ -1647,6 +1802,13 @@ def build_parser() -> argparse.ArgumentParser:
                      action="store_true",
                      help="关闭 sync 收尾的 keywords GC（默认开：keyword_stats 是"
                           "累积表，靠人记得手动跑 keywords-gc = 库会一直涨）")
+    psy.add_argument("--suppress-meta", dest="suppress_meta",
+                     default="topics_meta.db",
+                     help="抑制表所在 meta 库（相对 root，默认 topics_meta.db）；"
+                          "sync 按它拦下被抑制的会话（导出拦 + 清旧副本 + 索引兜底）")
+    psy.add_argument("--no-suppress", dest="no_suppress", action="store_true",
+                     help="关闭抑制拦截（默认开：抑制是「此后不许在」的持续声明，"
+                          "不拦住的话下次 sync 就会把它建回来）")
     psy.add_argument("-v", "--verbose", action="store_true")
     psy.set_defaults(func=cmd_sync)
 
@@ -1659,6 +1821,11 @@ def build_parser() -> argparse.ArgumentParser:
     pu.add_argument("--exports", default="exports", help="导出目录（相对 root）")
     pu.add_argument("--no-notes", action="store_true",
                     help="导出时排除 note 角色（默认包含，理由同 sync）")
+    pu.add_argument("--suppress-meta", dest="suppress_meta",
+                    default="topics_meta.db",
+                    help="抑制表所在 meta 库（相对 root，默认 topics_meta.db）")
+    pu.add_argument("--no-suppress", dest="no_suppress", action="store_true",
+                    help="关闭抑制拦截（默认开，理由同 sync）")
     pu.add_argument("-v", "--verbose", action="store_true")
     pu.set_defaults(func=cmd_update)
 
@@ -1949,6 +2116,59 @@ def build_parser() -> argparse.ArgumentParser:
                           % _EVAL_MIN_TOTAL)
     phe.add_argument("--out", help="报告输出路径（缺省打印）")
     phe.set_defaults(func=cmd_harvest_eval)
+
+    psp = sub.add_parser(
+        "suppress",
+        help="会话抑制（v0.49）：把没营养的会话从**仓内副本**里移除"
+             "（库内三表行 + exports 副本），并保证以后 sync/update 不再入库；"
+             "默认 dry-run，--apply 才写。**不删采集源**")
+    psub = psp.add_subparsers(dest="action", required=True)
+
+    psl = psub.add_parser("list", help="列出已抑制会话（谁 / 何时 / 为什么）")
+    psl.add_argument("--meta", default="topics_meta.db",
+                     help="抑制表所在 meta 库（默认 topics_meta.db）")
+    psl.set_defaults(func=cmd_suppress)
+
+    psa = psub.add_parser("add", help="抑制会话（默认 dry-run，--apply 才写）")
+    psa.add_argument("--sid", action="append", dest="sids", required=True,
+                     metavar="SID",
+                     help="库口径 sid（`source:session_id`，即 search 输出的 "
+                          "[sid]）；可重复给多个")
+    psa.add_argument("--reason", default="",
+                     help="为什么抑制（写进抑制表，供日后复查）")
+    psa.add_argument("--by", dest="created_by", default="",
+                     help="谁做的（写进抑制表；缺省留空，不猜身份）")
+    psa.add_argument("--db", default="harvester.db", help="索引库路径")
+    psa.add_argument("--meta", default="topics_meta.db",
+                     help="抑制表所在 meta 库（默认 topics_meta.db）")
+    psa.add_argument("--exports", default="exports",
+                     help="导出产物目录（清该 sid 的旧 .json/.md 副本）")
+    psa.add_argument("--apply", action="store_true",
+                     help="真的写（缺省只预演：库内行数 / 将删的副本）")
+    psa.set_defaults(func=cmd_suppress)
+
+    psr = psub.add_parser(
+        "remove",
+        help="取消抑制（默认 dry-run）。**不恢复数据**——能否恢复只取决于"
+             "语料是否还在，语料还在则下次 sync 会重新导出入库")
+    psr.add_argument("--sid", action="append", dest="sids", required=True,
+                     metavar="SID", help="要取消抑制的 sid；可重复")
+    psr.add_argument("--meta", default="topics_meta.db",
+                     help="抑制表所在 meta 库（默认 topics_meta.db）")
+    psr.add_argument("--apply", action="store_true",
+                     help="真的删抑制表行（缺省只打印）")
+    psr.set_defaults(func=cmd_suppress)
+
+    pspru = psub.add_parser(
+        "prune-exports",
+        help="按抑制表清掉 exports 里的旧副本（**只清孤儿文件**；默认 dry-run）")
+    pspru.add_argument("--meta", default="topics_meta.db",
+                       help="抑制表所在 meta 库（默认 topics_meta.db）")
+    pspru.add_argument("--exports", default="exports",
+                       help="导出产物目录")
+    pspru.add_argument("--apply", action="store_true",
+                       help="真的删（缺省只列出将删的文件）")
+    pspru.set_defaults(func=cmd_suppress)
 
     pcd = sub.add_parser("cards",
                          help="知识卡片校验（§8 frontmatter 规范 + 锚点有效性）")
