@@ -20,7 +20,7 @@
   45 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
-  `C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
+  `C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
   （3.13 + PyYAML 6.0.3）。用无 PyYAML 的解释器会得到**设计行为**的
   errors（见下「测试基线」），**不是安装坏了**。
   自检一行：`python -c "import yaml; print(yaml.__version__)"`。
@@ -39,7 +39,7 @@
 > 钉住（改坏任一处必红），所以加测试时改这里的数字是**必须做的动作**，不是可选项。
 
 ```powershell
-$venv = "C:\Users\yianyao\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+$venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
