@@ -76,7 +76,9 @@ from pathlib import Path
 
 from .adapters import PLUGIN_IDS, build_adapters, load_sources
 from .discovery import probe_and_write
-from .distill import KB_DEFAULT_ROOT, corpus_from_exports, corpus_from_sources, kb_init, kb_stats
+from .distill import (KB_DEFAULT_ROOT, MASTER_DEFAULT_ROOT,
+                      corpus_from_exports, corpus_from_sources, kb_init,
+                      kb_stats)
 from .exporter import export, parse_selection
 # 评估口径的唯一来源（CLI 只引用，不写字面量——防两处漂移）
 from .harvesteval import DEFAULT_MIN_PER_WINDOW as _EVAL_MIN_PER_WINDOW
@@ -382,6 +384,30 @@ def cmd_kb_stats(args) -> int:
     return 0
 
 
+def cmd_kb_publish(args) -> int:
+    """把项目正本（knowledge/）单向发布到 WorkBuddy 知识库镜像位。
+
+    方向纪律（2026-10-14 用户裁决）：正本=仓内 knowledge/（随项目迁移）；
+    镜像位=WorkBuddy 主程序资料库的读取位置，只喂不收、永不删除镜像里
+    的多余文件。正本改了重跑本命令即可，镜像位不手工维护。
+    """
+    from .distill import publish_master
+    try:
+        rep = publish_master(Path(args.root), Path(args.dest))
+    except FileNotFoundError as e:
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    for sub in ("cards", "topics"):
+        if sub in rep:
+            r = rep[sub]
+            print(f"{sub}: 发布 {r['copied']} 个文件"
+                  f"（{r['skipped']} 个已是最新跳过）")
+    if rep["missing"]:
+        print(f"[!] 正本里没有这些子目录（跳过）: {', '.join(rep['missing'])}")
+    print(f"镜像位: {Path(args.dest).resolve()}")
+    return 0
+
+
 def cmd_index(args) -> int:
     if not fts5_available():
         print("错误: 当前 Python 的 SQLite 不含 FTS5（罕见；请换官方构建的解释器）",
@@ -514,7 +540,7 @@ def cmd_api_serve(args) -> int:
     """只读 HTTP JSON API（apiserve.run 自带自检与安全守卫）。"""
     from .apiserve import run
     chain_root = (Path(args.chain_root) if args.chain_root
-                  else Path.home() / ".workbuddy" / "knowledge" / "topics")
+                  else Path("knowledge") / "topics")
     return run(Path(args.db), port=args.port, host=args.host,
                token=args.token,
                cards_root=Path(args.cards_root) if args.cards_root else None,
@@ -2438,6 +2464,16 @@ def build_parser() -> argparse.ArgumentParser:
     pst.add_argument("--root", default=str(KB_DEFAULT_ROOT))
     pst.set_defaults(func=cmd_kb_stats)
 
+    ppub = sub.add_parser(
+        "kb-publish",
+        help="把项目正本 knowledge/ 单向发布到 WorkBuddy 知识库镜像位"
+             "（正本随项目迁移；镜像只喂不收，主程序资料库从镜像读）")
+    ppub.add_argument("--root", default=str(MASTER_DEFAULT_ROOT),
+                      help="正本根目录（缺省 knowledge，相对仓根跑）")
+    ppub.add_argument("--dest", default=str(KB_DEFAULT_ROOT),
+                      help="镜像位（缺省 WorkBuddy 知识库位置）")
+    ppub.set_defaults(func=cmd_kb_publish)
+
     pix = sub.add_parser("index", help="构建 FTS5 全文索引")
     pix.add_argument("--from", dest="from_dir", help="export 产物目录（读 *.json）")
     pix.add_argument("--all", action="store_true", help="实时扫描全部数据源")
@@ -2486,7 +2522,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "chain_read）")
     pmc.add_argument("--chain-root", dest="chain_root", default=None,
                      help="topic-chain 长文目录（缺省 "
-                          "~/.workbuddy/knowledge/topics）")
+                          "knowledge/topics，项目正本）")
     pmc.add_argument("--cards-root", dest="cards_root", default=None,
                      help="卡片目录（启用 cards_list）")
     pmc.add_argument("--artifacts-meta", dest="artifacts_meta", default=None,
@@ -2516,7 +2552,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "/api/topic/<id>/chain 端点）")
     pap.add_argument("--chain-root", dest="chain_root", default=None,
                      help="topic-chain 长文目录（可选；默认 "
-                          "~/.workbuddy/knowledge/topics）")
+                          "knowledge/topics，项目正本）")
     pap.add_argument("--keywords-meta", dest="keywords_meta",
                      default=None,
                      help="关键词 meta 库路径（可选；启用 /api/keywords）")

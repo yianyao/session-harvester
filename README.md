@@ -43,10 +43,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 829 tests ... OK
+# ① 权威基线：全套件。期望 Ran 836 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=788 failures=0 errors=61 skipped=2
+# ② 无 PyYAML 门禁：期望 GATE ran=795 failures=0 errors=61 skipped=2
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -55,8 +55,8 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 829 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=788 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 836 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=795 failures=0 errors=61 skipped=2** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=2` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
 **为什么 `ran` 会不一样（785 vs 744）**：无 PyYAML 时，依赖它的模块**在导入期整体
@@ -481,6 +481,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `cards new` | 从索引库会话生成卡片脚手架（evidence 留白） |
 | `kb-init` | 建知识库骨架（幂等） |
 | `kb-stats` | 知识库盘点 |
+| `kb-publish` | 把项目正本 knowledge/（cards+topics）单向发布到 WorkBuddy 知识库镜像位（只喂不收；正本随项目迁移，主程序资料库从镜像读） |
 
 ### 主题注册（T 轨，即主题这条工作线）
 
@@ -818,6 +819,7 @@ python -m harvester aggregate --all --out corpus.md           # 全部数据源�
 python -m harvester aggregate --from exports --out corpus.md  # 从导出产物聚合
 python -m harvester kb-init --root ~/.workbuddy/knowledge     # 知识库骨架（幂等）
 python -m harvester kb-stats  --root ~/.workbuddy/knowledge   # 盘点
+python -m harvester kb-publish                                # 正本→镜像发布
 
 # 工具调用/失败率统计（服务「工具改进」与「Harness 踩坑」）
 # 口径一（推荐）：先 index 再用 --db，读结构化 steps 表，含重试/放弃率

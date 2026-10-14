@@ -79,10 +79,11 @@ class HarvesterMcpServer:
         self._db = Path(db_path) if db_path else None
         self._cache: dict | None = None   # (adapters, items, reports)
         # v0.45：进化数据面（主题/链/建议/卡片/产物）的路径配置。
-        # 缺省与 `api-serve` 的缺省保持一致（chain_root 落在知识库 topics/）。
+        # 缺省与 `api-serve` 的缺省保持一致（v0.66 起=项目正本 knowledge/topics，
+        # 随仓根 cwd 解析；WorkBuddy 位只是 kb-publish 的镜像）。
         self._topics_meta = Path(topics_meta) if topics_meta else None
         self._chain_root = (Path(chain_root) if chain_root
-                            else Path.home() / ".workbuddy" / "knowledge" / "topics")
+                            else Path("knowledge") / "topics")
         self._cards_root = Path(cards_root) if cards_root else None
         self._artifacts_meta = Path(artifacts_meta) if artifacts_meta else None
         self._suggestions_meta = (Path(suggestions_meta) if suggestions_meta

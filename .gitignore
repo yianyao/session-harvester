@@ -22,6 +22,11 @@ inbox/
 # 生成的报告与建议池（含真实会话片段）
 agents_suggestions.md
 
+# 知识正本（cards=知识卡片、topics=主题 chain）：蒸馏产物，evidence 引用
+# 会话原文摘录（未脱敏）——2026-10-14 用户裁决：正本随项目走（可迁移），
+# 但不入 git，迁移=随目录拷贝；WorkBuddy 资料库读的是 kb-publish 喂出的镜像
+knowledge/
+
 # docs 整目录不入库（2026-10-14 用户令：含未脱敏信息，远端全部移除；
 # 本地文件保留作工作材料，仅不再被 git 追踪）
 docs/
