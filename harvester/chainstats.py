@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""工具链失败翼检测（report-chains 子命令）——确定性，全部从 steps 算。
+"""工具链失败模式检测（report-chains 子命令）——确定性，全部从 steps 算。
 
 SOP-P2-1 五种检测（H14：全库首个实现，2026-10-08）：
 
@@ -140,7 +140,7 @@ def collect(db: Path, since_days: float | None = None,
     }
 
 
-def render_report(d: dict, title: str = "工具链失败翼报告（report-chains）",
+def render_report(d: dict, title: str = "工具链失败模式报告（report-chains）",
                   top: int = TOP_N) -> str:
     if not d["steps"]:
         return (f"# {title}\n\n无 steps 数据。先运行 `harvester index`"

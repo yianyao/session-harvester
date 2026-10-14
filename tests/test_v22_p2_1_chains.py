@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v0.22 P2-1 report-chains（失败翼）测试——SOP §SOP-P2-1。
+"""v0.22 P2-1 report-chains（失败模式）测试——SOP §SOP-P2-1。
 
 五种检测全部从 steps(sid,seq,tool,phase,status) 算（H14 口径）：
 1. 长回合：会话步数 > 全库 p95；

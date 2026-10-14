@@ -611,7 +611,7 @@ def cmd_report_errors(args) -> int:
 
 
 def cmd_report_chains(args) -> int:
-    """工具链失败翼报告（P2-1）：长回合/连击/循环/空转/高步 Top N。"""
+    """工具链失败模式报告（P2-1）：长回合/连击/循环/空转/高步 Top N。"""
     from .chainstats import collect, render_report
     dbp = Path(args.db)
     if not dbp.is_file():
@@ -1797,13 +1797,13 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("-v", "--verbose", action="store_true")
     pp.set_defaults(func=cmd_probe)
 
-    ps = sub.add_parser("scan", help="扫描数据源并生成纲要")
+    ps = sub.add_parser("scan", help="扫描数据源并生成纲要（纲要=给全部会话编好号的目录清单）")
     ps.add_argument("--sources", default="sources.json", help="probe 产出的路径配置")
     ps.add_argument("--out", default="outline", help="纲要输出目录")
     ps.add_argument("-v", "--verbose", action="store_true")
     ps.set_defaults(func=cmd_scan)
 
-    pe = sub.add_parser("export", help="按纲要序号导出会话")
+    pe = sub.add_parser("export", help="按纲要序号导出会话（序号见 scan 生成的纲要）")
     pe.add_argument("--select", help='序号表达式，如 "3,5-9"')
     pe.add_argument("--all", action="store_true", help="导出全部可选会话")
     pe.add_argument("--sources", default="sources.json", help="probe 产出的路径配置")
@@ -1828,7 +1828,7 @@ def build_parser() -> argparse.ArgumentParser:
     pp2.add_argument("product", choices=[p.id for p in PRODUCTS])
     pp2.set_defaults(func=cmd_weblogin)
 
-    pg = sub.add_parser("aggregate", help="聚合会话为语料")
+    pg = sub.add_parser("aggregate", help="聚合会话为语料（语料=整理成篇的原始文本材料）")
     pg.add_argument("--from", dest="from_dir", help="export 产物目录（读 *.json）")
     pg.add_argument("--all", action="store_true", help="直接从全部数据源实时聚合")
     pg.add_argument("--sources", default="sources.json")
@@ -1837,7 +1837,7 @@ def build_parser() -> argparse.ArgumentParser:
                     default=True,
                     help="包含工具调用/思考等非对话条目（默认开；--no-with-notes 关闭）")
     pg.set_defaults(func=cmd_aggregate)
-    psy = sub.add_parser("sync", help="一键同步：收件箱收割 -> 导出 -> 重建索引（幂等）")
+    psy = sub.add_parser("sync", help="一键同步：收件箱收割（自动捡起官方导出包）-> 导出 -> 重建索引（幂等：重复跑结果不变）")
     psy.add_argument("--root", default=".", help="项目根目录（其余相对路径的基准）")
     psy.add_argument("--sources", default="sources.json", help="数据源声明（相对 root）")
     psy.add_argument("--db", default="harvester.db", help="索引库路径（相对 root）")
@@ -1869,7 +1869,7 @@ def build_parser() -> argparse.ArgumentParser:
     psy.set_defaults(func=cmd_sync)
 
     pu = sub.add_parser("update",
-                        help="增量同步：收件箱收割 -> 只导出新/变更会话 -> 重建索引")
+                        help="增量同步：收件箱收割（自动捡起官方导出包）-> 只导出新/变更会话 -> 重建索引")
     pu.add_argument("--root", default=".", help="项目根目录（其余相对路径的基准）")
     pu.add_argument("--sources", default="sources.json", help="数据源声明（相对 root）")
     pu.add_argument("--db", default="harvester.db", help="索引库路径（相对 root）")
@@ -1888,10 +1888,10 @@ def build_parser() -> argparse.ArgumentParser:
     prt = sub.add_parser("report-tools",
                          help="工具调用/失败率统计（steps 表或 tool note 汇总）")
     prt.add_argument("--sources", default="sources.json")
-    prt.add_argument("--db", help="索引库路径；steps 表有数据时用结构化口径"
-                                 "（含重试/放弃率）")
+    prt.add_argument("--db", help="索引库路径；steps 表有数据时用结构化口径（直接数步骤表的数据；"
+                                 "口径=统计的标准；含重试/放弃率）")
     prt.add_argument("--since", type=float, default=None, metavar="DAYS",
-                     help="只统计最近 N 天（按 steps.ts，近似口径）")
+                     help="只统计最近 N 天（按步骤时间戳粗算；近似口径=不如逐条精确）")
     prt.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     prt.add_argument("-v", "--verbose", action="store_true")
     prt.set_defaults(func=cmd_report_tools)
@@ -1906,20 +1906,21 @@ def build_parser() -> argparse.ArgumentParser:
     pre.set_defaults(func=cmd_report_errors)
 
     prc = sub.add_parser("report-chains",
-                         help="工具链失败翼报告（长回合/同工具连击/"
+                         help="工具链失败模式报告（长回合/同工具连击/"
                               "序列循环/空转/高步 Top N，steps 表）")
     prc.add_argument("--db", default="harvester.db", help="索引库路径")
     prc.add_argument("--since", type=float, default=None, metavar="DAYS",
-                     help="只统计最近 N 天（按 steps.ts，近似口径）")
+                     help="只统计最近 N 天（按步骤时间戳粗算；近似口径=不如逐条精确）")
     prc.add_argument("--top", type=int, default=10,
                      help="高步会话 Top N（默认 10）")
     prc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     prc.set_defaults(func=cmd_report_chains)
 
     psj = sub.add_parser("report-skill-join",
-                         help="skill 进化 join：chain 时间线锚点 × "
-                              "skill 调用锚点交叉表（T4）")
-    psj.add_argument("--chain", required=True, help="chain 长文路径")
+                         help="把某主题长文（chain）的时间线与 skill 调用记录对上号："
+                              "交叉表=谁在哪个阶段调了哪个 skill；"
+                              "锚点=指向具体会话回合的定位标记（如 s1#3）")
+    psj.add_argument("--chain", required=True, help="chain 长文路径（chain=主题蒸馏出的结构化长文）")
     psj.add_argument("--db", default="harvester.db", help="索引库路径")
     psj.add_argument("--skill", default=None,
                      help="只交叉指定 skill 名（缺省全部）")
@@ -2024,7 +2025,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pgr = sub.add_parser(
         "regress",
-        help="端到端回归语料（v0.43）：**从空库**跑 "
+        help="端到端回归语料（固定示例数据，专用来重复验证全流程；v0.43）：**从空库**跑 "
              "分诊（含 --triage-deep）→ --plan-seed → --apply dry-run/真写 → "
              "topic export/md → H87 跨进程确定性，逐项核对关键数字。"
              "全程只用临时库（造自 indexing.SCHEMA + index_session），"
@@ -2107,7 +2108,7 @@ def build_parser() -> argparse.ArgumentParser:
     psa.add_argument("--coverage", action="store_true",
                      help="追加「建议池 ↔ 台账」覆盖核对（v0.45）：列出待裁决、"
                           "台账陈旧·已采纳（疑似生效，不算欠账）与·其他（应清账），"
-                          "另附人账总览；只对账不代改")
+                          "另附人账总览（人账=人工登记的四本账）；只对账不代改")
     psa.add_argument("--coverage-out", dest="coverage_out", default=None,
                      help="覆盖核对报告输出路径（缺省打印）")
     psa.add_argument("--topics-meta", dest="topics_meta",
@@ -2241,7 +2242,8 @@ def build_parser() -> argparse.ArgumentParser:
     pspru.set_defaults(func=cmd_suppress)
 
     pcd = sub.add_parser("cards",
-                         help="知识卡片校验（§8 frontmatter 规范 + 锚点有效性）")
+                         help="知识卡片校验（§8 frontmatter 规范 + 锚点有效性；"
+                          "锚点=指向具体会话回合的定位标记）")
     pcdsub = pcd.add_subparsers(dest="action", required=True)
     pcap = pcdsub.add_parser("validate", help="校验卡片目录")
     pcap.add_argument("--root", required=True, help="卡片库根目录")
@@ -2265,7 +2267,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prs = sub.add_parser(
         "report-skill",
-        help="Skill 行为画像（G4）：按 skill 聚合调用/触发任务/行为链")
+        help="Skill 行为画像：按 skill 聚合调用/触发任务/行为链")
     prs.add_argument("--db", default="harvester.db", help="索引库路径")
     prs.add_argument("--skill", help="只看这一个 skill（输出全量调用深挖清单）")
     prs.add_argument("--min-calls", dest="min_calls", type=int, default=0,
@@ -2294,7 +2296,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="merge：保留源主题行（缺省删除）")
     ptp.add_argument("--sids", help="add：逗号分隔成员 sid 列表")
     ptp.add_argument("--evidence", default="",
-                     help="add：成员证据说明（如关键词命中口径）")
+                     help="add：成员证据说明（如按什么标准命中关键词）")
     ptp.add_argument("--sid", help="remove/fine/artifact 档：成员 sid")
     ptp.add_argument("--db", default="harvester.db",
                      help="chain/pack/export：索引库路径（只读）")
@@ -2318,8 +2320,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     pcv = sub.add_parser(
         "chain-validate",
-        help="topic-chain 长文校验（T3）：frontmatter 必填项 + 锚点可回溯"
-             "（独立校验器，非 §8 卡片校验）")
+        help="主题长文（chain）校验：frontmatter 必填项 + 锚点可回溯"
+             "（锚点=定位标记；可回溯=按标记能找到原话；独立校验器，非 §8 卡片校验）")
     pcv.add_argument("file", help="chain 长文路径（chain-<topic>.md）")
     pcv.add_argument("--meta", default="topics_meta.db",
                      help="主题 meta 库路径（默认 topics_meta.db）")
@@ -2368,7 +2370,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ptt = sub.add_parser(
         "triage",
-        help="蒸馏队列（T1）：新错误pattern/旧坑重现/Skill行为链/高信号会话")
+        help="蒸馏队列（蒸馏=从会话里提炼值得记的知识卡片；机器初筛排队，人来判断）："
+             "筛新错误pattern/旧坑重现/Skill行为链/高信号会话")
     ptt.add_argument("--db", default="harvester.db", help="索引库路径")
     ptt.add_argument("--since", type=float, default=7.0, metavar="DAYS",
                      help="窗口天数（默认 7；传 0 表示全库）")
@@ -2384,7 +2387,7 @@ def build_parser() -> argparse.ArgumentParser:
     pea = sub.add_parser(
         "export-analysis",
         help="统一分析导出器（P1-4）：sessions/tools/errors/skills/triage，"
-             "md/JSON 同源同口径（去重键=normalize_error）")
+             "md/JSON 两份输出同源同标准（去重键=normalize_error）")
     pea.add_argument("--kind", required=True,
                      choices=["sessions", "tools", "errors", "skills",
                               "triage"],  # 与 export_analysis.KINDS 同步
@@ -2407,7 +2410,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pdr = sub.add_parser(
         "draft",
-        help="蒸馏包（T2）：会话原文+卡片规范+指令 → 自包含 md 喂 Agent")
+        help="蒸馏包：把会话原文+卡片规范+指令合成一份自包含 md，喂给 Agent 起草知识卡片")
     pdr.add_argument("--sid", required=True,
                      help="会话（sid 或 session_id，队列锚点里拿）")
     pdr.add_argument("--type", default="pitfall", choices=["pitfall",

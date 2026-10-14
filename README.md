@@ -457,7 +457,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 |---|---|
 | `report-tools` | 工具调用/失败率统计 |
 | `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表；v0.23 追加 **活跃 skill×数据源×类别** 交叉表，API 字段 `cross_skill`） |
-| `report-chains` | 工具链失败翼报告（长回合/连击/循环/空转） |
+| `report-chains` | 工具链失败模式报告（长回合/同工具连击/序列循环/空转） |
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
 | `report-skill` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
 | `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |

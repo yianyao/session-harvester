@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """P1-4 export-analysis 统一导出器测试。
 
-SOP-P1-4：五类 kind；md/JSON 同源同口径；去重唯一键 = normalize_error；
+SOP-P1-4：五类 kind；md/JSON 两份输出同源同标准；去重唯一键 = normalize_error；
 sessions 走 patterns_dedup（view v2.3 口径下沉）；json 统一 machineWrap 头。
 """
 import json
