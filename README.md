@@ -497,7 +497,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 
 | 命令 | 用途 |
 |---|---|
-| `suppress candidates [--db harvester.db] [--meta topics_meta.db]` | **抑制候选清单**（v0.52，只读）：扫出重复会话簇（会话级 user-raw bigram Jaccard ≥0.90，粗筛 + 逐对全量复核）与零 user 轮次会话，人按**标题**裁决、复制就绪命令——不用背 sid |
+| `suppress candidates [--db harvester.db] [--meta topics_meta.db]` | **抑制候选清单**（v0.52，只读）：扫出重复会话簇（会话级 user-raw bigram Jaccard ≥0.90，粗筛 + 逐对全量复核）与零 user 轮次会话，人按**标题**裁决、复制就绪命令——不用背 sid。**J 白话版**：两段会话文字的重复度（0~1，1=逐字相同）；≥0.90 即基本同文（同一对话的多份副本，或得到几乎相同回答的重复提问）；话题相同、内容不同的多次提问 J 明显更低，不会进候选 |
 | `suppress list` | 列出已抑制会话（谁 / 何时 / 为什么） |
 | `suppress add --sid <sid> [--sid ...] --reason "..."` | 抑制会话：写抑制表 + **立刻**删库内三表行 + 清该 sid 的旧 exports 副本。**默认 dry-run**（只印库内行数/将删的副本），`--apply` 才写 |
 | `suppress remove --sid <sid>` | 取消抑制（只删抑制表行）。**不恢复数据**：能否恢复只取决于**语料是否还在**——语料还在则下次 `sync`/`update` 会重新导出并入库，语料没了就真没了（**不设时限**） |

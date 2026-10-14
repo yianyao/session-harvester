@@ -1151,6 +1151,9 @@ def cmd_suppress(args) -> int:
         print("[suppress] 裁决方式：看标题 → 复制下面的命令（默认 dry-run，"
               "加 --apply 才真删）。拿不准就先在 view 里点开会话看内容——"
               "会话详情页也有「删除（抑制）」按钮，同样不用记 sid。")
+        print("[suppress] J 的白话版：两段会话文字的重复度（0~1，1=逐字相同）。"
+              "≥0.90 即基本同文——同一对话的多份副本，或得到几乎相同回答的"
+              "重复提问；话题相同但内容不同的多次提问 J 会明显更低，不会进候选。")
         for i, c in enumerate(r["dup_clusters"], 1):
             print(f"\n[重复簇 {i}] 代表（保留）：《{c['rep_title'] or '（无标题）'}》"
                   f" {c['rep']}")
