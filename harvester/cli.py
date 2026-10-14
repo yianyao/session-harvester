@@ -58,7 +58,7 @@
       抑制候选清单（v0.52，只读）：重复会话 + 零 user 轮次；人按标题裁决、
       复制命令，不用背 sid
   python -m harvester suppress add --sid <sid> --reason "..." [--apply]
-      抑制会话：删**仓内副本**（库内三表行 + exports 副本），不删采集源；
+      抑制会话：删**仓内副本**（库内三张表的行 + exports 副本；三张表 = 会话/消息/工具步），不删采集源；
       默认 dry-run。此后 sync/update 在导出步拦、索引侧兜底，不再入库
   python -m harvester suppress remove --sid <sid> [--apply]
       取消抑制（不恢复数据；语料还在时下次 sync 会重新导出入库）
@@ -1111,7 +1111,7 @@ def cmd_suppress(args) -> int:
     """会话抑制（v0.49，提案 §2.4）：从**仓内副本**里移除没营养的会话。
 
     默认 dry-run（与 `topic-consolidate` / `ledger-sync` 同款家规），
-    `--apply` 才写。删的是**仓内副本**——库内三表行 + exports 下的
+    `--apply` 才写。删的是**仓内副本**——库内三张表（会话/消息/工具步）的行 + exports 下的
     `.json`/`.md`；**采集源（DSH/WorkBuddy 自己的会话文件）一字节不动**。
 
     口径诚实（提案 §5 ⑧ 用户裁决：**不设时限**）：`remove` 本身不恢复数据，
@@ -1134,7 +1134,7 @@ def cmd_suppress(args) -> int:
                 print(f"  - {r['sid']}  {r['created']}"
                       f"  by={r['created_by'] or '-'}"
                       f"  reason={r['reason'] or '-'}")
-        print("[suppress] 抑制只作用于**仓内副本**（库内三表行 + exports 副本），"
+        print("[suppress] 抑制只作用于**仓内副本**（库内三张表的行 + exports 副本），"
               "采集源不动；取消抑制本身不恢复数据——只要语料还在，"
               "下次 sync/update 会重新导出并入库。")
         return 0
@@ -1252,7 +1252,7 @@ def cmd_suppress(args) -> int:
         if r["pruned"].get("manifest_error"):
             print("      [warn] 导出清单未能更新："
                   f"{r['pruned']['manifest_error']}（下次 export 会整份重写）")
-        print("[suppress] 删的是**仓内副本**（库内三表行 + exports 下的 "
+        print("[suppress] 删的是**仓内副本**（库内三张表的行 + exports 下的 "
               ".json/.md），**不删采集源**（DSH/WorkBuddy 自己的会话文件一字节不动）。"
               "此后 sync/update 会在导出步拦住它，不会再入库。")
         return 0
@@ -2176,7 +2176,7 @@ def build_parser() -> argparse.ArgumentParser:
     psp = sub.add_parser(
         "suppress",
         help="会话抑制（v0.49）：把没营养的会话从**仓内副本**里移除"
-             "（库内三表行 + exports 副本），并保证以后 sync/update 不再入库；"
+             "（库内三张表的行 + exports 副本），并保证以后 sync/update 不再入库；"
              "默认 dry-run，--apply 才写。**不删采集源**")
     psub = psp.add_subparsers(dest="action", required=True)
 
