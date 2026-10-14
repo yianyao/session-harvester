@@ -356,3 +356,38 @@ def unsuppress(meta_path: Path, sids) -> int:
         return n
     finally:
         con.close()
+
+
+def filter_dup_clusters(result: dict, min_jaccard: float) -> dict:
+    """按 J 下限过滤重复簇候选（v0.53；用户 2026-10-14 明示要加）。
+
+    用户原话："命令参数里有没一个按 J 值大小来做批量处理的？"——裁决
+    工作流是"看清单 → 点口径"，所以阈值过滤长在清单上，而不是给
+    `suppress add` 加隐式过滤（收哪些 sid 永远由人看过清单后决定）。
+
+    口径（白话版）：
+      - J = 两段会话文字的重复度（0~1，1=逐字相同，≥0.90 基本同文）；
+      - 只过滤**有 J 值**的候选：J < min_jaccard 的不列出；
+      - **链式候选没有独立 J 值**（经簇内其他成员 ≥0.90 间接相连），
+        它不是"低 J"，不参与过滤、始终保留；
+      - 候选被清空的簇整簇隐藏；零 user 轮次候选与 J 无关，原样保留。
+
+    返回**浅拷贝**结果（原 dict 不动），附 `dropped_low_j` = 被滤掉的
+    候选条数。只读、不碰库。
+    """
+    kept_clusters: list[dict] = []
+    dropped = 0
+    for c in result.get("dup_clusters", []):
+        cands = c.get("candidates", [])
+        kept = [cd for cd in cands
+                if cd.get("jaccard") is None
+                or cd["jaccard"] >= min_jaccard]
+        dropped += len(cands) - len(kept)
+        if kept:
+            c2 = dict(c)
+            c2["candidates"] = kept
+            kept_clusters.append(c2)
+    out = dict(result)
+    out["dup_clusters"] = kept_clusters
+    out["dropped_low_j"] = dropped
+    return out

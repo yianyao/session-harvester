@@ -54,6 +54,7 @@
   python -m harvester suppress list [--meta topics_meta.db]
       会话抑制（v0.49）：列出已抑制会话（谁 / 何时 / 为什么）
   python -m harvester suppress candidates [--db harvester.db] [--meta topics_meta.db]
+                                         [--min-jaccard 0.92]
       抑制候选清单（v0.52，只读）：重复会话 + 零 user 轮次；人按标题裁决、
       复制命令，不用背 sid
   python -m harvester suppress add --sid <sid> --reason "..." [--apply]
@@ -1141,13 +1142,29 @@ def cmd_suppress(args) -> int:
     if args.action == "candidates":
         from .suppress import find_candidates
         dbp = Path(args.db)
+        # --min-jaccard（v0.53，用户 2026-10-14 明示）：按 J 下限过滤重复
+        # 簇候选。先验参数（0~1），非法就报错退出，不许静默当没给。
+        min_j = getattr(args, "min_jaccard", None)
+        if min_j is not None and not (0.0 < float(min_j) <= 1.0):
+            print(f"[suppress] 错误：--min-jaccard 需在 0~1 之间"
+                  f"（收到 {min_j}）。J=两段会话文字的重复度，"
+                  "1=逐字相同；如 0.92 = 只列出重复 92% 以上的候选。",
+                  file=sys.stderr)
+            return 2
         known = suppressed_sids(meta)
         r = find_candidates(dbp, known_sids=known)
+        if min_j is not None:
+            from .suppress import filter_dup_clusters
+            r = filter_dup_clusters(r, float(min_j))
         n_cand = sum(len(c["candidates"]) for c in r["dup_clusters"])
         print(f"[suppress] 候选清单（只读）：扫了 {r['scanned']} 个会话 → "
               f"{len(r['dup_clusters'])} 个重复簇 / {n_cand} 条候选；"
               f"零 user 轮次 {len(r['zero_user'])} 条；"
               f"已在抑制表的 {len(known)} 条已剔除。")
+        if min_j is not None:
+            print(f"[suppress] 按 J≥{float(min_j):g} 过滤：只列重复度达标"
+                  f"的候选（{r['dropped_low_j']} 条低 J 候选未列出；"
+                  "「同簇链式重复」没有独立 J 值，始终保留）。")
         print("[suppress] 裁决方式：看标题 → 复制下面的命令（默认 dry-run，"
               "加 --apply 才真删）。拿不准就先在 view 里点开会话看内容——"
               "会话详情页也有「删除（抑制）」按钮，同样不用记 sid。")
@@ -2175,6 +2192,11 @@ def build_parser() -> argparse.ArgumentParser:
     pscn.add_argument("--db", default="harvester.db", help="索引库路径")
     pscn.add_argument("--meta", default="topics_meta.db",
                       help="抑制表所在 meta 库（默认 topics_meta.db）")
+    pscn.add_argument("--min-jaccard", dest="min_jaccard", type=float,
+                      default=None, metavar="0~1",
+                      help="只列出重复度 J≥该值的候选（如 0.92）；"
+                           "「同簇链式重复」没有独立 J 值，始终保留。"
+                           "J=两段会话文字的重复度，1=逐字相同")
     pscn.set_defaults(func=cmd_suppress)
 
     psa = psub.add_parser("add", help="抑制会话（默认 dry-run，--apply 才写）")
