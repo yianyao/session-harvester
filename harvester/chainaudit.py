@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 _QUOTE_RE = re.compile(r"「([^」]{6,})」")
@@ -411,9 +412,115 @@ def audit_coverage(path: Path, con: sqlite3.Connection,
         "ok": True}
 
 
+# ---- 复核台账（v0.74）：语义门告警，人裁过的不许再烦人 ----------------
+#
+# 原则同卡片（用户裁决 2026-10-15）：锚点语义门是启发式、有已知误报类别
+# （跨会话关系/标题级依据），机械告警只该烦人一次。裁决键 = 节点
+# （sid+turn）：人裁的是"这个节点的 note 没问题"，note 文字改写后仍算
+# 同一裁决；新节点（key 不同）自然重新告警。台账放主题库 topics_meta.db
+# 的 audit_review 表（chain-audit 本就以它为成员库，不新增库文件）。
+# verdict 取值与 cards.REVIEW_VERDICTS 同值（不互 import：审计模块
+# 不依赖卡片模块）。
+
+REVIEW_VERDICTS = ("accepted", "fixed")
+
+_AUDIT_REVIEW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS audit_review (
+    chain_file  TEXT NOT NULL,
+    node_key    TEXT NOT NULL,
+    verdict     TEXT NOT NULL,
+    note        TEXT,
+    reviewed_at TEXT NOT NULL,
+    PRIMARY KEY (chain_file, node_key)
+)
+"""
+
+
+def _node_key(sid, turn) -> str:
+    """疑似错配节点 → 稳定裁决键：node:<sid>#turn:<turn>。"""
+    return f"node:{sid}#turn:{turn}"
+
+
+def ensure_audit_review_db(meta: Path) -> Path:
+    meta = Path(meta)
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(meta))
+    try:
+        con.executescript(_AUDIT_REVIEW_SCHEMA)
+        con.commit()
+    finally:
+        con.close()
+    return meta
+
+
+def load_audit_review(meta: Path | None, chain_file: str) -> set[str]:
+    """该 chain 已裁决的 node_key 集合。库/表不存在 → 空（旧行为）。"""
+    if meta is None or not Path(meta).is_file():
+        return set()
+    con = sqlite3.connect(str(meta))
+    try:
+        rows = con.execute(
+            "SELECT node_key FROM audit_review WHERE chain_file=?",
+            (chain_file,)).fetchall()
+    except sqlite3.OperationalError:  # 表未建
+        return set()
+    finally:
+        con.close()
+    return {str(r[0]) for r in rows}
+
+
+def record_audit_review(meta: Path, chain_file: str, node_keys: list[str],
+                        verdict: str = "accepted", note: str = "") -> int:
+    """落复核裁决（UPSERT：改判=覆盖）。返回写入条数。"""
+    if verdict not in REVIEW_VERDICTS:
+        raise ValueError(f"verdict={verdict!r} 不在 {list(REVIEW_VERDICTS)}")
+    if not node_keys:
+        return 0
+    ensure_audit_review_db(meta)
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    con = sqlite3.connect(str(meta))
+    try:
+        n = 0
+        for k in node_keys:
+            con.execute(
+                "INSERT INTO audit_review (chain_file, node_key, verdict, "
+                "note, reviewed_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(chain_file, node_key) DO UPDATE SET "
+                "verdict=excluded.verdict, note=excluded.note, "
+                "reviewed_at=excluded.reviewed_at",
+                (chain_file, k, verdict, note or None, now))
+            n += 1
+        con.commit()
+        return n
+    finally:
+        con.close()
+
+
+def list_audit_reviews(meta: Path, chain_file: str | None = None
+                       ) -> list[dict]:
+    """台账明细。库/表不存在 → 空。"""
+    if not Path(meta).is_file():
+        return []
+    con = sqlite3.connect(str(meta))
+    con.row_factory = sqlite3.Row
+    try:
+        if chain_file:
+            return [dict(r) for r in con.execute(
+                "SELECT * FROM audit_review WHERE chain_file=? "
+                "ORDER BY node_key", (chain_file,))]
+        return [dict(r) for r in con.execute(
+            "SELECT * FROM audit_review ORDER BY chain_file, node_key")]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        con.close()
+
+
 def audit_chain(chain_path: Path, db_path: Path, quotes: bool = True,
                 anchors: bool = True, coverage: bool = True,
-                quotes_ascii: bool = False) -> dict:
+                quotes_ascii: bool = False,
+                review_meta: Path | None = None,
+                show_reviewed: bool = False) -> dict:
     chain_path, db_path = Path(chain_path), Path(db_path)
     d = _load(chain_path)
     fm = d["fm"] if isinstance(d["fm"], dict) else {}
@@ -427,7 +534,16 @@ def audit_chain(chain_path: Path, db_path: Path, quotes: bool = True,
             out["quotes"] = audit_quotes(chain_path, con, members,
                                          ascii_quotes=quotes_ascii)
         if anchors:
-            out["anchors"] = audit_anchors(chain_path, con)
+            a = audit_anchors(chain_path, con)
+            if review_meta is not None:
+                acc = load_audit_review(review_meta, chain_path.name)
+                kept = [s for s in a["suspicious"]
+                        if _node_key(s["sid"], s["turn"]) not in acc]
+                a["reviewed_accepted"] = len(a["suspicious"]) - len(kept)
+                if not show_reviewed:
+                    a["suspicious"] = kept
+                a["ok"] = not a["suspicious"]
+            out["anchors"] = a
         if coverage:
             out["coverage"] = audit_coverage(chain_path, con)
     finally:
@@ -474,6 +590,10 @@ def render_audit(r: dict, list_limit: int = 20) -> str:
         L += ["", f"## 锚点语义门（{'未见零重叠' if a['ok'] else '有疑似错配'}）",
               "", f"- 节点 {len(a['nodes'])} 个；notes 与原文**零重叠** "
               f"{len(a['suspicious'])} 个（机械告警，需人/Agent 复核）"]
+        if a.get("reviewed_accepted"):
+            L.append(f"  - 另有 {a['reviewed_accepted']} 个节点已裁决"
+                     "（不再列入；--show-review 连同显示）——"
+                     "人裁过的不许再烦人")
         for row in (a["suspicious"] if lim is None else a["suspicious"][:lim]):
             L.append(f"  - `{row['sid']}` #{row['turn']}　note：{row['note'][:40]}"
                      f"　｜ 原文：{row['raw'][:60]}")

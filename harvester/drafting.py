@@ -28,7 +28,8 @@ frontmatter 必填字段（§8 冻结规范，全部必填）：
 - id: 文件名去 .md（kc-YYYYMMDD-NNNN-<slug>）
 - title / type / tags: type 取 {types}；tags 自拟
 - anchors: [{{session_id: "<下面会话的 session_id>", turn: <回合序号或 null>}}]
-- evidence: |- 从会话原文**逐字**摘录的证据（不得改写、不得编造）
+- evidence: |- 从会话原文**逐字**摘录的证据（不得改写、不得编造）；pitfall/workflow 必给，insight 可用 summary 替代
+- summary: 人的蒸馏综述（可选；**不做逐字核对**——综述性知识写这里，insight 常用）；两者至少一项非空
 - confidence: 0.3（草稿固定值）
 - created: 今日日期
 正文骨架（type 对应）：

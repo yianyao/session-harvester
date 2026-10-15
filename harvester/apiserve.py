@@ -483,7 +483,8 @@ def api_reports_agents(con: sqlite3.Connection, db: Path,
 
 
 def api_cards(con: sqlite3.Connection, db: Path,
-              cards_root: Path | None, params: dict) -> dict:
+              cards_root: Path | None, params: dict,
+              reviews_meta: Path | None = None) -> dict:
     """G3 卡片校验。cards_root 只认启动参数（访问面启动时钉死）；
     未配置 → ValueError（HTTP 400），目录不存在 → FileNotFoundError
     （HTTP 404）。"""
@@ -493,7 +494,8 @@ def api_cards(con: sqlite3.Connection, db: Path,
     root = Path(cards_root)
     if not root.is_dir():
         raise FileNotFoundError(f"cards 目录不存在: {root}")
-    results, summary = validate_cards(root, db, con=con)
+    results, summary = validate_cards(root, db, con=con,
+                                      review_meta=reviews_meta)
     return {"api_version": API_VERSION, "root": str(root),
             "summary": summary, "cards": results,
             "db_fingerprint": db_fingerprint(db, con=con)}
@@ -669,7 +671,8 @@ def make_handler(db: Path, token: str | None,
                  suggestions_meta: Path | None = None,
                  topics_meta: Path | None = None,
                  chain_root: Path | None = None,
-                 keywords_meta: Path | None = None):
+                 keywords_meta: Path | None = None,
+                 reviews_meta: Path | None = None):
     """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。"""
 
     class ApiHandler(BaseHTTPRequestHandler):
@@ -778,7 +781,8 @@ def make_handler(db: Path, token: str | None,
                         self._text(md)
                 elif path == "/api/cards":
                     try:
-                        self._json(api_cards(con, db, cards_root, qs))
+                        self._json(api_cards(con, db, cards_root, qs,
+                                             reviews_meta=reviews_meta))
                     except ValueError as e:
                         self._json({"error": str(e)}, 400)
                     except FileNotFoundError as e:
@@ -805,7 +809,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
         suggestions_meta: Path | None = None,
         topics_meta: Path | None = None,
         chain_root: Path | None = None,
-        keywords_meta: Path | None = None) -> int:
+        keywords_meta: Path | None = None,
+        reviews_meta: Path | None = None) -> int:
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
@@ -831,7 +836,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
                                                          suggestions_meta,
                                                          topics_meta,
                                                          chain_root,
-                                                         keywords_meta))
+                                                         keywords_meta,
+                                                         reviews_meta))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
     print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "

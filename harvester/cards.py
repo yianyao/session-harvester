@@ -28,6 +28,10 @@ except ImportError:  # pragma: no cover
     _HAS_YAML = False
 
 REQUIRED_TYPES = {"insight", "pitfall", "workflow"}
+#: 复核裁决取值（v0.74）：accepted=接受（误报/综述性质，警告常驻无意义）；
+#: fixed=已按修复处理。两者都压制同一 warn_key 的警告——人裁过的不许再
+#: 烦人；裁决后同类警告重现且需要重开的，用改判（UPSERT 覆盖）重裁。
+REVIEW_VERDICTS = ("accepted", "fixed")
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 #: 卡片目录里要跳过的说明文件。**必须大写**：判据是 `p.name.upper()`，
@@ -198,6 +202,117 @@ def _parse_frontmatter(text: str) -> tuple[dict | None, str]:
     return data, text[m.end():]
 
 
+# ---- 复核台账（v0.74）：人裁过的不许再烦人 ------------------------------
+#
+# 原则（用户裁决 2026-10-15）：机器只核对它核得了的，把语义裁决还给人，
+# 且人裁过的不许再烦人。台账库 cards_meta.db（与 topics/suggestions/
+# keywords/artifacts meta 同模式：一关注一库）。warn_key = 警告原文的
+# 数字归一形态（_warn_key）：同类警告（如 evidence 第 N 行未命中）在改卡
+# 后行号漂移仍算同一裁决；新类别（key 不同）自然重现——"fixed 再犯=
+# 新发现"由此免费获得。改判 = UPSERT 覆盖。
+#
+# 为什么按"文件名 + 归一警告"而不是逐字符原文做键：行号、sid 这类变量
+# 部分会让"同一条警告"在重跑时变脸，人已经裁过的事不该因为变量漂移
+# 被重新问一遍。
+
+_REVIEW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS card_review (
+    card_file   TEXT NOT NULL,
+    warn_key    TEXT NOT NULL,
+    verdict     TEXT NOT NULL,
+    note        TEXT,
+    reviewed_at TEXT NOT NULL,
+    reviewed_by TEXT,
+    PRIMARY KEY (card_file, warn_key)
+)
+"""
+_WARN_KEY_DIGITS = re.compile(r"\d+")
+
+
+def _warn_key(w: str) -> str:
+    """警告 → 稳定裁决键：数字归一（第 3 行/第 4 行同类、sid 变体同类）
+    + 截断 200 字符。只用于复核台账比对，不用于展示。"""
+    return _WARN_KEY_DIGITS.sub("#", w or "")[:200]
+
+
+def ensure_review_db(meta: Path) -> Path:
+    meta = Path(meta)
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(meta))
+    try:
+        con.executescript(_REVIEW_SCHEMA)
+        con.commit()
+    finally:
+        con.close()
+    return meta
+
+
+def load_review_map(meta: Path | None) -> dict[str, set[str]]:
+    """{卡片文件名: {已裁决 warn_key}}。库/表不存在 → 空映射（不过滤，
+    行为与旧版完全一致——不加台账的用户零感知）。"""
+    if meta is None or not Path(meta).is_file():
+        return {}
+    con = sqlite3.connect(str(meta))
+    try:
+        rows = con.execute(
+            "SELECT card_file, warn_key FROM card_review").fetchall()
+    except sqlite3.OperationalError:  # 表未建
+        return {}
+    finally:
+        con.close()
+    out: dict[str, set[str]] = {}
+    for f, k in rows:
+        out.setdefault(str(f), set()).add(str(k))
+    return out
+
+
+def list_reviews(meta: Path) -> list[dict]:
+    """台账明细（cards review --list）。库/表不存在 → 空。"""
+    if not Path(meta).is_file():
+        return []
+    con = sqlite3.connect(str(meta))
+    con.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in con.execute(
+            "SELECT card_file, warn_key, verdict, note, reviewed_at, "
+            "reviewed_by FROM card_review ORDER BY card_file, warn_key")]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        con.close()
+
+
+def record_review(meta: Path, card_file: str, warn_keys: list[str],
+                  verdict: str = "accepted", note: str = "",
+                  reviewed_by: str = "") -> int:
+    """落复核裁决（UPSERT：改判=覆盖）。返回写入条数。verdict 必须在
+    REVIEW_VERDICTS 内；空 keys 幂等返回 0。"""
+    if verdict not in REVIEW_VERDICTS:
+        raise ValueError(f"verdict={verdict!r} 不在 {list(REVIEW_VERDICTS)}")
+    if not warn_keys:
+        return 0
+    ensure_review_db(meta)
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    con = sqlite3.connect(str(meta))
+    try:
+        n = 0
+        for k in warn_keys:
+            con.execute(
+                "INSERT INTO card_review (card_file, warn_key, verdict, "
+                "note, reviewed_at, reviewed_by) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(card_file, warn_key) DO UPDATE SET "
+                "verdict=excluded.verdict, note=excluded.note, "
+                "reviewed_at=excluded.reviewed_at, "
+                "reviewed_by=excluded.reviewed_by",
+                (card_file, k, verdict, note or None, now,
+                 reviewed_by or None))
+            n += 1
+        con.commit()
+        return n
+    finally:
+        con.close()
+
+
 def validate_card(path: Path) -> tuple[list[str], list[str], dict | None]:
     """校验单卡。返回 (errors, warnings, fm)。"""
     errors: list[str] = []
@@ -209,18 +324,23 @@ def validate_card(path: Path) -> tuple[list[str], list[str], dict | None]:
     fm, body = _parse_frontmatter(text)
     if fm is None:
         return ["frontmatter 缺失或不可解析（§8 规范要求 YAML 头）"], [], None
-    for field in ("id", "title", "type", "anchors", "evidence",
+    for field in ("id", "title", "type", "anchors",
                   "confidence", "created"):
         if field not in fm or fm[field] in ("", None, "[]", "{}"):
             errors.append(f"缺少必填字段 {field}")
+    # v0.74（evidence/summary 拆角色）：至少一项非空即算有据可查——
+    # insight 的知识本就是蒸馏综述，强求逐字是范畴错误；是否逐字由
+    # _evidence_warnings 按类型差异化处理。两者都空 = 空壳卡。
+    if not str(fm.get("evidence") or "").strip() \
+            and not str(fm.get("summary") or "").strip():
+        errors.append("evidence/summary 均为空（规范：至少一项——"
+                      "逐字证据或综述）")
     ctype = str(fm.get("type", ""))
     if ctype and ctype not in REQUIRED_TYPES:
         errors.append(f"type={ctype!r} 不在 {sorted(REQUIRED_TYPES)}")
     anchors = fm.get("anchors")
     if anchors is not None and not isinstance(anchors, list):
         warns.append("anchors 非列表形态（§8 要求 [{session_id, ...}] 列表）")
-    if not str(fm.get("evidence", "")).strip() and "evidence" in fm:
-        errors.append("evidence 为空（规范：必须带证据原文）")
     if not body.strip():
         warns.append("正文为空")
     try:
@@ -337,6 +457,11 @@ def _evidence_warnings(fm: dict, warns: list[str], db: Path | None,
             if isinstance(a, dict) and a.get("turn") is None:
                 warns.append(f"锚点 {a.get('session_id')} turn 为 null"
                              "（定位精度不足，建议补回合号）")
+    # v0.74 类型差异化：insight 的知识本就是蒸馏综述（原会话是"讨论过
+    # 这件事的地方"，不是引文来源），逐字核对是范畴错误 → 跳过；
+    # pitfall/workflow 保留（错误原文/命令序列本该逐字，机器核得了）。
+    if str(fm.get("type") or "") == "insight":
+        return (0, 0)
     if not evidence.strip() or not isinstance(anchors, list):
         return (0, 0)
     checked = misses = 0
@@ -363,6 +488,18 @@ def _evidence_warnings(fm: dict, warns: list[str], db: Path | None,
             warns.append(f"evidence 第 {i} 行未在锚点会话原文中找到"
                          "（原文可能经 adapter 改写，请人工复核）")
     return (checked, misses)
+
+
+def card_current_warnings(path: Path, db: Path | None = None,
+                          con: sqlite3.Connection | None = None) -> list[str]:
+    """单卡当前警告全集（validate_card + 引文核对，不含台账过滤）。
+
+    `cards review` 落账前用它取"现在有哪些警告"；台账过滤只发生在
+    validate_cards 的展示层，这里永远返回未过滤的原始警告。"""
+    _errors, warns, fm = validate_card(path)
+    if fm is not None:
+        _evidence_warnings(fm, warns, db, con=con)
+    return warns
 
 
 # ---- V3：卡片 ↔ 主题注册表打通（只读交叉核对） ----
@@ -670,7 +807,9 @@ def list_cards(root: Path) -> list[dict]:
 
 def validate_cards(root: Path, db: Path | None = None,
                    con: sqlite3.Connection | None = None, *,
-                   topics_meta: Path | None = None
+                   topics_meta: Path | None = None,
+                   review_meta: Path | None = None,
+                   show_reviewed: bool = False
                    ) -> tuple[list[dict], dict]:
     """校验目录下全部卡片。返回 (results, summary)。
 
@@ -687,6 +826,10 @@ def validate_cards(root: Path, db: Path | None = None,
     `sessions.sid` 精确形态可解析**，报告里的 `topic_alias_keys` 为 0。
     传了但库不可读 → 抛异常（fail loud，不退化成"没有主题"的假通过）。
     """
+    # v0.74 复核台账：{卡片文件名: {已裁决 warn_key}}。库不存在 → 空映射
+    # （不过滤，行为与旧版一致）。
+    review_map: dict[str, set[str]] = load_review_map(review_meta)
+    reviewed_total = 0
     membership: dict | None = None
     if topics_meta is not None:
         if db is not None and Path(topics_meta).resolve() == Path(db).resolve():
@@ -757,8 +900,18 @@ def validate_cards(root: Path, db: Path | None = None,
                             break
         if had_evidence and c == 0:
             evidence_unchecked += 1
+        reviewed_n = 0
+        if review_map:
+            acc = review_map.get(p.name, set())
+            if acc:
+                reviewed_n = sum(1 for w in warns if _warn_key(w) in acc)
+                if reviewed_n and not show_reviewed:
+                    warns = [w for w in warns if _warn_key(w) not in acc]
         rel = str(p.relative_to(root))
         entry = {"path": rel, "errors": errors, "warnings": warns}
+        if review_meta is not None:
+            entry["reviewed_accepted"] = reviewed_n
+            reviewed_total += reviewed_n
         if topic_info is not None:
             entry["declared_topic_id"] = topic_info["declared_topic_id"]
             entry["topics"] = topic_info["topics"]
@@ -778,6 +931,9 @@ def validate_cards(root: Path, db: Path | None = None,
                "evidence_misses": evidence_misses,
                "evidence_unchecked": evidence_unchecked,
                "placeholder_cards": placeholder_cards}
+    if review_meta is not None:
+        summary["review_filter"] = True
+        summary["reviewed_accepted_total"] = reviewed_total
     if membership is not None:
         summary.update({
             "topic_reviewed": True,
@@ -805,8 +961,14 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
         f"- 锚点校验 {summary['anchor_checked']} 个，"
         f"未命中索引库 {summary['anchor_misses']} 个",
         f"- 引文核对 {summary.get('evidence_checked', 0)} 行，"
-        f"未命中原文 {summary.get('evidence_misses', 0)} 行", "",
+        f"未命中原文 {summary.get('evidence_misses', 0)} 行",
     ]
+    if summary.get("review_filter"):
+        lines.append(
+            f"- 复核台账：已裁决接受 {summary.get('reviewed_accepted_total', 0)} "
+            "条警告，已从上方清单隐去（--show-review 连同显示；台账明细 "
+            "cards review --list）——人裁过的不许再烦人。")
+    lines.append("")
     if summary.get("topic_reviewed"):
         lines += [
             f"- 主题核对（--topics-meta）：注册主题 "
@@ -861,8 +1023,12 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
             "2. 锚点指向的会话原文，到 view（harvester-view 页面的会话检索/"
             "报告页锚点）跳转核对——原文可能经 adapter 改写，大体一致即算通过。",
             "3. 要改卡片直接改正本文件（knowledge\\cards），改完重跑本命令看"
-            "错误是否清零；确认无误的警告保留标注即可。改完想让 WorkBuddy "
-            "资料库看到：python -m harvester kb-publish（发布镜像）。",
+            "错误是否清零；确认无误、不想再见到的警告落账："
+            "python -m harvester cards review --file <卡文件名> --verdict accepted"
+            "（人裁过的不许再烦人；fixed=已按修复处理，要重开用改判）。"
+            "改完想让 WorkBuddy 资料库看到："
+            "python -m harvester kb-publish（WorkBuddy 专用投递——正本在项目 "
+            "knowledge/，镜像可随时重建）。",
         ]
     else:
         lines.append("结论：全部卡片满足 §8 规范，可并入主库。")

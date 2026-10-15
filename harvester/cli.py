@@ -550,7 +550,9 @@ def cmd_api_serve(args) -> int:
                if args.topics_meta else None,
                chain_root=chain_root,
                keywords_meta=Path(args.keywords_meta)
-               if getattr(args, "keywords_meta", None) else None)
+               if getattr(args, "keywords_meta", None) else None,
+               reviews_meta=Path(args.reviews_meta)
+               if getattr(args, "reviews_meta", None) else None)
 
 
 def cmd_report_tools(args) -> int:
@@ -1325,7 +1327,11 @@ def cmd_cards(args) -> int:
         print(f"错误: 主题注册表不存在: {tm}", file=sys.stderr)
         return 2
     try:
-        results, summary = validate_cards(root, dbp, topics_meta=tm)
+        results, summary = validate_cards(
+            root, dbp, topics_meta=tm,
+            review_meta=(Path(args.reviews_meta)
+                         if getattr(args, "reviews_meta", None) else None),
+            show_reviewed=bool(getattr(args, "show_review", False)))
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"错误: 主题核对无法执行: {e}", file=sys.stderr)
         return 2
@@ -1355,6 +1361,60 @@ def cmd_cards_new(args) -> int:
         print(f"⚠️ {w}")
     print("下一步: 补全 evidence（原会话证据原文）与正文，然后 "
           "cards validate --root ... --db ...")
+    return 0
+
+
+def cmd_cards_review(args) -> int:
+    """复核台账（v0.74）：人裁过的不许再烦人。
+
+    两种用法：
+    - --list：列出台账明细；
+    - --file <卡文件名>：把该卡**当前全部警告**一言而决（缺省）或只裁
+      --warn 子串命中的警告；verdict=accepted（综述/误报，接受）或
+      fixed（已按修复处理）。落账后 validate 不再显示（--show-review 连同显示）。
+    """
+    from .cards import (_warn_key, card_current_warnings, list_reviews,
+                        record_review)
+    meta = Path(args.reviews_meta)
+    if args.list:
+        rows = list_reviews(meta)
+        if not rows:
+            print("台账为空（还没有任何复核裁决）。")
+            return 0
+        for r in rows:
+            print(f"{r['card_file']}  [{r['verdict']}]  {r['warn_key'][:80]}"
+                  + (f"  note={r['note']}" if r.get("note") else ""))
+        print(f"共 {len(rows)} 条裁决。")
+        return 0
+    if not args.file:
+        print("错误: 需要 --file <卡文件名>（或 --list 查台账）", file=sys.stderr)
+        return 2
+    root = Path(args.root)
+    card_path = root / args.file
+    if not card_path.is_file():
+        print(f"错误: 卡片文件不存在: {card_path}", file=sys.stderr)
+        return 2
+    dbp = Path(args.db) if getattr(args, "db", None) else None
+    if dbp is not None and not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（引文类警告要查库才能取全）",
+              file=sys.stderr)
+        return 2
+    warns = card_current_warnings(card_path, db=dbp)
+    if args.warn:
+        subs = tuple(args.warn)
+        keys = sorted({_warn_key(w) for w in warns
+                       if any(s in w for s in subs)})
+    else:
+        keys = sorted({_warn_key(w) for w in warns})   # 一言而决：整卡当前警告
+    if not keys:
+        print(f"{args.file}: 当前没有可裁决的警告（无需落账）。")
+        return 0
+    n = record_review(meta, args.file, keys, verdict=args.verdict,
+                      note=args.note or "", reviewed_by=args.by or "")
+    print(f"已落账 {n} 条裁决（{args.verdict}）：{args.file}")
+    for k in keys:
+        print(f"  - {k[:100]}")
+    print("重跑 cards validate 即不再显示这些警告（--show-review 连同显示）。")
     return 0
 
 
@@ -1574,13 +1634,45 @@ def cmd_chain_audit(args) -> int:
     本命令管**内容保真与证据覆盖**（引文能否逐字找到、note 与原文有没有交集、
     有多少成员只有标题级证据）。
     """
-    from .chainaudit import audit_chain, render_audit
+    from .chainaudit import (audit_chain, record_audit_review,
+                             render_audit)
+    meta = (Path(args.reviews_meta)
+            if getattr(args, "reviews_meta", None) else None)
+    if getattr(args, "review_list", False):
+        from .chainaudit import list_audit_reviews
+        rows = list_audit_reviews(meta, Path(args.file).name)
+        if not rows:
+            print("[chain-audit] 该 chain 暂无复核裁决。", file=sys.stderr)
+        for row in rows:
+            print(f"{row['node_key']}  [{row['verdict']}]  "
+                  + (row.get("note") or ""))
+        return 0
+    if getattr(args, "accept", None):
+        if meta is None:
+            print("错误: --accept 需要 --reviews-meta", file=sys.stderr)
+            return 2
+        from .chainaudit import _node_key
+        keys = []
+        for spec in args.accept:
+            sid, _sep, turn = spec.rpartition("#")
+            if not sid or not turn.isdigit():
+                print(f"错误: --accept 格式应为 sid#turn（收到 {spec!r}）",
+                      file=sys.stderr)
+                return 2
+            keys.append(_node_key(sid, int(turn)))
+        n = record_audit_review(meta, Path(args.file).name, keys,
+                                verdict="accepted",
+                                note=getattr(args, "accept_note", "") or "")
+        print(f"[chain-audit] 已落账 {n} 个节点裁决（accepted）。"
+              "重跑本命令即不再显示这些告警。", file=sys.stderr)
     try:
         r = audit_chain(Path(args.file), Path(args.db),
                         quotes=not args.no_quotes,
                         anchors=not args.no_anchors,
                         coverage=not args.no_coverage,
-                        quotes_ascii=args.quotes_ascii)
+                        quotes_ascii=args.quotes_ascii,
+                        review_meta=meta,
+                        show_reviewed=bool(getattr(args, "show_review", False)))
     except RuntimeError as exc:            # 缺 PyYAML 等环境错误：fail loud
         print(f"错误: {exc}", file=sys.stderr)
         return 2
@@ -2185,7 +2277,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="未记 adopted_at 时的分界回退值"
                           "（YYYY-MM-DD 或 'YYYY-MM-DD HH:MM:SS'）")
     phe.add_argument("--window-days", dest="window_days", type=int,
-                     default=_EVAL_DEFAULT_WINDOW, help="前后窗口天数（默认 14）")
+                     default=_EVAL_DEFAULT_WINDOW,
+                     help="前后窗口天数（默认 %(default)s）")
     phe.add_argument("--threshold", type=float, default=_EVAL_DEFAULT_THRESHOLD,
                      help="相对变化阈值（默认 0.10 = ±10%% 内算无变化）")
     phe.add_argument("--min-per-window", dest="min_per_window", type=int,
@@ -2278,6 +2371,12 @@ def build_parser() -> argparse.ArgumentParser:
                       help="主题注册表 topics_meta.db（可选；给定时追加"
                            "「卡片声明主题 ↔ 注册表成员资格」一致性核对，"
                            "缺省不做该检查，行为与旧版一致）")
+    pcap.add_argument("--reviews-meta", dest="reviews_meta",
+                      default="cards_meta.db",
+                      help="复核台账 meta 库（默认 cards_meta.db；库/表不存在"
+                           "=零感知。人已裁决的警告不再显示——人裁过的不许再烦人）")
+    pcap.add_argument("--show-review", dest="show_review", action="store_true",
+                      help="连同已裁决警告一起显示（复核留痕用）")
     pcap.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pcap.set_defaults(func=cmd_cards)
     pcn = pcdsub.add_parser("new", help="从索引库会话生成卡片脚手架")
@@ -2290,6 +2389,26 @@ def build_parser() -> argparse.ArgumentParser:
     pcn.add_argument("--turn", type=int, help="锚点回合号（可选）")
     pcn.add_argument("--db", default="harvester.db", help="索引库路径")
     pcn.set_defaults(func=cmd_cards_new)
+    pcr = pcdsub.add_parser("review",
+                            help="复核台账：人裁过的不许再烦人（v0.74）")
+    pcr.add_argument("--list", action="store_true",
+                     help="列出台账明细（不需 --root）")
+    pcr.add_argument("--file",
+                     help="卡片文件名（相对 --root；缺省 --warn 时=整卡当前警告一言而决）")
+    pcr.add_argument("--root", default=".", help="卡片库根目录（定位 --file 用）")
+    pcr.add_argument("--warn", action="append",
+                     help="只裁决包含该子串的警告（可多次；缺省=整卡当前警告）")
+    pcr.add_argument("--verdict", default="accepted",
+                     choices=["accepted", "fixed"],
+                     help="accepted=接受（综述/误报）；fixed=已按修复处理"
+                          "（默认 accepted；两者都不再烦人，要重开用改判）")
+    pcr.add_argument("--note", help="裁决说明（写进台账）")
+    pcr.add_argument("--by", help="谁裁决的（写进台账；缺省不猜身份）")
+    pcr.add_argument("--db", default="harvester.db",
+                     help="索引库路径（计算当前警告用；缺省 harvester.db）")
+    pcr.add_argument("--reviews-meta", dest="reviews_meta",
+                     default="cards_meta.db", help="复核台账 meta 库")
+    pcr.set_defaults(func=cmd_cards_review)
 
     prs = sub.add_parser(
         "report-skill",
@@ -2378,6 +2497,19 @@ def build_parser() -> argparse.ArgumentParser:
     pca.add_argument("--list-limit", dest="list_limit", type=int, default=20,
                      help="各区块明细最多列几条；0 = 不限（默认 20，超出会显式"
                           "印「另有 N 条」）")
+    pca.add_argument("--reviews-meta", dest="reviews_meta",
+                     default="topics_meta.db",
+                     help="复核台账（存 topics_meta.db 的 audit_review 表；"
+                          "库/表不存在=零感知。已裁决节点不再列入疑似错配）")
+    pca.add_argument("--show-review", dest="show_review", action="store_true",
+                     help="连同已裁决节点一起显示")
+    pca.add_argument("--accept", action="append", metavar="SID#TURN",
+                     help="一言而决：把该节点的语义门告警落账为 accepted"
+                          "（可多次），随后审计即不再显示")
+    pca.add_argument("--accept-note", dest="accept_note",
+                     help="--accept 的裁决说明")
+    pca.add_argument("--review-list", dest="review_list", action="store_true",
+                     help="列出该 chain 的复核台账后退出")
     pca.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pca.set_defaults(func=cmd_chain_audit)
 
@@ -2466,8 +2598,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ppub = sub.add_parser(
         "kb-publish",
-        help="把项目正本 knowledge/ 单向发布到 WorkBuddy 知识库镜像位"
-             "（正本随项目迁移；镜像只喂不收，主程序资料库从镜像读）")
+        help="把项目正本 knowledge/ 单向投递给 WorkBuddy 主程序"
+             "（它只认自家目录，是四个消费者里唯一需要文件镜像的；"
+             "view/Agent/第三方直读正本或走 API/MCP）。只喂不收，"
+             "镜像可随时删除重建")
     ppub.add_argument("--root", default=str(MASTER_DEFAULT_ROOT),
                       help="正本根目录（缺省 knowledge，相对仓根跑）")
     ppub.add_argument("--dest", default=str(KB_DEFAULT_ROOT),
@@ -2556,6 +2690,10 @@ def build_parser() -> argparse.ArgumentParser:
     pap.add_argument("--keywords-meta", dest="keywords_meta",
                      default=None,
                      help="关键词 meta 库路径（可选；启用 /api/keywords）")
+    pap.add_argument("--reviews-meta", dest="reviews_meta",
+                     default="cards_meta.db",
+                     help="卡片复核台账 meta 库（/api/cards 据此隐去已裁决警告；"
+                          "库不存在=零感知。人裁过的不许再烦人）")
     pap.set_defaults(func=cmd_api_serve)
 
     return p
