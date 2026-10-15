@@ -209,8 +209,22 @@ class TestConclusionMentionsWarnings(unittest.TestCase):
         summary = {"cards": 1, "ok": 0, "warn": 1, "error": 0,
                    "anchor_checked": 0, "anchor_misses": 0}
         text = render_report(results, summary, Path("/x"))
-        self.assertIn("警告", text.splitlines()[-1])
+        # v0.73：结论行后追加了「复核怎么做」指引块，门改钉**结论行本身**
+        concl = [ln for ln in text.splitlines() if ln.startswith("结论")][0]
+        self.assertIn("警告", concl)
         self.assertNotIn("全部卡片满足", text)
+
+    def test_warn_conclusion_tells_how_to_review(self):
+        """v0.73（用户批注：复核警告后再并入主库——我去哪里复核？）：
+        警告结论必须自带复核指引：位置（## 小节/evidence 行）、对照方式、
+        改完重跑、发布镜像。不能只说「去复核」不说去哪。"""
+        results = [{"path": "w.md", "errors": [],
+                    "warnings": ["evidence 第 1 行未在锚点会话原文中找到"]}]
+        summary = {"cards": 1, "ok": 0, "warn": 1, "error": 0,
+                   "anchor_checked": 0, "anchor_misses": 0}
+        text = render_report(results, summary, Path("/x"))
+        self.assertIn("复核怎么做", text)
+        self.assertIn("kb-publish", text, "并入主库的下一步=发布镜像，须写明")
 
     def test_clean_still_ok(self):
         results = [{"path": "ok.md", "errors": [], "warnings": []}]

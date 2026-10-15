@@ -851,6 +851,19 @@ def render_report(results: list[dict], summary: dict, root: Path) -> str:
     elif summary["warn"]:
         lines.append(f"结论：无错误，但 {summary['warn']} 张卡片带警告"
                      "——复核警告项后再并入主库。")
+        # v0.73（用户批注：复核警告后再并入主库——我去哪里复核？）：
+        # 光说「去复核」不说去哪=把谜语留给用户。复核三步必须写在结论旁。
+        lines += [
+            "",
+            "复核怎么做（警告不自动消失，逐条人工确认）：",
+            "1. 上面每个 ## 小节 = 一张带警告的卡片。每条警告自带位置"
+            "（evidence 第 N 行 + 锚点回合），照着打开卡片文件核对。",
+            "2. 锚点指向的会话原文，到 view（harvester-view 页面的会话检索/"
+            "报告页锚点）跳转核对——原文可能经 adapter 改写，大体一致即算通过。",
+            "3. 要改卡片直接改正本文件（knowledge\\cards），改完重跑本命令看"
+            "错误是否清零；确认无误的警告保留标注即可。改完想让 WorkBuddy "
+            "资料库看到：python -m harvester kb-publish（发布镜像）。",
+        ]
     else:
         lines.append("结论：全部卡片满足 §8 规范，可并入主库。")
     return "\n".join(lines).rstrip() + "\n"
