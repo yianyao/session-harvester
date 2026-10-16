@@ -11,6 +11,7 @@ build_adapters(sources) 接收 discovery.probe 产出的 sources.json 配置，
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from .autoclaw import AutoClawAdapter
@@ -146,12 +147,23 @@ def _plugin_kwargs(entry: dict) -> dict:
 
 
 def load_sources(path) -> dict:
-    """读取 probe 产出的 sources.json；不存在或损坏时返回空（用默认路径）。"""
+    """读取 probe 产出的 sources.json（v0.51 S5：缺失/损坏分流）。
+
+    缺失 → 空表回退（各源走默认路径，stderr 一行提示，不算错误）；
+    损坏（JSON/编码解析失败、顶层非对象）→ ValueError fail loud——
+    配置文件坏掉绝不能静默当"没配置"用（原则③：坏库不许当空库用）。
+    """
     p = Path(path)
     if not p.is_file():
+        print(f"[load_sources] 未找到 {p}，各源走默认路径回退（不算错误）",
+              file=sys.stderr)
         return {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:  # noqa: BLE001
-        return {}
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(
+            f"sources.json 损坏（JSON/编码解析失败）: {p} ({e})") from e
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"sources.json 顶层应为对象，实为 {type(data).__name__}: {p}")
+    return data
