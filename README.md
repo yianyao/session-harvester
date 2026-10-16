@@ -4,7 +4,8 @@
 建成**可全文检索的本地库**，并支撑后续蒸馏（蒸馏 = 从散落的会话里提炼
 可复用的东西：思路过程 / 工具改进 / Harness 踩坑 / 用户画像）。
 
-当前资产：**9 个数据源已实装入库**，`harvester.db` 共 **1981 会话 /
+当前资产：**11 个数据源已登记实装（ACTIVE）**，其中 9 个已有真实数据
+入库，`harvester.db` 共 **1981 会话 /
 74364 消息 / 44969 工具步 / 381 错误**（截至 2026-10-12 库快照，`sync` 全量
 重建后；随 update/sync 持续增长）；另有 6 个桩位留接口，`dsh` 源 36 个会话。
 （FTS5 中文可检索，sessions 含模型归属列；**库体积 410.3 MB**——同日 VACUUM 前
@@ -17,7 +18,8 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  45 个相关测试会明确报错——**这是预期行为，不是安装坏了**。
+  **61 条模块级报错**（依赖它的测试模块每模块计 1 条 error，数由门禁
+  `errors=61` 实测钉住）会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
@@ -36,7 +38,9 @@
 
 > **"基线是多少"只有本节的数字算数**——命令行 `--help`、脚本 docstring 里的
 > 旧数字都不算。下面每个数字都由 `tests/test_v48_test_baseline.py` **实测对账**
-> 钉住（改坏任一处必红），所以加测试时改这里的数字是**必须做的动作**，不是可选项。
+> 钉住（改坏任一处必红；对账两条只在 ① 全套件运行里真跑，② 门禁里按
+> skip 设计跳过——见下 `skipped=5` 说明），所以加测试时改这里的数字是
+> **必须做的动作**，不是可选项。
 
 ```powershell
 $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
@@ -548,8 +552,8 @@ python -m harvester deadcode-scan --root harvester --out docs/reports/deadcode.m
   （`from compression import zstd as _z  # noqa: F401`）——那种 import 名字本就不用，
   是 flake8 的既有约定。**要保留死代码，就在该行写 `# noqa` 并说明理由**。
 
-套件里有一条 `test_harvester_package_has_no_dead_code`（`harvester/` 必须 0 条），
-所以这道例行检查不靠人记得跑。
+套件里有一条 `test_harvester_and_tests_have_no_dead_code`（`harvester/` 与
+`tests/` 两根都必须 0 条），所以这道例行检查不靠人记得跑。
 
 ## 端到端回归语料（regress，改链路前后都该跑）
 

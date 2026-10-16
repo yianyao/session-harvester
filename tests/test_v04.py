@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import sys
 import unittest
@@ -29,6 +30,11 @@ def _try_unlink(f: Path) -> None:
         f.unlink(missing_ok=True)
     except PermissionError:
         pass
+
+
+def _try_rmtree(d: Path) -> None:
+    """目录级容错清理（v0.51 A6：base_* 残留自清，不再逐次堆积）。"""
+    shutil.rmtree(d, ignore_errors=True)
 
 
 # ---------- to_local_ts ----------
@@ -94,8 +100,7 @@ class AutoClawTestBase(unittest.TestCase):
         self.db = TMP / f"autoclaw_{id(self):x}.sqlite"
         self.addCleanup(_try_unlink, self.db)
         self.base = TMP / f"base_{id(self):x}"
-        self.addCleanup(lambda: _try_unlink(self.base) if self.base.is_file()
-                        else None)
+        self.addCleanup(_try_rmtree, self.base)
         acc = self.base / "accounts" / "acc1" / "runtime"
         acc.mkdir(parents=True, exist_ok=True)
         self.db_path = acc / "runtime.sqlite"

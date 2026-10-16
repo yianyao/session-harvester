@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import sys
 import unittest
@@ -32,6 +33,11 @@ def _try_unlink(f: Path) -> None:
         f.unlink(missing_ok=True)
     except PermissionError:
         pass
+
+
+def _try_rmtree(d: Path) -> None:
+    """目录级容错清理（v0.51 A6：trbase_* 残留自清，不再逐次堆积）。"""
+    shutil.rmtree(d, ignore_errors=True)
 
 
 # ---------- AutoClaw 合成库（与 test_v04 同构） ----------
@@ -72,7 +78,7 @@ class TestToolResultMapping(unittest.TestCase):
         acc = base / "accounts" / "acc1" / "runtime"
         acc.mkdir(parents=True, exist_ok=True)
         self.base = base
-        self.addCleanup(lambda: _try_unlink(acc / "runtime.sqlite"))
+        self.addCleanup(_try_rmtree, base)
         rows = [
             ("r1", "request", {"text": "跑工具"}, "2026-09-28T05:48:10.000Z"),
             ("r1", "tool_call", {"toolName": "read", "input": {"path": "a"}},

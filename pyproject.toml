@@ -13,7 +13,8 @@ dependencies = []
 
 [project.optional-dependencies]
 # T3 主题思维链（topic chain / chain-validate）。**故意不提供降级解析**：
-# 缺 PyYAML 时这两条命令与 23 个相关测试会明确报错，而非静默误读块结构。
+# 缺 PyYAML 时这两条命令与依赖它的测试模块（61 条模块级 error，README
+# 「依赖边界」同口径）会明确报错，而非静默误读块结构。
 yaml = ["PyYAML>=6.0"]
 # DSH 会话日志为 zstd 多帧压缩；Python 3.14+ 可用标准库 compression.zstd，
 # 3.10–3.13 走本可选依赖（adapter 另有 zstd.exe / node 分层降级）。
