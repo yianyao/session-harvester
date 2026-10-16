@@ -552,7 +552,9 @@ def cmd_api_serve(args) -> int:
                keywords_meta=Path(args.keywords_meta)
                if getattr(args, "keywords_meta", None) else None,
                reviews_meta=Path(args.reviews_meta)
-               if getattr(args, "reviews_meta", None) else None)
+               if getattr(args, "reviews_meta", None) else None,
+               reports_dir=Path(args.reports_dir)
+               if getattr(args, "reports_dir", None) else None)
 
 
 def cmd_report_tools(args) -> int:
@@ -648,6 +650,112 @@ def cmd_report_chains(args) -> int:
         return 2
     d = collect(dbp, since_days=args.since, top=args.top)
     _emit_report(render_report(d, top=args.top), args)
+    return 0
+
+
+def cmd_report_daily(args) -> int:
+    """每日数据速览（P5-⑤，用户 2026-10-16 批准）：一次产出五段 md。
+
+    §4-5 验收：--out 一次产出含五段（队列四数字 + tools/errors/chains 摘要）
+    的 md。**只读聚合**：不写库、不改库、不写建议台账。
+    四队列与 view 工作台（/api/overview）**同源**——同一批主仓函数、同一组
+    参数（collect_triage(min_count=2, top_n=10)、api_reports_agents 缺省
+    min_count=3/max_items=15、run_eval 缺省窗口），本命令是出报告时刻的
+    快照；工作台是实时现算，数字若有出入以工作台为准（md 里如实注明）。
+    """
+    from datetime import datetime
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    meta_p = Path(args.meta) if args.meta else None
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    L = ["# 每日数据速览（report-daily）", "",
+         f"> 生成于 {stamp}｜tools/errors/chains 窗口=最近 {args.since} 天"
+         f"｜索引库 {dbp}",
+         "> **只读聚合**：本命令不写库不改库；四队列与 view 工作台同源"
+         "（同模块同函数同参数），但本文件是快照——以工作台实时现算为准。",
+         ""]
+    con = sqlite3.connect(f"file:{dbp.as_posix()}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row  # 与 view open_ro 对齐（errstats 等
+    # 接收外部 con 的函数按 Row 取列；cmd_report_* 直连版各自内部已设）
+    try:
+        # —— 一、四队列（与 view 工作台同源） ——
+        from . import suggestmeta as _sm
+        from .apiserve import api_reports_agents
+        from .triage import collect_triage
+        from .harvesteval import VERDICT_INCONCLUSIVE, run_eval
+
+        records = _sm.load_records(meta_p)
+        decide = sum(1 for r in records.values()
+                     if r.get("status") == "pending")
+        agents = api_reports_agents(con, dbp, {}, meta_db=meta_p)
+        repair = sum(1 for e in agents["entries"]
+                     if (e.get("unresolved_count") or 0) >= 1)
+        tri = collect_triage(dbp, cards_root=args.cards_root,
+                             min_count=2, top_n=10, con=con)
+        distill = len(tri.get("new_patterns") or [])
+        ev = run_eval(dbp, meta_p)
+        verify = sum(1 for e in ev.get("entries") or []
+                     if e.get("verdict") == VERDICT_INCONCLUSIVE)
+        L += ["## 一、四队列（待办速览）", "",
+              "| 队列 | 数字 | 口径来源（与 view 工作台同源） |",
+              "|---|---|---|",
+              f"| 待裁决 | {decide} | suggestmeta.load_records[status=pending] |",
+              f"| 待修补 | {repair} | "
+              "api_reports_agents.entries[unresolved_count>=1] |",
+              f"| 待蒸馏 | {distill} | "
+              "triage.collect_triage.new_patterns（min_count=2, top_n=10） |",
+              f"| 待验证 | {verify} | "
+              f"harvesteval.run_eval[verdict={VERDICT_INCONCLUSIVE}] |", "",
+              "> 队列明细与「下一步动作」在 view 工作台（每条可点开处理）；"
+              "建议台账"
+              + (f"（{meta_p}）不存在时本段按空账计，属诚实空态。" if
+                 (meta_p and not meta_p.is_file()) else "缺失时同。"), ""]
+
+        # —— 二、工具调用摘要 ——
+        from .toolstats import collect_stats_from_db, render_report as rr_tools
+        try:
+            has = con.execute("SELECT COUNT(*) FROM steps").fetchone()[0]
+        except sqlite3.OperationalError:
+            has = 0
+        L += ["## 二、工具调用摘要（最近 %.g 天）" % args.since, ""]
+        if not has:
+            L += ["（库内无 steps 数据——先运行 `harvester index`；"
+                  "本段诚实留空，不编数字。）", ""]
+        else:
+            stats, flow = collect_stats_from_db(dbp, since_days=args.since)
+            L += [rr_tools(stats, flow=flow), ""]
+
+        # —— 三、错误分类摘要 ——
+        from .errstats import collect_errors_from_db, render_report as rr_err
+        L += ["## 三、错误分类摘要（最近 %.g 天）" % args.since, ""]
+        errors, emeta = collect_errors_from_db(dbp, since_days=args.since,
+                                               con=con)
+        if emeta.get("error_count", 0) == 0:
+            L += ["（窗口内无错误步骤——诚实空态。）", ""]
+        else:
+            L += [rr_err(errors, emeta), ""]
+
+        # —— 四、工具链失败模式摘要 ——
+        from .chainstats import collect as ch_collect
+        from .chainstats import render_report as rr_chain
+        L += ["## 四、工具链失败模式摘要（最近 %.g 天）" % args.since, ""]
+        L += [rr_chain(ch_collect(dbp, since_days=args.since, top=args.top),
+                       top=args.top), ""]
+
+        # —— 五、账目 ——
+        L += ["## 五、账目", "",
+              f"- 生成命令：`harvester report-daily --db {args.db}"
+              f" --meta {args.meta or '-'} --since {args.since}`",
+              f"- 建议台账：{meta_p if (meta_p and meta_p.is_file()) else '（不存在，队列按空账计）'}",
+              f"- 卡片目录（蒸馏比对）：{args.cards_root or '（未给）'}",
+              "- 本文件为只读聚合快照；写库动作一律不在此命令里。",
+              ""]
+    finally:
+        con.close()
+    _emit_report("\n".join(L), args)
     return 0
 
 
@@ -1309,6 +1417,54 @@ def cmd_suppress(args) -> int:
     # argparse 的 required=True 子解析器挡住了这条路；这里留着是为了**手工构造
     # namespace 的调用方**（测试/脚本）也 fail loud，而不是静默什么都不做。
     return 2
+
+
+def cmd_noise(args) -> int:
+    """零散会话登记（P5-⑧，用户 2026-10-16 批准）：判「不归任何主题」的
+    会话写进 topics_meta 的 sessions_noise 表。
+
+    与 suppress 的区别（别混）：抑制 = 从**仓内副本**删数据（destructive，
+    有确认页）；零散 = 只写 meta 登记表（可逆：删行即撤销），效果是
+    candidates / keywords 不再把它们当主题候选簇——会话本身仍在库、仍可检索。
+    幂等：已在表里的 sid 跳过。默认 dry-run，--apply 才写（家规同款）。
+    """
+    from .consolidate import list_noise, register_noise
+    meta = Path(args.meta)
+    sids = list(dict.fromkeys(getattr(args, "sids", None) or []))  # 去重保序
+    have = {r["sid"]: r for r in list_noise(meta)}
+
+    if args.action == "list":
+        if not have:
+            print(f"[noise] 零散登记表为空（{meta}）。")
+        else:
+            print(f"[noise] 已登记零散 {len(have)} 条（{meta}）：")
+            for r in sorted(have.values(), key=lambda x: x["sid"]):
+                print(f"  - {r['sid']}  {r['created']}"
+                      f"  reason={r['reason'] or '-'}")
+        print("[noise] 零散登记只写 meta 表（可逆：删行即撤销）；"
+              "已登记的会话不再进主题候选簇，会话本身仍在库、仍可检索。")
+        return 0
+
+    # add（list_noise 只读，缺表也不建表——真写时 register_noise 才建）
+    if args.action != "add":
+        print(f"错误: 未知的 noise 动作 {args.action!r}", file=sys.stderr)
+        # 与 cmd_suppress 尾款同款：argparse 挡住真 CLI，但手工 namespace 的
+        # 调用方（测试/脚本）也要 fail loud，而不是静默当 add 跑。
+        return 2
+    new = [s for s in sids if s not in have]
+    print(f"[noise] add {len(sids)} 个 sid（新增 {len(new)}，"
+          f"已在表跳过 {len(sids) - len(new)}）"
+          + ("——dry-run，未写入" if not args.apply else ""))
+    for s in sids:
+        print(f"  - {s}  " + ("已在表里（跳过）" if s in have else "将登记"))
+    if not args.apply:
+        print("[noise] 加 --apply 才写。")
+        return 0
+    n = register_noise(meta, [{"sid": s,
+                               "reason": getattr(args, "reason", "")}
+                              for s in new])
+    print(f"[noise] 已登记 {n} 条零散会话（{meta}）。")
+    return 0
 
 
 def cmd_cards(args) -> int:
@@ -2036,6 +2192,23 @@ def build_parser() -> argparse.ArgumentParser:
     prc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     prc.set_defaults(func=cmd_report_chains)
 
+    prd = sub.add_parser(
+        "report-daily",
+        help="每日数据速览（P5-⑤）：四队列 + tools/errors/chains 五段聚合，"
+             "只读，--out 落盘供工作区 schedule 每日触发")
+    prd.add_argument("--db", default="harvester.db", help="索引库路径")
+    prd.add_argument("--meta", default="suggestions_meta.db",
+                     help="建议台账 meta 库（decide/verify 队列口径；"
+                          "不存在=诚实空态）")
+    prd.add_argument("--cards-root",
+                     help="已有卡片目录（待蒸馏队列的「疑似已有卡」比对，可省）")
+    prd.add_argument("--since", type=float, default=1.0, metavar="DAYS",
+                     help="tools/errors/chains 窗口天数（默认 1=当天）")
+    prd.add_argument("--top", type=int, default=10,
+                     help="高步会话 Top N（默认 10）")
+    prd.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prd.set_defaults(func=cmd_report_daily)
+
     psj = sub.add_parser("report-skill-join",
                          help="把某主题长文（chain）的时间线与 skill 调用记录对上号："
                               "交叉表=谁在哪个阶段调了哪个 skill；"
@@ -2361,6 +2534,33 @@ def build_parser() -> argparse.ArgumentParser:
     pspru.add_argument("--apply", action="store_true",
                        help="真的删（缺省只列出将删的文件）")
     pspru.set_defaults(func=cmd_suppress)
+
+    pns = sub.add_parser(
+        "noise",
+        help="零散会话登记（P5-⑧）：判「不归任何主题」的会话写进 "
+             "sessions_noise，主题候选簇（candidates/keywords）会排除它们；"
+             "只写 meta 表、不动会话数据（可逆：删行即撤销）")
+    pnsub = pns.add_subparsers(dest="action", required=True)
+
+    pnl = pnsub.add_parser("list", help="列出已登记的零散会话（何时 / 为什么）")
+    pnl.add_argument("--meta", default="topics_meta.db",
+                     help="零散表所在 meta 库（默认 topics_meta.db）")
+    pnl.set_defaults(func=cmd_noise)
+
+    pna = pnsub.add_parser(
+        "add", help="登记零散会话（幂等：已在表里的 sid 跳过；"
+                    "默认 dry-run，--apply 才写）")
+    pna.add_argument("--sid", action="append", dest="sids", required=True,
+                     metavar="SID",
+                     help="库口径 sid（`source:session_id`，即 search 输出的 "
+                          "[sid]）；可重复给多个")
+    pna.add_argument("--reason", default="",
+                     help="为什么判零散（写进零散表，供日后复查）")
+    pna.add_argument("--meta", default="topics_meta.db",
+                     help="零散表所在 meta 库（默认 topics_meta.db）")
+    pna.add_argument("--apply", action="store_true",
+                     help="真的写（缺省只预演：列将登记的 sid / 已在表跳过）")
+    pna.set_defaults(func=cmd_noise)
 
     pcd = sub.add_parser("cards",
                          help="知识卡片校验（§8 frontmatter 规范 + 锚点有效性；"
@@ -2696,6 +2896,10 @@ def build_parser() -> argparse.ArgumentParser:
                      default="cards_meta.db",
                      help="卡片复核台账 meta 库（/api/cards 据此隐去已裁决警告；"
                           "库不存在=零感知。人裁过的不许再烦人）")
+    pap.add_argument("--reports-dir", dest="reports_dir", default=None,
+                     help="日报目录（可选；启用 /api/report-daily 端点，"
+                          "缺省=仓根 docs/reports；文件名白名单 "
+                          "daily-YYYY-MM-DD.md）")
     pap.set_defaults(func=cmd_api_serve)
 
     return p

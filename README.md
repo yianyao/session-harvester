@@ -47,10 +47,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 888 tests ... OK
+# ① 权威基线：全套件。期望 Ran 902 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=847 failures=0 errors=61 skipped=5
+# ② 无 PyYAML 门禁：期望 GATE ran=861 failures=0 errors=61 skipped=5
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -59,11 +59,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 888 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=847 failures=0 errors=61 skipped=5** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 902 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=861 failures=0 errors=61 skipped=5** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（888 vs 847）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（902 vs 861）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
 另有 `skipped=5`（v0.74）：其中 `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测
@@ -77,7 +77,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 888，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 902，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 
 **"红一次又好了"先查并发**：同一工作区里另有进程正在编辑文件时跑 ①/③，
@@ -464,6 +464,8 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `report-tools` | 工具调用/失败率统计 |
 | `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表；v0.23 追加 **活跃 skill×数据源×类别** 交叉表，API 字段 `cross_skill`） |
 | `report-chains` | 工具链失败模式报告（长回合/同工具连击/序列循环/空转） |
+| `report-daily` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |
+| `noise` | **零散会话登记**（v0.81 P5-⑧）：判「不归任何主题」的会话写进 topics_meta 的 sessions_noise 表，主题候选簇（candidates/keywords）不再收它们。**只写 meta 表、不动会话数据**（可逆：删行即撤销）——与 suppress 删仓内副本是两码事。`add` 幂等（已在表跳过）、默认 dry-run、`--apply` 才写；`list` 列出已登记（何时/为什么）。**候选只列不裁决**：归宿（班规条目/问题清单）由人定 |
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
 | `report-skill` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
 | `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |
@@ -852,6 +854,28 @@ python -m harvester report-tools --sources sources.json --out tools_report.md
 # 错误三分类（G2）：env（环境）/ tool_interface（用法）/ context（目标状态）
 # + 开场/中途/收尾位置分桶 + 归一模式聚类（带锚点与原文；模式行附未解决数）
 python -m harvester report-errors --db harvester.db --out errors_report.md
+
+# 每日数据速览（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段一次产出
+# （只读；四队列与 view 工作台同源，快照口径；台账缺失/无 steps 均诚实空态）
+python -m harvester report-daily --db harvester.db \
+    --meta suggestions_meta.db \
+    --out docs/reports/daily-$(date +%F).md
+
+# 每日自动（schedule 配方）：工作区自动化建一条 cron 任务
+#   cron:  30 8 * * *
+#   message:
+#     在 session-harvester 仓根运行：
+#     python -m harvester report-daily --db harvester.db \
+#         --meta suggestions_meta.db --out docs/reports/daily-$(date +%F).md
+#     成功后回复一行文件路径即可，不要展开内容。
+# 再给 view 起服时加 --reports-dir docs/reports，今日工作台顶部
+# 就有「昨日报告」卡（/api/report-daily，文件名白名单 daily-YYYY-MM-DD.md）。
+
+# 零散会话登记（v0.81 P5-⑧）：判「不归任何主题」的会话不再进主题候选簇
+# （只写 meta 表、不动会话数据，可逆；幂等；默认 dry-run，--apply 才写）
+python -m harvester noise list --meta topics_meta.db
+python -m harvester noise add --meta topics_meta.db \
+    --sid dsh:xxxxxxxx --sid dsh:yyyyyyyy --reason "闲聊会话，不入主题" --apply
 
 # AGENTS.md 条目建议（G2 闭环）：从错误模式产出候选条目（建议池，
 # 每条附锚点+原文证据；**绝不直接改 AGENTS.md**，人工审阅后并入）

@@ -666,13 +666,64 @@ def api_export_analysis(con: sqlite3.Connection, db: Path,
     return obj, md
 
 
+# ---------------------------------------------------------------- 日报端点
+#
+# P5-⑤（用户 2026-10-16 批准）：view 今日工作台的「昨日报告」卡取数口。
+# 访问面在启动时钉死（--reports-dir，缺省=仓根 docs/reports）；文件名走
+# **白名单** `daily-YYYY-MM-DD.md`——URL 只允许出现在日期段，杜绝路径
+# 穿越读任意文件。端点只读，绝不写。
+
+_DAILY_RE = re.compile(r"daily-(\d{4}-\d{2}-\d{2})\.md")
+
+
+def default_reports_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / "docs" / "reports"
+
+
+def api_report_daily(reports_dir: Path | None, qs: dict) -> dict:
+    """日报读取（found=False 属**诚实空态**，不是错误）。
+
+    ?date=YYYY-MM-DD 指定某天；缺省取最新一份（文件名字典序=时间序）。
+    """
+    d = Path(reports_dir) if reports_dir else default_reports_dir()
+    base = {"dir": str(d)}
+    if not d.is_dir():
+        return {**base, "found": False,
+                "hint": "日报目录不存在——先跑 `harvester report-daily "
+                        "--out <dir>/daily-YYYY-MM-DD.md`（README 有配方）"}
+    date = str(qs.get("date") or "").strip()
+    if date:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            raise ValueError("date 非法（要 YYYY-MM-DD）")
+        p = d / f"daily-{date}.md"
+        if not p.is_file():
+            return {**base, "found": False, "date": date,
+                    "hint": f"daily-{date}.md 不存在（report-daily "
+                            "--out 到该路径即生成）"}
+    else:
+        hits = sorted((p for p in d.iterdir()
+                       if p.is_file() and _DAILY_RE.fullmatch(p.name)),
+                      key=lambda p: p.name, reverse=True)
+        if not hits:
+            return {**base, "found": False,
+                    "hint": "目录里还没有 daily-YYYY-MM-DD.md——"
+                            "主仓 README「每日速览」有 schedule 配方"}
+        p = hits[0]
+    md = p.read_text(encoding="utf-8")
+    return {**base, "found": True,
+            "date": _DAILY_RE.fullmatch(p.name).group(1),
+            "path": str(p), "n_chars": len(md),
+            "md_head": md[:4000]}  # 卡片只渲染头部；全文走文件
+
+
 def make_handler(db: Path, token: str | None,
                  cards_root: Path | None = None,
                  suggestions_meta: Path | None = None,
                  topics_meta: Path | None = None,
                  chain_root: Path | None = None,
                  keywords_meta: Path | None = None,
-                 reviews_meta: Path | None = None):
+                 reviews_meta: Path | None = None,
+                 reports_dir: Path | None = None):
     """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。"""
 
     class ApiHandler(BaseHTTPRequestHandler):
@@ -787,6 +838,11 @@ def make_handler(db: Path, token: str | None,
                         self._json({"error": str(e)}, 400)
                     except FileNotFoundError as e:
                         self._json({"error": str(e)}, 404)
+                elif path == "/api/report-daily":
+                    try:
+                        self._json(api_report_daily(reports_dir, qs))
+                    except ValueError as e:
+                        self._json({"error": str(e)}, 400)
                 else:
                     self._json({"error": f"未知路由 {path}（本服务只提供 "
                                          "/api/* 只读查询）"}, 404)
@@ -810,7 +866,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
         topics_meta: Path | None = None,
         chain_root: Path | None = None,
         keywords_meta: Path | None = None,
-        reviews_meta: Path | None = None) -> int:
+        reviews_meta: Path | None = None,
+        reports_dir: Path | None = None) -> int:
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
@@ -837,7 +894,8 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
                                                          topics_meta,
                                                          chain_root,
                                                          keywords_meta,
-                                                         reviews_meta))
+                                                         reviews_meta,
+                                                         reports_dir))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
     print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "session-harvester"
-version = "0.75.0"
+version = "0.76.0"
 description = "AI 会话历史提取·检索·蒸馏套件（本地、只读、零依赖核心）"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }

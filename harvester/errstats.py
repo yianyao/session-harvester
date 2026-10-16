@@ -7,6 +7,10 @@
   相对位置近似，steps 无用户轮次边界）。
 
 三分类语义（写入代码与文档，勿混）：
+【N1 术语标注】env/tool_interface/context/unclassified 是**本项目自定义分类**
+（行业无直接对应；官方可观测性惯例参考 OpenTelemetry SemConv 的
+`error.type`/`exception.type`——custom 值须由使用方文档化，本项目文档化处
+= docs/TERMINOLOGY.md §2.2），UI 与文档凡出现须带此标注：
 - env            环境问题：沙箱/权限撤销/OS/网络/宿主限制——agent 无法自愈；
 - tool_interface 工具用法问题：参数错、先改后读、盲猜行号——改用法即消；
 - context        目标状态与预期不符：文件已删/资产失效——需重新侦察目标；
@@ -383,6 +387,8 @@ def render_report(errors: list[dict], meta: dict,
         f"（失败率 {n / max(meta['total_steps'], 1) * 100:.1f}%），"
         f"涉及 {meta['sessions']} 个会话", "",
         "## 三分类分布", "",
+        "> 类别为本项目自定义分类（行业无直接对应；官方惯例参考 "
+        "OpenTelemetry error.type，见 docs/TERMINOLOGY.md §2.2）", "",
         "| 类别 | 次数 | 占比 | 语义 |",
         "|---|---:|---:|---|",
         "| env | %d | %.0f%% | 环境：沙箱/权限/OS/网络/宿主限制，agent 无法自愈 |" % (
