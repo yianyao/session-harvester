@@ -7,6 +7,13 @@
   args 只在原始数据源，故按需回源提取；
 - MVP 只接 dsh 源（实测登记）；其余源一律 NotImplementedError——
   绝不臆测解析（适配器契约 §2.3）；
+- v0.51（S2，2026-10-16 扩源实测**判负登记**）：豆包/元宝/千问 raw 全量
+  探针后均无"完整产物"形态——豆包 10019 op=2 的 display_content.operation
+  是 `Write {json}` 但 args 为**服务端截断预览**（~4000 字符 + 尾部拼接
+  "内容较长，暂不支持展示完整内容"，全文在沙箱不落盘）；10030 的 brief
+  恒 1000 字符截断；op=1 是 Read；元宝/千问为纯附件引用（fileName+url）。
+  截断冒充全文即误导 → 三源一律不提取（test_v59 钉住截断事实：导出
+  格式若变会红，届时重新登记扩源）；
 - 锚点 = (sid, seq)；turn 由消费侧按 reader.split_turns 口径推导，
   本表不冗余存储（契约 §1 T 轨锚点条款）。
 """
@@ -112,6 +119,34 @@ def _iter_dsh_lines(sid: str):
     yield from ad._lines(f)
 
 
+def _load_doubao_detail(sid: str) -> dict:
+    """doubao-raw sid → detail dict（回源；v0.51 判负登记后仅测试用）。"""
+    from .adapters.doubao_raw import DoubaoRawAdapter
+    rel = sid[len("doubao-raw:"):]
+    ad = DoubaoRawAdapter()
+    d = ad._find_dir()
+    if d is None:
+        raise KeyError("豆包采集目录不存在（corpus/doubao_raw）")
+    f = d / f"detail_{rel}.json"
+    if not f.is_file():
+        raise KeyError(f"豆包 detail 不存在: {f}")
+    return json.loads(f.read_text(encoding="utf-8"))
+
+
+def _extract_records(sid: str) -> list[dict]:
+    """sid → 提取记录（v0.51 仅 dsh；未登记源 NotImplementedError）。
+
+    doubao-raw/yuanbao-raw/qianwen-raw 的实测判负依据见模块 docstring
+    （v0.51 S2）：截断预览冒充全文即误导，宁守空态。"""
+    src = sid.split(":", 1)[0]
+    if src == "dsh":
+        return extract_dsh_records(list(_iter_dsh_lines(sid)))
+    raise NotImplementedError(
+        f"源 {src!r} 的产物提取未实测登记或实测判负（2026-10-16：豆包 "
+        "op2 JSON 截断/10030 brief 截断、元宝千问纯附件引用），"
+        "不臆测解析（适配器契约 §2.3）")
+
+
 def extract_session(meta_path: Path, db: Path, sid: str) -> int:
     """单会话提取（重建式幂等：先删该 sid 旧行再写入）。返回写入条数。"""
     meta_path = ensure_artifacts_db(meta_path)
@@ -124,7 +159,7 @@ def extract_session(meta_path: Path, db: Path, sid: str) -> int:
         con.close()
     if row is None:
         raise KeyError(f"索引库中找不到会话: {sid}")
-    recs = extract_dsh_records(list(_iter_dsh_lines(sid)))
+    recs = _extract_records(sid)
     con = _con(meta_path)
     try:
         con.execute("DELETE FROM artifacts WHERE sid=?", (sid,))
