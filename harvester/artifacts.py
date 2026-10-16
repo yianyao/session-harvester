@@ -119,32 +119,21 @@ def _iter_dsh_lines(sid: str):
     yield from ad._lines(f)
 
 
-def _load_doubao_detail(sid: str) -> dict:
-    """doubao-raw sid → detail dict（回源；v0.51 判负登记后仅测试用）。"""
-    from .adapters.doubao_raw import DoubaoRawAdapter
-    rel = sid[len("doubao-raw:"):]
-    ad = DoubaoRawAdapter()
-    d = ad._find_dir()
-    if d is None:
-        raise KeyError("豆包采集目录不存在（corpus/doubao_raw）")
-    f = d / f"detail_{rel}.json"
-    if not f.is_file():
-        raise KeyError(f"豆包 detail 不存在: {f}")
-    return json.loads(f.read_text(encoding="utf-8"))
-
-
 def _extract_records(sid: str) -> list[dict]:
-    """sid → 提取记录（v0.51 仅 dsh；未登记源 NotImplementedError）。
+    """sid → 提取记录（v0.51 仅 dsh；判负源显式拦截）。
 
-    doubao-raw/yuanbao-raw/qianwen-raw 的实测判负依据见模块 docstring
-    （v0.51 S2）：截断预览冒充全文即误导，宁守空态。"""
+    分派刻意**全部落回 _iter_dsh_lines**（测试以 monkeypatch 该函数为缝）：
+    判负三源在此拦下给足依据文案；其余未知源由 _iter_dsh_lines 的前缀
+    守卫拦（NotImplementedError）。doubao-raw/yuanbao-raw/qianwen-raw 的
+    实测判负依据见模块 docstring（v0.51 S2）：截断预览冒充全文即误导，
+    宁守空态。"""
     src = sid.split(":", 1)[0]
-    if src == "dsh":
-        return extract_dsh_records(list(_iter_dsh_lines(sid)))
-    raise NotImplementedError(
-        f"源 {src!r} 的产物提取未实测登记或实测判负（2026-10-16：豆包 "
-        "op2 JSON 截断/10030 brief 截断、元宝千问纯附件引用），"
-        "不臆测解析（适配器契约 §2.3）")
+    if src in ("doubao-raw", "yuanbao-raw", "qianwen-raw"):
+        raise NotImplementedError(
+            f"源 {src!r} 的产物提取实测判负（2026-10-16：豆包 op2 JSON "
+            "截断/10030 brief 截断、元宝千问纯附件引用），"
+            "不臆测解析（适配器契约 §2.3）")
+    return extract_dsh_records(list(_iter_dsh_lines(sid)))
 
 
 def extract_session(meta_path: Path, db: Path, sid: str) -> int:
