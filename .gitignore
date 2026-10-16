@@ -50,3 +50,9 @@ artifacts_meta.db
 *.db.bak*
 # 工程四件套按铁律 #1 留原地不入库（2026-10-13 会话 8c 误提交后纠正）
 _eng/
+
+# 审计/研究工作区与构建残留（2026-10-15 批次一：git add -A 防误吞）
+_audit/
+_research/
+session_harvester.egg-info/
+uv.lock

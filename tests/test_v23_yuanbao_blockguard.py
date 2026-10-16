@@ -30,7 +30,7 @@ from pathlib import Path
 from harvester.adapters.yuanbao_raw import (KNOWN_BLOCK_TYPES,
                                            _KNOWN_BLOCK_TYPES, _conv_blocks)
 
-H = Path(r"C:\Users\yianyao\WorkBuddy\2026-10-05-08-38-51\session-harvester")
+H = Path(__file__).resolve().parents[1]  # 仓根（可迁移：不硬编码本机绝对路径）
 
 
 def _conv(blocks: list[dict], speaker: str = "ai") -> dict:

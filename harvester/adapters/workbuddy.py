@@ -2,7 +2,7 @@
 """WorkBuddy 本地工作区日志 Adapter。
 
 数据源（2026-10-05 实测验证）：
-- C:/Users/yianyao/WorkBuddy/<workspace>/.workbuddy/memory/YYYY-MM-DD.md
+- <home>/WorkBuddy/<workspace>/.workbuddy/memory/YYYY-MM-DD.md
   —— 每日工作日志，按工作区×日期为一个"会话"单元
 - 跨项目备忘 ~/.workbuddy/MEMORY.md 与项目级 MEMORY.md 属于提炼产物，
   不作为会话条目（避免与原始轨迹重复计数）。

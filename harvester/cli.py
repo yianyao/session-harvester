@@ -1889,8 +1889,10 @@ def main(argv=None) -> int:
 
 def _force_utf8_streams() -> None:
     """Windows 原版解释器默认 cp936，report 输出含 emoji/特殊 Unicode 标题重定向
-    到文件/管道时会 UnicodeEncodeError——统一 UTF-8（DSH 等已全局 UTF-8 则无感）。"""
-    for stream in (sys.stdout, sys.stderr):
+    到文件/管道时会 UnicodeEncodeError——统一 UTF-8（DSH 等已全局 UTF-8 则无感）。
+    v0.75 补 stdin：mcp-serve 逐行读 sys.stdin，GBK 环境下中文 JSON-RPC 请求
+    会 UnicodeDecodeError 直接崩（换机即触发，用户裁决可迁移红线）。"""
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except AttributeError:  # 非 TextIOWrapper（如测试桩）
