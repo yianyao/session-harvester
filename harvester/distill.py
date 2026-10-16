@@ -105,6 +105,26 @@ updated: {today}
 
 # ---------- 聚合 ----------
 
+def _stream_out(out_path: Path, header_fn, body_iter) -> None:
+    """逐会话流式落盘（v0.51 S6，审计 c2 内存峰值项）。
+
+    body 逐段写临时文件（内存峰值=单会话，不再整体攒 sections 大列表）；
+    body 流完才经 header_fn 取头部（来源文件数/总字符数在流中累计，必须
+    后算）；最后 header + 流式拷贝组装正式文件，临时文件即用即删。"""
+    tmp = out_path.with_name(out_path.name + ".part")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            for sec in body_iter:
+                f.write(sec)
+                f.write("\n")
+        with open(out_path, "w", encoding="utf-8", newline="\n") as out, \
+                open(tmp, "r", encoding="utf-8") as src:
+            out.write(header_fn())
+            shutil.copyfileobj(src, out)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def corpus_from_sources(sources: dict | None, out_path: Path,
                         include_notes: bool = False) -> dict:
     """从全部可用数据源实时聚合所有会话为单一语料文件。"""
@@ -113,35 +133,39 @@ def corpus_from_sources(sources: dict | None, out_path: Path,
     out_path.parent.mkdir(parents=True, exist_ok=True)
     n_files = 0
     total_chars = 0
-    sections: list[str] = []
-    for it in items:
-        ad = adapters.get(it["adapter"])
-        if ad is None:
-            continue
-        try:
-            rec = ad.load_session(it["session_id"])
-        except NotImplementedError:
-            continue
-        except Exception as e:  # noqa: BLE001 - 单条失败不拖垮聚合
-            sections.append(f"<!-- WARN: {it['session_id']} 加载失败: {e} -->\n")
-            continue
-        date = (rec.created_at or rec.updated_at or "")[:10]
-        head = (f"<!-- SRC: {rec.source} | {rec.session_id} | {rec.title} | {date} -->\n\n"
-                f"# {rec.title}\n\n")
-        body_parts = [head]
-        for m in rec.messages:
-            if not include_notes and m.role not in ("user", "assistant"):
+
+    def body_iter():
+        nonlocal n_files, total_chars
+        for it in items:
+            ad = adapters.get(it["adapter"])
+            if ad is None:
                 continue
-            ts = f" · {m.timestamp}" if m.timestamp else ""
-            body_parts.append(f"## [{m.role}]{ts}\n\n{normalize_text(m.text).rstrip()}\n\n")
-        sec = "\n".join(body_parts)
-        sections.append(sec)
-        n_files += 1
-        total_chars += len(sec)
-    header = (f"# 会话语料（{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}）\n\n"
-              f"- 来源文件数：{n_files}\n- 总字符数：{total_chars}\n\n---\n\n")
-    out_path.write_text(header + "\n".join(sections),
-                        encoding="utf-8", newline="\n")
+            try:
+                rec = ad.load_session(it["session_id"])
+            except NotImplementedError:
+                continue
+            except Exception as e:  # noqa: BLE001 - 单条失败不拖垮聚合
+                yield f"<!-- WARN: {it['session_id']} 加载失败: {e} -->\n"
+                continue
+            date = (rec.created_at or rec.updated_at or "")[:10]
+            head = (f"<!-- SRC: {rec.source} | {rec.session_id} | {rec.title} | {date} -->\n\n"
+                    f"# {rec.title}\n\n")
+            body_parts = [head]
+            for m in rec.messages:
+                if not include_notes and m.role not in ("user", "assistant"):
+                    continue
+                ts = f" · {m.timestamp}" if m.timestamp else ""
+                body_parts.append(f"## [{m.role}]{ts}\n\n{normalize_text(m.text).rstrip()}\n\n")
+            sec = "\n".join(body_parts)
+            n_files += 1
+            total_chars += len(sec)
+            yield sec
+
+    def header_fn():
+        return (f"# 会话语料（{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}）\n\n"
+                f"- 来源文件数：{n_files}\n- 总字符数：{total_chars}\n\n---\n\n")
+
+    _stream_out(out_path, header_fn, body_iter())
     return {"files": n_files, "chars": total_chars, "out": str(out_path)}
 
 
@@ -149,34 +173,38 @@ def corpus_from_exports(exports_root: Path, out_path: Path) -> dict:
     """从 export 产物目录聚合（读各会话的 .json 结构化文件）。"""
     jsons = sorted(Path(exports_root).rglob("*.json"))
     jsons = [p for p in jsons if p.name != "export_manifest.json"]
-    sections: list[str] = []
     n_files = 0
     total_chars = 0
-    for p in jsons:
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            sections.append(f"<!-- WARN: {p} 解析失败: {e} -->\n")
-            continue
-        date = (data.get("created_at") or "")[:10]
-        head = (f"<!-- SRC: {data.get('source')} | {data.get('session_id')} | "
-                f"{data.get('title')} | {date} | export:{p.name} -->\n\n"
-                f"# {data.get('title')}\n\n")
-        parts = [head]
-        for m in data.get("messages", []):
-            if m.get("role") not in ("user", "assistant"):
+
+    def body_iter():
+        nonlocal n_files, total_chars
+        for p in jsons:
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                yield f"<!-- WARN: {p} 解析失败: {e} -->\n"
                 continue
-            ts = f" · {m.get('timestamp')}" if m.get("timestamp") else ""
-            parts.append(f"## [{m['role']}]{ts}\n\n{normalize_text(m.get('text', '')).rstrip()}\n\n")
-        sec = "\n".join(parts)
-        sections.append(sec)
-        n_files += 1
-        total_chars += len(sec)
-    header = (f"# 会话语料（export 聚合，{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}）\n\n"
-              f"- 来源文件数：{n_files}\n- 总字符数：{total_chars}\n\n---\n\n")
+            date = (data.get("created_at") or "")[:10]
+            head = (f"<!-- SRC: {data.get('source')} | {data.get('session_id')} | "
+                    f"{data.get('title')} | {date} | export:{p.name} -->\n\n"
+                    f"# {data.get('title')}\n\n")
+            parts = [head]
+            for m in data.get("messages", []):
+                if m.get("role") not in ("user", "assistant"):
+                    continue
+                ts = f" · {m.get('timestamp')}" if m.get("timestamp") else ""
+                parts.append(f"## [{m['role']}]{ts}\n\n{normalize_text(m.get('text', '')).rstrip()}\n\n")
+            sec = "\n".join(parts)
+            n_files += 1
+            total_chars += len(sec)
+            yield sec
+
+    def header_fn():
+        return (f"# 会话语料（export 聚合，{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}）\n\n"
+                f"- 来源文件数：{n_files}\n- 总字符数：{total_chars}\n\n---\n\n")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(header + "\n".join(sections),
-                        encoding="utf-8", newline="\n")
+    _stream_out(out_path, header_fn, body_iter())
     return {"files": n_files, "chars": total_chars, "out": str(out_path)}
 
 
