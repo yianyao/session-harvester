@@ -121,8 +121,9 @@ class TestContentAndTime(unittest.TestCase):
         s = _norm_time(1704067200)
         self.assertIn("2024-01-01", s)          # epoch 秒 → 本地 ISO
         self.assertIn("2024", _norm_time(1704067200000))
+        # v0.51 S4（M3）：带时区 ISO 统一换算本地时区，不再原样透传
         self.assertEqual(_norm_time("2026-01-01T00:00:00Z"),
-                         "2026-01-01T00:00:00Z")
+                         "2026-01-01 08:00:00")
         self.assertIsNone(_norm_time(None))
 
 

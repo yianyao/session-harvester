@@ -22,12 +22,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..models import Message, SessionRecord, normalize_text, to_local_ts
-from .base import BaseAdapter, DetectReport, open_ro_sqlite
+from .base import BaseAdapter, DetectReport, open_ro_sqlite, safe_join
 
 CODE_GLOBAL = Path(os.environ.get(
     "APPDATA", Path.home() / "AppData" / "Roaming")) / "Code" / "User" / "globalStorage"
@@ -218,19 +217,9 @@ def _ws_index(wshash_dir: Path) -> dict:
         con.close()
 
 
-def _fmt_ts(v) -> str | None:
-    """时间戳归一化：容忍 epoch(ms/s) 与 ISO 字符串两种来源。
-
-    epoch 按**本地时区**渲染：纲要日期须与用户墙钟一致（用 UTC 会差一天）。
-    """
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        # epoch 秒 ~ 1e9，毫秒 ~ 1e12
-        if v > 1e11:
-            v = v / 1000.0
-        return datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
-    return str(v)
+# v0.51 S4 收敛到 models.to_local_ts（审计 M13）：原字符串分支原样透传，
+# UTC ISO 直接进纲要；epoch 渲染语义本就相同。
+_fmt_ts = to_local_ts
 
 
 class VscodeCopilotAdapter(BaseAdapter):
@@ -414,7 +403,7 @@ class VscodeCopilotAdapter(BaseAdapter):
                 extra={"cwd": cwd, "agent": agent, "origin": "session-store.db"},
             )
         # empty window jsonl
-        f = self.empty_dir / f"{sid}.jsonl"
+        f = safe_join(self.empty_dir, f"{sid}.jsonl")
         msgs = []
         lines = self._read_text(f).splitlines()
         for line in lines:
@@ -444,8 +433,8 @@ class VscodeCopilotAdapter(BaseAdapter):
         结构为逆向所得的补丁日志，重构按行容错；标题/时间取 index，
         缺失回退文件 mtime。
         """
-        wsdir = self.ws_root / wshash
-        f = wsdir / "chatSessions" / f"{sid}.jsonl"
+        wsdir = safe_join(self.ws_root, wshash)
+        f = safe_join(wsdir, "chatSessions", f"{sid}.jsonl")
         if not f.is_file():
             raise KeyError(f"工作区会话文件不存在: {f}")
         idx = _ws_index(wsdir).get(sid) or {}

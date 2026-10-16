@@ -34,6 +34,21 @@ def _cleanup_tmp_dirs() -> None:
 atexit.register(_cleanup_tmp_dirs)
 
 
+def safe_join(root: Path, *parts: str) -> Path:
+    """sid/rel → 数据根下路径的守卫拼接（审计 M18 族 B，v0.51 S4）。
+
+    session_id 可能来自外部（导入的索引包、手写脚本、下游工具回传），
+    直接 `root / f"detail_{sid}.json"` 这类拼接可越出数据根目录读任意
+    文件并回显到导出。resolve 后必须仍在 root 之内，否则 KeyError
+    （fail loud，不回退不吞）。parts 多段时段内 "/" 与多参数等价。
+    """
+    root = Path(root).resolve()
+    p = root.joinpath(*parts).resolve()
+    if not p.is_relative_to(root):
+        raise KeyError(f"session id 越出数据根（拒绝拼接）: {parts!r} → {p}")
+    return p
+
+
 def open_ro_sqlite(db: Path) -> sqlite3.Connection:
     """只读打开 SQLite 库。
 

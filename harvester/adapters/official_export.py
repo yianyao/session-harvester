@@ -64,7 +64,9 @@ def locate_export_file(candidates: list[Path],
             try:
                 with zipfile.ZipFile(p) as z:
                     for n in z.namelist():
-                        if n.endswith(filename):
+                        # v0.51 S4（审计 M5）：endswith 会把 user_conversations.json
+                        # 等尾部同名的成员误命中——按路径段精确匹配。
+                        if n == filename or n.endswith("/" + filename):
                             return p, n
             except zipfile.BadZipFile:
                 continue

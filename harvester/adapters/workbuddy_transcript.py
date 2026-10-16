@@ -34,7 +34,7 @@ from collections import Counter
 from pathlib import Path
 
 from ..models import Message, SessionRecord, normalize_text, to_local_ts
-from .base import BaseAdapter, DetectReport
+from .base import BaseAdapter, DetectReport, safe_join
 
 WB_PROJECTS = Path(os.environ.get(
     "USERPROFILE", str(Path.home()))) / ".workbuddy" / "projects"
@@ -180,7 +180,7 @@ class WorkBuddyTranscriptAdapter(BaseAdapter):
 
     def load_session(self, session_id: str) -> SessionRecord:
         rel = session_id  # 相对 projects 根的 posix 路径
-        f = self.root / Path(*rel.split("/"))
+        f = safe_join(self.root, *rel.split("/"))
         if not f.is_file():
             raise KeyError(f"轨迹文件不存在: {f}")
         lines, bad = self._scan_lines(f)

@@ -32,11 +32,10 @@ verify/qianwen_detail_harvest.py）：
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 
-from ..models import Message, SessionRecord, normalize_text
-from .base import BaseAdapter, DetectReport
+from ..models import Message, SessionRecord, normalize_text, to_local_ts
+from .base import BaseAdapter, DetectReport, safe_join
 
 HOW_TO_HARVEST = [
     "千问数据需登录态采集：verify/cdp_driver.py（CDP 驱动）+ verify/qianwen_detail_harvest.py",
@@ -46,17 +45,8 @@ HOW_TO_HARVEST = [
 ]
 
 
-def _norm_time(v) -> str | None:
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        if v > 1e12:   # epoch 毫秒
-            v = v / 1000.0
-        if v > 1e9:    # epoch 秒
-            return datetime.fromtimestamp(v).astimezone().isoformat()
-        return None
-    s = str(v).strip()
-    return s or None
+# v0.51 S4 收敛到 models.to_local_ts（原四份漂移实现之一，审计 H2/M3）。
+_norm_time = to_local_ts
 
 
 def _note(text: str, ts: str | None) -> Message:
@@ -219,11 +209,21 @@ class QianwenRawAdapter(BaseAdapter):
         d = self._find_dir()
         if d is None:
             raise KeyError(f"千问采集目录不存在: {session_id}")
-        p = d / f"detail_{session_id}.json"
+        p = safe_join(d, f"detail_{session_id}.json")
         if not p.is_file():
             raise KeyError(f"会话不存在: {session_id}")
-        j = json.loads(p.read_text(encoding="utf-8"))
-        messages, warns = _parse_detail(j)
+        warns: list[str] = []
+        try:
+            j = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            warns.append(f"detail JSON 解析失败，按空会话交付: {e}")
+            j = {}
+        if not isinstance(j, dict):
+            warns.append(
+                f"detail 顶层非对象（{type(j).__name__}），按空会话交付")
+            j = {}
+        messages, w2 = _parse_detail(j)
+        warns.extend(w2)
         if warns:
             self._parse_warns.extend(warns[:5])
         m = self._ensure_list_meta().get(session_id, {})

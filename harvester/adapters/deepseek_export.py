@@ -28,10 +28,9 @@ B.（2026-10-06 真机核验，官方导出 ZIP：user.json + conversations.json
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
-from ..models import Message, SessionRecord, normalize_text
+from ..models import Message, SessionRecord, normalize_text, to_local_ts
 from .base import BaseAdapter, DetectReport
 # 文件定位 / ZIP 读取 / 顶层形态校验 / 会话 id 提取与 official_export 同构，直接复用
 from .official_export import (
@@ -50,18 +49,10 @@ HOW_TO_EXPORT = [
 ]
 
 
-def _norm_time(v) -> str | None:
-    """时间戳归一化：容忍 epoch(ms/s) 与 ISO 字符串。输出本地时区 ISO。"""
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        if v > 1e11:  # epoch 毫秒
-            v = v / 1000.0
-        if v > 1e9:   # epoch 秒
-            return datetime.fromtimestamp(v).astimezone().isoformat()
-        return None
-    s = str(v).strip()
-    return s or None
+# v0.51 S4 收敛到 models.to_local_ts（H2 根修 + M3 口径统一）：原实现
+# 字符串分支原样透传（不转时区/不规整）、数值分支对越界时间戳在 Windows
+# 抛未捕获 OSError——两者都由 to_local_ts 覆盖。
+_norm_time = to_local_ts
 
 
 def _content_text(content) -> tuple[str, list[str]]:

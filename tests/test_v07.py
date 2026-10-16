@@ -60,7 +60,8 @@ class TestDsWalk(unittest.TestCase):
         self.assertEqual(meta["models"], ["deepseek-chat", "deepseek-reasoner"])
         self.assertEqual(meta["branch_points"], 0)
         # 时间戳落在 user/assistant 上，think note 不带时间
-        self.assertEqual(msgs[0].timestamp, "2026-10-01T10:00:00+08:00")
+        # （v0.51 S4：统一 to_local_ts 口径，输出 '%Y-%m-%d %H:%M:%S'）
+        self.assertEqual(msgs[0].timestamp, "2026-10-01 10:00:00")
         self.assertIsNone(msgs[1].timestamp)
 
     def test_regen_branch_picks_latest(self):
@@ -234,13 +235,13 @@ class TestAdapterMappingForm(unittest.TestCase):
         self.assertEqual(rep.session_count, 1)
         items = ad.list_sessions()
         self.assertEqual(items[0]["message_count"], 2)
-        self.assertEqual(items[0]["created_at"],
-                         "2025-02-07T13:30:52.443000+08:00")
+        # v0.51 S4：统一 to_local_ts 口径（原 deepseek 透传 ISO+微秒）
+        self.assertEqual(items[0]["created_at"], "2025-02-07 13:30:52")
         rec = ad.load_session("conv-real-1")
         self.assertEqual(rec.extra["models"], ["deepseek-chat"])
         self.assertEqual(rec.extra["branch_points"], 0)
         self.assertFalse(rec.extra["lossy"])
-        self.assertEqual(rec.created_at, "2025-02-07T13:30:52.443000+08:00")
+        self.assertEqual(rec.created_at, "2025-02-07 13:30:52")
 
     def test_legacy_messages_form_still_works(self):
         # 形态 A（messages 数组）回归：mapping 缺席时仍走旧逻辑
@@ -256,9 +257,10 @@ class TestAdapterMappingForm(unittest.TestCase):
 
 
 class TestNormTimeISO(unittest.TestCase):
-    def test_iso_passthrough(self):
+    def test_iso_converts_local(self):
+        # v0.51 S4（M3）：带时区 ISO 换算本地时区，不再原样透传
         self.assertEqual(_norm_time("2025-02-07T13:30:52+08:00"),
-                         "2025-02-07T13:30:52+08:00")
+                         "2025-02-07 13:30:52")
         self.assertIsNone(_norm_time("   "))
 
 

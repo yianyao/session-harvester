@@ -40,7 +40,7 @@ import tempfile
 from pathlib import Path
 
 from ..models import Message, SessionRecord, normalize_text, to_local_ts
-from .base import BaseAdapter, DetectReport
+from .base import BaseAdapter, DetectReport, safe_join
 
 DSH_SESSIONS = Path(os.environ.get(
     "USERPROFILE", str(Path.home()))) / ".dsh" / "sessions"
@@ -461,7 +461,7 @@ class DshAdapter(BaseAdapter):
 
     def load_session(self, session_id: str) -> SessionRecord:
         rel = session_id
-        f = self.root / Path(*rel.split("/"))
+        f = safe_join(self.root, *rel.split("/"))
         if not f.is_file():
             raise KeyError(f"DSH 会话不存在: {f}")
         lines = self._lines(f)

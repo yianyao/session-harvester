@@ -23,12 +23,24 @@ _EPOCH_SEC_RE = re.compile(r"\d{10}(\.\d+)?$")
 _EPOCH_MS_RE = re.compile(r"\d{13}$")
 
 
+def _epoch_local(sec: float) -> str | None:
+    """epoch 秒 → 本地时区渲染；越界入参回 None（审计 H2，v0.51 S4）。
+
+    Windows 上 fromtimestamp 对越界/负值抛 OSError、巨值抛 OverflowError
+    ——原来是**未捕获异常**（deepseek 变型时间戳把 load_session 崩掉）。
+    时间戳形状但渲染不了的值按"无时间戳"处理（None），不臆造不抛。"""
+    try:
+        return datetime.fromtimestamp(sec).strftime("%Y-%m-%d %H:%M:%S")
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 def to_local_ts(v) -> "str | None":
     """时间戳统一到本地时区，输出 '%Y-%m-%d %H:%M:%S'。
 
     纲要按日期分目录，若各源混用 UTC/本地口径，同一天的会话会被分到
     两个目录（差一天）。规则：
-    - epoch 秒/毫秒（int/float/纯数字串）→ 按本地时区渲染；
+    - epoch 秒/毫秒（int/float/纯数字串）→ 按本地时区渲染（越界→None，H2）；
     - ISO 8601 带 Z 或偏移 → 换算到本地时区；
     - ISO 8601 无时区 → 视为本地时间（不硬猜来源时区），仅统一格式；
     - 其余（无法解析）→ 原样返回，交由上层兜底。
@@ -38,14 +50,14 @@ def to_local_ts(v) -> "str | None":
     if isinstance(v, (int, float)):
         if v > 1e11:  # epoch 毫秒
             v = v / 1000.0
-        return datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
+        return _epoch_local(v)
     s = str(v).strip()
     if not s:
         return None
     if _EPOCH_MS_RE.fullmatch(s):
-        return datetime.fromtimestamp(int(s) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        return _epoch_local(int(s) / 1000)
     if _EPOCH_SEC_RE.fullmatch(s):
-        return datetime.fromtimestamp(float(s)).strftime("%Y-%m-%d %H:%M:%S")
+        return _epoch_local(float(s))
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:

@@ -31,11 +31,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 
-from ..models import Message, SessionRecord, normalize_text
-from .base import BaseAdapter, DetectReport
+from ..models import Message, SessionRecord, normalize_text, to_local_ts
+from .base import BaseAdapter, DetectReport, safe_join
 
 HOW_TO_HARVEST = [
     "豆包数据需登录态采集（app-driven capture）：verify/doubao_harvest.py",
@@ -58,20 +57,9 @@ _BLOCK_NAMES = {
 }
 
 
-def _norm_time(v) -> str | None:
-    """豆包时间为 epoch 秒字符串。"""
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        if v > 1e9:
-            return datetime.fromtimestamp(v).astimezone().isoformat()
-        return None
-    s = str(v).strip()
-    if not s:
-        return None
-    if s.isdigit() and int(s) > 1e9:
-        return datetime.fromtimestamp(int(s)).astimezone().isoformat()
-    return s
+# v0.51 S4 收敛：豆包时间为 epoch 秒字符串（10 位），to_local_ts 数字串分支
+# 已覆盖；原四份漂移实现之一（审计 H2/M3）——输出形态与其他源统一。
+_norm_time = to_local_ts
 
 
 def _note(text: str, ts: str | None) -> Message:
@@ -248,11 +236,21 @@ class DoubaoRawAdapter(BaseAdapter):
         d = self._find_dir()
         if d is None:
             raise KeyError(f"豆包采集目录不存在: {session_id}")
-        p = d / f"detail_{session_id}.json"
+        p = safe_join(d, f"detail_{session_id}.json")
         if not p.is_file():
             raise KeyError(f"会话不存在: {session_id}")
-        j = json.loads(p.read_text(encoding="utf-8"))
-        messages, warns = _parse_detail(j)
+        warns: list[str] = []
+        try:
+            j = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            warns.append(f"detail JSON 解析失败，按空会话交付: {e}")
+            j = {}
+        if not isinstance(j, dict):
+            warns.append(
+                f"detail 顶层非对象（{type(j).__name__}），按空会话交付")
+            j = {}
+        messages, w2 = _parse_detail(j)
+        warns.extend(w2)
         if warns:
             self._parse_warns.extend(warns[:5])
         h = self._header(j, session_id)

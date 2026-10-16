@@ -24,6 +24,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from .adapters.base import safe_join
 from .adapters.dsh import DshAdapter
 from .models import to_local_ts
 
@@ -113,7 +114,7 @@ def _iter_dsh_lines(sid: str):
             "不臆测解析（适配器契约 §2.3）")
     rel = sid[len("dsh:"):]
     ad = DshAdapter()
-    f = ad.root / Path(*rel.split("/"))
+    f = safe_join(ad.root, *rel.split("/"))
     if not f.is_file():
         raise FileNotFoundError(f"dsh 原始文件不存在: {f}")
     yield from ad._lines(f)

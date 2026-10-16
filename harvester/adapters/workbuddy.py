@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 
 from ..models import Message, SessionRecord
-from .base import BaseAdapter, DetectReport
+from .base import BaseAdapter, DetectReport, safe_join
 
 WORKSPACE_ROOT = str(Path.home() / "WorkBuddy")
 LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
@@ -86,7 +86,7 @@ class WorkBuddyAdapter(BaseAdapter):
 
     def load_session(self, session_id: str) -> SessionRecord:
         ws, date = session_id.split("::", 1)
-        path = self.root / ws / ".workbuddy" / "memory" / f"{date}.md"
+        path = safe_join(self.root, ws, ".workbuddy", "memory", f"{date}.md")
         text = self._read_text(path)
         msgs = [Message(role="assistant", text=text, timestamp=date)]
         return SessionRecord(
