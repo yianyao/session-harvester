@@ -35,6 +35,7 @@ from pathlib import Path
 
 from .agent_suggest import _TEMPLATES, root_key_assign
 from .behstats import collect_skill_invocations
+from .dbmeta import ro_con
 from .errstats import collect_errors_from_db
 
 _CARDS_CAP = 20        # 旧坑重现列表上限
@@ -75,8 +76,9 @@ def collect_triage(db: Path, since_days: float | None = None,
     """产出蒸馏候选队列。返回 dict（render_triage 消费）。
 
     con：外部连接（api-serve 传入 mode=ro + authorizer 连接），供内部
-    错误扫描 / skill 扫描 / 高信号会话查询三处复用——缺省自开普通连接
-    （CLI 兼容）。传入时 db 参数仅透传给子 collector 的签名（同样忽略）。
+    错误扫描 / skill 扫描 / 高信号会话查询三处复用——缺省自开 mode=ro
+    连接（缺库 fail loud，v0.51 S3）。传入时 db 参数仅透传给子 collector
+    的签名（同样忽略）。
     """
     db = Path(db)
     cutoff = _cutoff(since_days)
@@ -159,10 +161,7 @@ def collect_triage(db: Path, since_days: float | None = None,
         })
 
     # ---- 4. 高信号会话 ----
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         # 相关子查询写法（per-session COUNT）在大库上是 O(会话数 × 全表)，
         # 1946 会话实测 170s；改为 GROUP BY 预聚合 JOIN（各表单次全扫），

@@ -29,6 +29,8 @@ import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
+from .dbmeta import ro_con
+
 SKILL_TOOLS = {"Skill", "skill"}
 _AFTER_STEPS = 12     # 行为链最多回看的 call 步数
 _CHAIN_LEN = 8        # 行为链展示截断
@@ -64,12 +66,10 @@ def collect_skill_invocations(db: Path,
     after_tools}；按 (sid, seq) 有序。
 
     con：外部连接（api-serve 传入 mode=ro + authorizer 连接，使 steps
-    全表扫描同样处于内核级只读之下）；缺省自开普通连接（CLI 兼容）。
+    全表扫描同样处于内核级只读之下）；缺省自开 mode=ro 连接（缺库
+    fail loud，v0.51 S3）。
     """
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         rows = con.execute(
             "SELECT st.sid, st.seq, st.ts, st.tool, st.phase, st.status, "

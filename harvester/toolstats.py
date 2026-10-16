@@ -23,6 +23,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from .dbmeta import ro_con
 from .errstats import clean_error_sample
 
 _CALL_RE = re.compile(r"^\[tool_call\]\s+([^\s:]+):")
@@ -160,17 +161,14 @@ def collect_stats_from_db(db: Path, since_days: float | None = None,
     --since_days 只统计最近 N 天（ts 'YYYY-MM-DD HH:MM:SS' 字典序即时间序；
     截断处跨界的重试对会漏配对，近似口径可接受）。
     con：外部连接（api-serve 传入 mode=ro + authorizer 连接）；缺省自开
-    普通连接（CLI 兼容）。传入时 db 参数被忽略。
+    mode=ro 连接（缺库 fail loud，v0.51 S3）。传入时 db 参数被忽略。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() - since_days * 86400))
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         if cutoff:
             rows = con.execute(
@@ -225,17 +223,15 @@ def collect_source_stats(db: Path, since_days: float | None = None,
     steps 只来自 agent harness 会话（workbuddy-transcript/dsh/autoclaw/
     vscode-copilot）；Chat 平台会话无工具遥测，天然不参与。
     注意：工具名词表因 harness 而异（如 Bash/pwsh/exec 都是执行类）。
-    con：外部连接（同 collect_stats_from_db 口径）。
+    con：外部连接（同 collect_stats_from_db 口径）；缺省自开 mode=ro
+    连接（缺库 fail loud，v0.51 S3）。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() - since_days * 86400))
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         if cutoff:
             rows = con.execute(
@@ -278,17 +274,15 @@ def collect_model_stats(db: Path, since_days: float | None = None,
     """按模型聚合工具统计（v0.15：sessions.model，transcript 源提供）。
 
     返回 {model: ToolStats}；无模型信息的源（model 为 NULL）不参与。
-    con：外部连接（同 collect_stats_from_db 口径）。
+    con：外部连接（同 collect_stats_from_db 口径）；缺省自开 mode=ro
+    连接（缺库 fail loud，v0.51 S3）。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() - since_days * 86400))
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         sql = ("SELECT st.tool, st.phase, st.status, st.error, s.model "
                "FROM steps st LEFT JOIN sessions s ON st.sid = s.sid ")

@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from .cards import REQUIRED_TYPES, _TYPE_HEADINGS
+from .dbmeta import ro_con
 
 _MAX_CHARS = 24000   # 会话原文默认预算（约 6-8k tokens）
 
@@ -40,9 +41,8 @@ frontmatter 必填字段（§8 冻结规范，全部必填）：
 
 
 def _fetch_session(db: Path, sid_query: str) -> sqlite3.Row:
-    """取会话行（优先精确 sid，其次 session_id）。"""
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    """取会话行（优先精确 sid，其次 session_id）。缺库 fail loud（S3）。"""
+    con, _ = ro_con(db)
     try:
         row = con.execute(
             "SELECT sid, source, session_id, title FROM sessions "
@@ -74,8 +74,7 @@ def render_transcript(db: Path, sid_query: str,
     db = Path(db)
     row = _fetch_session(db, sid_query)
     sid = row["sid"]
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
+    con, _ = ro_con(db)
     try:
         msgs = con.execute(
             "SELECT rowid AS rn, role, ts, text, raw FROM messages "

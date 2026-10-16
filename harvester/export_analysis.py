@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 from .behstats import collect_skill_invocations, render_skill_report, \
     skill_summary
-from .dbmeta import db_fingerprint
+from .dbmeta import db_fingerprint, ro_con
 from .errstats import classify_error, collect_errors_from_db, \
     normalize_error, pattern_stats, render_report as render_errors_md
 from .reader import split_turns
@@ -167,14 +167,12 @@ def build_analysis(db: Path, kind: str, *, con: sqlite3.Connection | None = None
 
     json_obj 已含 machineWrap 头；md 为人读 Markdown（复用各权威渲染）。
     kind 不合法 → ValueError；sessions 的 sid 不存在 → KeyError。
+    缺库 fail loud（ro_con 预检，v0.51 S3）。
     """
     if kind not in KINDS:
         raise ValueError(f"kind={kind!r} 不在 {list(KINDS)}")
     db = Path(db)
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         if kind == "errors":
             errors, meta = collect_errors_from_db(db, since_days=days, con=con)

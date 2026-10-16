@@ -51,6 +51,25 @@ def _fmt_ts(epoch: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch))
 
 
+def ro_con(db: Path, con: sqlite3.Connection | None = None
+           ) -> tuple[sqlite3.Connection, bool]:
+    """索引库只读连接收口（v0.51 S3，统计面统一走这里）。
+
+    con 透传（api-serve 传入 mode=ro + authorizer 连接，内核级只读）；
+    缺省时**存在性预检 + mode=ro 打开**——缺库 fail loud（FileNotFoundError），
+    绝不 `sqlite3.connect(path)` 静默建空库（原则③：坏库不许当空库用）。
+    返回 (con, own)；own=True 表示本函数自开，调用方负责 close。
+    """
+    if con is not None:
+        return con, False
+    db = Path(db)
+    if not db.is_file():
+        raise FileNotFoundError(f"索引库不存在: {db}（先运行 harvester index）")
+    c = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    c.row_factory = sqlite3.Row
+    return c, True
+
+
 def record_corpus_watermark(db: Path, wm: dict) -> None:
     """把"本次索引实际看到的语料水位"写进库（= STALE 判定的基准）。
 

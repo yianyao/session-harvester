@@ -38,6 +38,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from .dbmeta import ro_con
+
 CLASSES = ("env", "tool_interface", "context", "unclassified")
 
 # 分类规则：列表序 = 判定优先级。先 env 后 context 是刻意的——
@@ -158,17 +160,14 @@ def collect_errors_from_db(db: Path, since_days: float | None = None,
     --since_days 只统计最近 N 天（ts 为 'YYYY-MM-DD HH:MM:SS' 字符串，
     字典序即时间序）。
     con：外部连接（api-serve 传入 mode=ro + authorizer 连接，使 steps
-    全表扫描同样处于内核级只读之下）；缺省自开普通连接（CLI 兼容）。
-    传入时 db 参数被忽略。
+    全表扫描同样处于内核级只读之下）；缺省自开 mode=ro 连接（缺库
+    fail loud，v0.51 S3）。传入时 db 参数被忽略。
     """
     cutoff = None
     if since_days is not None:
         cutoff = time.strftime(
             "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - since_days * 86400))
-    own = con is None
-    if own:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
+    con, own = ro_con(db, con)
     try:
         if cutoff:
             rows = con.execute(
