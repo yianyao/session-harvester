@@ -26,6 +26,8 @@ v2 端点（仍然 api_version=1，只增不改）：
 - GET /api/cards                          G3 卡片校验（需 --cards-root）
 - GET /api/export-analysis?kind=&format=md|json&sids=  统一分析导出（P1-4，
   五类 kind，md/JSON 同源双出口；format=md 时响应 text/markdown）
+- GET /api/reports-index                报告目录 .md 清单（mtime 新→旧，P5 后续）
+- GET /api/report-get?name=             报告文件全文（纯文件名白名单+resolve 双保险）
 
 cards_root 仅来自启动参数（--cards-root）：访问面在启动时钉死，
 不接受 URL 参数指定任意目录——与"只读 + 白名单"同一安全哲学。
@@ -713,7 +715,70 @@ def api_report_daily(reports_dir: Path | None, qs: dict) -> dict:
     return {**base, "found": True,
             "date": _DAILY_RE.fullmatch(p.name).group(1),
             "path": str(p), "n_chars": len(md),
-            "md_head": md[:4000]}  # 卡片只渲染头部；全文走文件
+            "md_head": md[:4000]}  # 卡片只渲染头部；全文走 /api/report-get
+
+
+#: 报告文件名白名单：**纯文件名**（无路径分隔符）、.md 结尾、不以 . 开头
+#: ——配合 resolve 双保险（读之前必须仍在报告目录之下），杜绝路径穿越。
+_REPORT_NAME_RE = re.compile(r"[A-Za-z0-9._\-]+\.md")
+
+
+def api_reports_index(reports_dir: Path | None, qs: dict) -> dict:
+    """报告目录 .md 清单（报告族 md 索引页取数口，P5 后续）。
+
+    五报告（tools/errors/chains/skill-join/daily）各自 --out，文件名是
+    用户定的——所以这里**不臆造命名约定**，目录里有什么 .md 就列什么；
+    只列**文件**不列子目录；mtime 新→旧；daily-YYYY-MM-DD.md 顺带抽出
+    日期（前端标「日报」用）。目录不存在属诚实空态（found=False+hint）。
+    """
+    d = Path(reports_dir) if reports_dir else default_reports_dir()
+    base = {"dir": str(d)}
+    if not d.is_dir():
+        return {**base, "found": False,
+                "hint": "报告目录不存在——先跑 report-daily / report-* "
+                        "--out <dir>/xxx.md（README 有配方）"}
+    files = []
+    for p in d.iterdir():
+        if not p.name.endswith(".md") or not p.is_file():
+            continue  # 子目录/非 md/带后缀变体不入列
+        try:
+            st = p.stat()
+        except OSError:
+            continue  # 竞态删除等：宁缺毋滥
+        m = _DAILY_RE.fullmatch(p.name)
+        files.append({"name": p.name, "date": m.group(1) if m else None,
+                      "bytes": st.st_size,
+                      "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                             time.localtime(st.st_mtime)),
+                      "_mt": st.st_mtime})
+    files.sort(key=lambda f: f["_mt"], reverse=True)
+    for f in files:
+        del f["_mt"]
+    return {**base, "found": True, "count": len(files), "files": files}
+
+
+def api_report_get(reports_dir: Path | None, qs: dict) -> dict:
+    """报告文件全文（报告索引的「看全文」口；found=False 属诚实空态）。
+
+    ?name= 只收纯文件名（白名单 + resolve 后仍在报告目录之下，双保险），
+    与 report-daily 的日期白名单同一安全哲学：URL 只给文件名段，杜绝
+    路径穿越读任意文件。
+    """
+    d = Path(reports_dir) if reports_dir else default_reports_dir()
+    base = {"dir": str(d)}
+    name = str(qs.get("name") or "").strip()
+    if not name:
+        raise ValueError("缺 name 参数（报告文件名，须为 .md 纯文件名）")
+    if (name.startswith(".") or not _REPORT_NAME_RE.fullmatch(name)
+            or (d / name).resolve().parent != d.resolve()):
+        raise ValueError("name 非法（只收报告目录下的纯 .md 文件名）")
+    p = d / name
+    if not p.is_file():
+        return {**base, "found": False, "name": name,
+                "hint": f"{name} 不存在（/api/reports-index 可列现有报告）"}
+    md = p.read_text(encoding="utf-8")
+    return {**base, "found": True, "name": name, "path": str(p),
+            "n_chars": len(md), "md": md}
 
 
 def make_handler(db: Path, token: str | None,
@@ -841,6 +906,13 @@ def make_handler(db: Path, token: str | None,
                 elif path == "/api/report-daily":
                     try:
                         self._json(api_report_daily(reports_dir, qs))
+                    except ValueError as e:
+                        self._json({"error": str(e)}, 400)
+                elif path == "/api/reports-index":
+                    self._json(api_reports_index(reports_dir, qs))
+                elif path == "/api/report-get":
+                    try:
+                        self._json(api_report_get(reports_dir, qs))
                     except ValueError as e:
                         self._json({"error": str(e)}, 400)
                 else:
