@@ -7,23 +7,17 @@
 
 ---
 
-## 一、状态快照
+## 一、状态从哪来（本节**不记状态**）
 
-> 上一轮记忆整理时间：**2026-10-16**（来源：`$DSH_HOME/AGENTS.md` 整理前的快照）。
-> 凡标「快照值，未现场复核」的数字，**动手前必须现场重取**——记忆里交接口径第一句就是「提交号不要抄文档」。
+> 本文件只写**不会随进度变化**的东西：约定、坑、口径、文档位置。
+> 状态（做到哪了、下一件事、基线数字、提交号）**一律现场取**——写在这里就会变成旧地图。
 
-- **后端仓根**：`C:\Users\yianyao\WorkBuddy\2026-10-05-08-38-51\session-harvester`
-- **前端视图仓**：`C:\Users\yianyao\WorkBuddy\2026-10-05-08-38-51\harvester-view`
-- **推送判据（唯一）**：`git -C <仓> rev-list --count origin/main..HEAD` == **0**。
-  最后一次记录（快照值，未现场复核）：后端与 view 各有 **2** 个未推提交——有新网先 push。
-- **测试基线**：权威数字**只在 `README.md` 顶部「测试基线」一节**，由 `tests/test_v48_test_baseline.py` 真跑对账钉住。
-  快照值（未现场复核）：后端 **817 例全绿**；view **166 例 + 5 个 node 门**。
-- **最新冷启动交接**：`docs/HANDOFF-v0.49-next.md`（**新会话只读这一份即可开工**）。
-- **真库**（快照值，未现场复核）：410.3 MB / 1981 会话 / 74364 消息 / 44969 步骤 / 381 错误。
-- **下一件事**：
-  1. 真库首次 `suppress --apply`（用户点名 sid 才动；动手前先备份库 + `quick_check`）；
-  2. P4「反复叮嘱」探针：**先加前置过滤**（排除 system-reminder / 重复模板 / 长正文），再出候选清单给人看；
-  3. 未落库项：错误分类术语符合官方口径（见 §四）、view 关于 STALE 的可选显示。
+| 要什么 | 去哪拿 |
+|---|---|
+| 现在做到哪、下一件事、待裁决 | **本仓最新的交接文档**（见 §六 第 1 条，开工第一件事就是找它） |
+| 测试基线的权威数字 | `README.md` 顶部「测试基线」（有测试真跑对账钉住；改测试忘改 README → 它红） |
+| 提交/推送状态 | `git -C <仓> rev-list --count origin/main..HEAD`（== 0 才算推完；**提交号一律现取，别抄文档**） |
+| 视图工程进度 | `_eng\` 四件套（铁律 #1：留原地不入库） |
 
 ## 二、这是什么 / 怎么跑
 
@@ -94,24 +88,27 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
 （如 `judgment-v0xx.yaml`）与一次性报告。
 已据此回收：`topic dedupe/turns`、`chain-audit`、`topic md`、`--triage-json`/`--plan-seed`/`--triage-brief`。
 
-## 六、文档地图（按序读）
+## 六、文档地图（**入口是「最新」，不是某个版本号**）
 
-1. **`docs/HANDOFF-v0.49-next.md`** —— 🆕 最新冷启动交接，**新会话只读这一份即可开工**
-   （§0 开工三件事 / §1 快照 / §2 本批 / §3 待裁决 / §4 下一件事 / §5 坑 12 条 / §6 复现命令）。
-2. 历史留档：`docs/HANDOFF-v0.48-next.md`（view v2 工程 P0–P3 + 用户新提六条）→
-   `v0.47` → `v0.46` → … → `v0.33`（**§0 保留为版本号来源**，`test_v45_hygiene` 读它——**升版本号必须同改它**）。
-3. **用户手动携带的冷启动副本（内容最全）**：
-   `D:\Data\AI\交接文档\session-harvester-v0.47-冷启动交接-2026-10-12.md`——拿到它按 §0 跑三条基线即可开工。
-4. `README.md` 顶部「测试基线」= **测试数字的唯一权威**（`tests/test_v48_test_baseline.py` 真跑对账钉住；
-   改测试却忘改 README → 它红）。
-5. **剩余事项 SOP**：`docs/SOP-remaining-v045.md`（§8 = 用户新提六项 N1–N6 登记表；§5 = 定期蒸馏 SOP）。
-6. **体检与自进化评估**：`docs/SELF-EVOLUTION-AND-DSH-PIPELINE.md`；事实台账 H1–H116 在
-   `docs/HANDOFF-v0.22-next.md` §2。
-7. **会话抑制提案**：`docs/PROPOSAL-session-suppress.md`（**已批准并实施**；
-   §5 ⑧ 裁决不做 = 不设恢复时限，另裁决**不加**语料探测；**只剩真库首次 `--apply`**）。
-8. **view v2 工程四件套**（权威位置 = `_eng\`，用户明示留原地；先读第一份）：
-   `PROJECT-IRON-RULES-v1.md` → `SOP-harvester-view-v2.md`（含冻结决策 D1–D15 与头部进度指针）→
-   `TODO-harvester-view-v2.md`（34 项台账）→ `HANDOFF-view-v2-kickoff.md`（逐会话记录，**最新一节在最上面**）。
+1. **最新交接文档 = 开工第一站**（本仓的交接放在被 gitignore 的 `docs\` 里，只在本机）：
+
+   ```powershell
+   Get-ChildItem docs\HANDOFF-*.md | Sort-Object LastWriteTime -Descending |
+     Select-Object -First 3 Name, LastWriteTime
+   ```
+
+   取最新的那份，**先读它的 §0/§1**；`HANDOFF-v*.md` 是历史留档，要考古再往前翻。
+2. **版本号来源**：`docs\HANDOFF-v0.33-next.md` 的 §0（`test_v45_hygiene` 读它——**升版本号必须同改它**）。
+3. **测试数字的唯一权威**：`README.md` 顶部「测试基线」（`tests/test_v48_test_baseline.py` 真跑对账钉住）。
+4. **剩余事项 SOP**：`docs\SOP-remaining-v045.md`（§8 = 用户新提六项 N1–N6 登记表；§5 = 定期蒸馏 SOP）。
+5. **体检与自进化评估**：`docs\SELF-EVOLUTION-AND-DSH-PIPELINE.md`；事实台账在
+   `docs\HANDOFF-v0.22-next.md` §2。
+6. **会话抑制提案**：`docs\PROPOSAL-session-suppress.md`（结论以最新交接为准）。
+7. **view v2 工程四件套**（权威位置 = `_eng\`，用户明示留原地；先读第一份）：
+   `PROJECT-IRON-RULES-v1.md` → `SOP-harvester-view-v2.md`（含冻结决策与头部进度指针）→
+   `TODO-harvester-view-v2.md`（台账）→ `HANDOFF-view-v2-kickoff.md`（逐会话记录，**最新一节在最上面**）。
+8. **用户手动携带的冷启动副本**（内容最全，放在本仓外）：
+   `D:\Data\AI\交接文档\` 下与本项目同名的那一份——用户换会话时会直接把它交给新会话。
 
 ## 七、不受本仓控制的既有事实（别再重复踩）
 
