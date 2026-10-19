@@ -47,10 +47,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 911 tests ... OK
+# ① 权威基线：全套件。期望 Ran 918 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=870 failures=0 errors=61 skipped=5
+# ② 无 PyYAML 门禁：期望 GATE ran=877 failures=0 errors=61 skipped=5
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -59,11 +59,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 911 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=870 failures=0 errors=61 skipped=5** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 918 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=877 failures=0 errors=61 skipped=5** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（911 vs 870）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（918 vs 877）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
 另有 `skipped=5`（v0.74）：其中 `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测
@@ -77,7 +77,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 911，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 918，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 
 **"红一次又好了"先查并发**：同一工作区里另有进程正在编辑文件时跑 ①/③，
@@ -486,7 +486,8 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `draft` | 蒸馏包：会话原文+卡片规范+指令 → 自包含 md 喂 Agent |
 | `artifacts` | 产物提取：Write/Edit args 回源 → artifacts_meta.db |
 | `cards validate` | 校验卡片目录（§8 规范 + 锚点真实命中索引库）；可选 `--topics-meta topics_meta.db` 追加**卡 ↔ 主题一致性核对**（见「卡片校验与主题注册表打通」）；v0.74 起证据/综述拆角色（`summary` 不做逐字核对）、insight 豁免逐字核对、警告可人工裁决落账（`cards review`——人裁过的不许再烦人） |
-| `cards new` | 从索引库会话生成卡片脚手架（evidence 留白） |
+| `cards new` | 从索引库会话生成卡片脚手架（evidence 留白；v0.78 含 `triggers` 现象词占位 + 「别再来」反面清单表——每条弯路必须写为什么不通） |
+| `cards index-md` | 触发词消歧素材（v0.78）：触发行清单 + 疑似易混对（归一子串口径，只列不裁决）+ 可整段贴进 AGENTS.md 的钩子模板（动手前搜现象词→读卡）；**只读**，机器不定稿消歧表 |
 | `kb-init` | 建知识库骨架（幂等） |
 | `kb-stats` | 知识库盘点 |
 | `kb-publish` | 把项目正本 knowledge/（cards+topics）单向**投递**给 WorkBuddy 主程序（它只认自家目录——四个消费者里唯一需要文件镜像的；view/Agent/第三方直读正本或走 API/MCP，不经本命令）。只喂不收，镜像可随时删除重建 |

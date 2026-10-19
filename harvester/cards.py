@@ -341,6 +341,11 @@ def validate_card(path: Path) -> tuple[list[str], list[str], dict | None]:
     anchors = fm.get("anchors")
     if anchors is not None and not isinstance(anchors, list):
         warns.append("anchors 非列表形态（§8 要求 [{session_id, ...}] 列表）")
+    # v0.78（触发层，可选字段）：triggers 给了但非列表 → 警告不报错
+    # （照 anchors 先例；不进必填清单，旧卡零感知）。
+    triggers = fm.get("triggers")
+    if triggers is not None and not isinstance(triggers, list):
+        warns.append("triggers 非列表形态（§8 要求现象词列表；可选字段）")
     if not body.strip():
         warns.append("正文为空")
     try:
@@ -353,7 +358,8 @@ def validate_card(path: Path) -> tuple[list[str], list[str], dict | None]:
     # v0.21 P0-1（H11）：脚手架占位符 = 错误级（此前零检查 → 空壳卡
     # 结论"可并入主库"）。
     for label, pat in _PLACEHOLDER_PATTERNS:
-        hay = [str(fm.get("evidence") or ""), body, str(fm.get("title") or "")]
+        hay = [str(fm.get("evidence") or ""), body, str(fm.get("title") or ""),
+               str(fm.get("triggers") or "")]
         if any(pat.search(h) for h in hay):
             errors.append(f"[占位符] {label}（cards new 脚手架未补全）")
     if _BLOCK_LITERAL_RE.match(str(fm.get("evidence") or "").strip()):
@@ -1096,6 +1102,7 @@ def scaffold_card(db: Path, sid_query: str, out_dir: Path,
         f"title: {title}\n"
         f"type: {ctype}\n"
         "tags: []\n"
+        "triggers: [<待补：下次任务里会自然出现的现象词，逗号分隔>]\n"
         f"anchors: {anchors}\n"
         "evidence: |\n"
         "  <粘贴原会话证据原文，一行起，缩进两格>\n"
@@ -1104,6 +1111,9 @@ def scaffold_card(db: Path, sid_query: str, out_dir: Path,
         "---\n"
         f"{h1}\n\n<待补：这条记录说明了什么问题/结论>\n\n"
         f"{h2}\n\n<待补：怎么做/依据是什么>\n\n"
+        "## 别再来\n\n| 弯路 | 为什么不通 |\n|---|---|\n"
+        "| <试过哪条路> | <为什么不通：报错原文/机制原因；"
+        "不接受「我试过不行」> |\n\n"
         f"来源：`{row['sid']}#{turn or ''}`（{row['source']}），"
         f"由 `cards new` 脚手架生成，evidence 与正文人工补全后跑 "
         f"`cards validate`。\n"
@@ -1146,3 +1156,85 @@ def _dupe_check(db: Path, sid: str, cards_root: Path) -> list[str]:
                     f"evidence/正文命中；请先审阅旧卡，避免同根因重复做卡）")
                 break
     return warnings
+
+
+def build_index_md(root: Path) -> str:
+    """cards index-md：给 AGENTS.md 钩子的触发词消歧素材（v0.78 §2）。
+
+    只读、只出清单、不裁决——三段：
+    ① 各卡触发行清单（人参考素材；无 triggers 的卡明说「未登记」不缺席）；
+    ② 疑似易混卡对（两卡 triggers 词经 triage._norm_for_match 归一后
+       相等或互为子串——口径与 _dupe_check「疑似已有卡」一致；只列，
+       机器不定稿：易混是语义问题）；
+    ③ 可整段粘贴进 AGENTS.md 的钩子模板（动手前搜现象词→读卡约定）。
+
+    绝不写任何文件（--out 落盘由 CLI 层负责）；目录不存在诚实空态。
+    """
+    from .triage import _norm_for_match
+    root = Path(root)
+    if not root.is_dir():
+        return ("# 卡片触发词索引（消歧素材）\n\n"
+                f"卡目录不存在：`{root}`。先用 `cards new` 生成脚手架。\n")
+    cards: list[tuple[str, str, list[str], bool]] = []  # (名, title, trig, parsed)
+    for p in sorted(root.rglob("*.md")):
+        if p.name.startswith(("~", ".")):
+            continue
+        _e, _w, fm = validate_card(p)
+        if fm is None:
+            cards.append((p.name, "（frontmatter 未解析）", [], False))
+            continue
+        trig = fm.get("triggers")
+        words = [str(t) for t in trig] if isinstance(trig, list) else []
+        cards.append((p.name, str(fm.get("title") or "（无标题）"),
+                      words, True))
+    lines = ["# 卡片触发词索引（消歧素材）", "",
+             f"来源目录：`{root}`；卡数：{len(cards)}。"
+             "本文件是给**人定稿消歧表**用的素材，不是给机器自动消费的清单。",
+             ""]
+    if not cards:
+        lines.append("目录里没有卡。先用 `cards new` 生成脚手架"
+                     "（补全 triggers 现象词后重跑本命令）。\n")
+        return "\n".join(lines)
+    lines += ["## 一、触发行清单", ""]
+    for name, title, words, _parsed in cards:
+        if words:
+            lines.append(f"- `{name}`｜{title}｜触发：{'、'.join(words)}")
+        else:
+            lines.append(f"- `{name}`｜{title}｜未登记触发词"
+                         "（frontmatter 加 `triggers: [...]`，"
+                         "写下次任务里会自然出现的现象词）")
+    lines += ["", "## 二、疑似易混卡对（只列不裁决，人定稿）", ""]
+    pairs: list[str] = []
+    for i in range(len(cards)):
+        for j in range(i + 1, len(cards)):
+            n1, _t1, w1, p1 = cards[i]
+            n2, _t2, w2, p2 = cards[j]
+            if not (p1 and p2 and w1 and w2):
+                continue
+            s1 = {_norm_for_match(w) for w in w1}
+            s2 = {_norm_for_match(w) for w in w2}
+            s1.discard("")
+            s2.discard("")
+            hit = sorted({a for a in s1 for b in s2
+                          if a == b or a in b or b in a})
+            if hit:
+                pairs.append(f"- `{n1}` × `{n2}`：疑似易混"
+                             f"（归一命中：{'、'.join(hit)}）")
+    lines += pairs if pairs else ["（未发现疑似易混对）"]
+    lines += ["", "## 三、AGENTS.md 钩子模板（整段复制粘贴）", "", "```markdown",
+              "## 动手前：先搜经验卡（防重复踩坑）",
+              "",
+              "开始一个任务前，若涉及改文件/调接口/装依赖等易错动作，先拿"
+              "「任务里会出现的现象词」搜一遍经验卡目录（kc-*.md）；命中就先",
+              "读卡再动手——照「首选」做，避开「别再来」表。未命中零成本，",
+              "直接继续。踩了新坑：当场往卡目录记一行（cards new 出脚手架），",
+              "收尾时只检查有没有记，不靠回忆补写。",
+              "",
+              "```powershell",
+              "# 现象词换成当前任务里的实际词：",
+              "Select-String -Path <cards-root>\\kc-*.md -Pattern \"<现象词>\"",
+              "```",
+              "",
+              "（MCP 路线：用 cards_list 按需列出卡目录，同样动手前查。）",
+              "```", ""]
+    return "\n".join(lines)

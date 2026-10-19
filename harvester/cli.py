@@ -1520,6 +1520,27 @@ def cmd_cards_new(args) -> int:
     return 0
 
 
+def cmd_cards_index_md(args) -> int:
+    """触发词消歧素材（v0.78 §2）：给 AGENTS.md 钩子定稿用。
+
+    只读只列不裁决：触发行清单 + 疑似易混对（归一子串口径）+
+    钩子模板。--out 落盘（自动建父目录）或 stdout。机器不出
+    「定稿消歧表」——易混是语义问题，人定稿。
+    """
+    from .cards import build_index_md
+    md = build_index_md(Path(args.root))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(md, encoding="utf-8")
+        print(f"素材已写入: {out}")
+        print("下一步: 人定稿消歧表 → 把「三、钩子模板」整段贴进 AGENTS.md"
+              "（改 Select-String 里的目录与占位词）")
+    else:
+        print(md, end="")
+    return 0
+
+
 def cmd_cards_review(args) -> int:
     """复核台账（v0.74）：人裁过的不许再烦人。
 
@@ -2611,6 +2632,14 @@ def build_parser() -> argparse.ArgumentParser:
     pcr.add_argument("--reviews-meta", dest="reviews_meta",
                      default="cards_meta.db", help="复核台账 meta 库")
     pcr.set_defaults(func=cmd_cards_review)
+    pci = pcdsub.add_parser(
+        "index-md",
+        help="触发词消歧素材：给 AGENTS.md 钩子定稿用（v0.78 §2；"
+         "只读只列不裁决，机器不定稿）")
+    pci.add_argument("--root", required=True, help="卡片库根目录")
+    pci.add_argument("--out", help="输出路径（缺省打印到 stdout；"
+                     "素材供人定稿，不进任何常驻注入）")
+    pci.set_defaults(func=cmd_cards_index_md)
 
     prs = sub.add_parser(
         "report-skill",
