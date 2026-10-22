@@ -74,6 +74,15 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
     ④ 手工改完源码怀疑没生效时，先删 `__pycache__/*.pyc` 再复测。
     本仓两个变异脚本（`docs/reports/mutation-attrib.py`、`mutation-p65-view.py`）已按此加固；
     它们的"全杀"结论只有在**加固后**跑出来的才算数。
+14. **复用别人的取数函数前，先用探针看清它的返回形态**（P6-6 实测：5 处依赖我推错 4 处）。
+    本仓的聚合函数**不是**统一的"list[dict]"风格：`pattern_stats[pat]["samples"]` 是
+    **list[tuple] `(sid, seq, error)`**；`chainstats.collect()` 四组也全是元组
+    （`long=(sid,步数)`、`streaks=(sid,工具,次数,最长)`）；`collect_skill_invocations(db)` 收的是
+    **库路径**（不是连接）、且**不收 `since_days`**；`collect_attributions()["by_pattern"][pat]`
+    是**整行** dict，候选在 **`"rule"`** 键下而不是行本身。
+    **最危险的一种**：取错键不会报错，只会得到 `rule_id=None`——"看起来有归因、实际空值"。
+    所以：① 新接一个数据面先写 `docs/reports/probe-*.py` 打印真实字段与首元素；
+    ② 凡"取值可能为空"的地方都要有**对账断言**（如 P6-6 的包 ↔ `collect_attributions` 逐条比对）。
 
 **收尾固定动作**（本仓历史证明有效）：① 死代码扫描（`harvester/` 与 `tests/` 两个根都要 0/0/0，行内 `# noqa` 视为有意保留）；
 ② 悬空路径检查（`git ls-files -c core.quotePath=false` 取已提交 `*.md`，逐个 `Test-Path` 其中 `docs/reports/...` 引用）；

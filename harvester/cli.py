@@ -33,6 +33,11 @@
                             [--verdict accepted|rejected|revise]
                             [--note 备注] [--by 裁决人]
       归因台账（B 档：人裁决进 attribations，裁过的不再进候选；只写台账，不碰采集库）
+  python -m harvester evidence-pack [--kind errors|skills|chains|attrib]
+                            [--db] [--since N天] [--top N]
+                            [--out 包.md] [--json 包.json] [--meta 台账库]
+      评审包（P6-6）：判据头 + 证据体 + **判定槽**三段；等级 R0–R3 由内容算
+      （有归因候选且可回填=R3，只有计数=R1）；没有判定槽的包不是评审包，是报告
   python -m harvester report-skill [--db] [--skill <名>] [--out report.md]
       Skill 行为画像：按 skill 聚合调用/触发任务/调用后行为链（G4）
   python -m harvester suggest-agents [--db] [--min-count 3] [--out 文件] [--meta 路径]
@@ -1684,6 +1689,40 @@ def cmd_attrib(args) -> int:
     return 0
 
 
+def cmd_evidence_pack(args) -> int:
+    """评审包（P6-6）：一个包、三种消费者（判据头 / 证据体 / 判定槽）。
+
+    **③ 判定槽是"可评审"的定义性特征**——没有判定槽的包不是评审包，是报告。
+    本命令只读（harvester.db 全程 mode=ro），判定走既有台账通道
+    （`attrib-review`），不在包里造第二条写路径。
+    """
+    from .evidencepack import KINDS, build_pack, render_json, render_md
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    if args.kind not in KINDS:
+        print(f"错误: 不支持的 kind：{args.kind}（可选：{'|'.join(KINDS)}）",
+              file=sys.stderr)
+        return 2
+    try:
+        pack = build_pack(args.kind, dbp, since_days=args.since,
+                          meta=Path(args.meta) if args.meta else None,
+                          top=args.top)
+    except Exception as e:  # noqa: BLE001 - 规则表不合规等属"响亮失败"
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        _write_or_print(render_json(pack), args.json, "评审包机读出口")
+    md = render_md(pack)
+    if args.out:
+        _write_or_print(md, args.out, "评审包（人读）")
+    if not args.out and not args.json:
+        print(md, end="")
+    return 0
+
+
 def _write_or_print(text: str, out: str, label: str) -> None:
     """写盘或打印。落盘统一 UTF-8 无 BOM + LF（项目纪律）。"""
     if out == "-":
@@ -2378,6 +2417,25 @@ def build_parser() -> argparse.ArgumentParser:
     patr.add_argument("--meta", default="attrib_meta.db",
                       help="归因台账 meta 库（唯一写路径；不碰 harvester.db）")
     patr.set_defaults(func=cmd_attrib_review)
+
+    pep = sub.add_parser("evidence-pack",
+                         help="评审包（P6-6）：判据头 + 证据体 + **判定槽**"
+                              "（没有判定槽的包不是评审包，是报告）")
+    pep.add_argument("--kind", default="errors",
+                     choices=["errors", "skills", "chains", "attrib"],
+                     help="包类型（errors/attrib 含归因候选=R3；"
+                          "skills/chains 无根因=R1）")
+    pep.add_argument("--db", default="harvester.db", help="索引库路径（只读）")
+    pep.add_argument("--since", type=float, default=None, metavar="DAYS",
+                     help="只统计最近 N 天")
+    pep.add_argument("--top", type=int, default=20,
+                     help="每类最多 N 条（默认 20；判定槽行数 = 条目数）")
+    pep.add_argument("--out", help="人读出口（Markdown）输出路径；缺省打印")
+    pep.add_argument("--json", metavar="PATH",
+                     help="机读出口：与 md **不共用实现**，结构带 schema")
+    pep.add_argument("--meta", default=None,
+                     help="归因台账 meta 库（只用于标出「已裁决」；不写）")
+    pep.set_defaults(func=cmd_evidence_pack)
 
     prc = sub.add_parser("report-chains",
                          help="工具链失败模式报告（长回合/同工具连击/"
