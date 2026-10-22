@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1020 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1030 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=979 failures=0 errors=88 skipped=21
+# ② 无 PyYAML 门禁：期望 GATE ran=989 failures=0 errors=88 skipped=21
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,11 +61,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1020 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=979 failures=0 errors=88 skipped=21** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=14` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1030 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=989 failures=0 errors=88 skipped=21** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=14` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1020 vs 979）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1030 vs 989）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
 另有 `skipped=21`（v0.79/P6-6/P6-7，五组，逐组可对）：
@@ -84,7 +84,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1020，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1030，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
@@ -500,7 +500,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `aggregate` | 聚合会话为语料（蒸馏喂料） |
 | `triage` | 蒸馏队列：新错误 pattern/旧坑重现/Skill 行为链/高信号会话 |
 | `draft` | 蒸馏包：会话原文+卡片规范+指令 → 自包含 md 喂 Agent |
-| `artifacts` | 产物提取：Write/Edit args 回源 → artifacts_meta.db |
+| `artifacts` | 产物提取：Write/Edit args 回源 → artifacts_meta.db。**两个子命令都先印覆盖度自陈**（P6-8）：`仅 dsh 源，已登记 N / 总会话 M（pct）… 本面不代表全库`——产物只来自 dsh 一个源，不带分母就会把部分覆盖当成全库画像 |
 | `cards validate` | 校验卡片目录（§8 规范 + 锚点真实命中索引库）；可选 `--topics-meta topics_meta.db` 追加**卡 ↔ 主题一致性核对**（见「卡片校验与主题注册表打通」）；v0.74 起证据/综述拆角色（`summary` 不做逐字核对）、insight 豁免逐字核对、警告可人工裁决落账（`cards review`——人裁过的不许再烦人） |
 | `cards new` | 从索引库会话生成卡片脚手架（evidence 留白；v0.78 含 `triggers` 现象词占位 + 「别再来」反面清单表——每条弯路必须写为什么不通） |
 | `cards index-md` | 触发词消歧素材（v0.78）：触发行清单 + 疑似易混对（归一子串口径，只列不裁决）+ 可整段贴进 AGENTS.md 的钩子模板（动手前搜现象词→读卡）；**只读**，机器不定稿消歧表 |
@@ -820,7 +820,7 @@ MCP 暴露 **10 个**只读工具：
 | 进化数据 | `suggest_list` | 建议台账（建议句 → adopted/rejected） | 同源 `/api/reports/agents` 的状态面 |
 | 进化数据 | `cards_list` | 卡片清单（frontmatter 摘要，不校验） | 同源 `/api/cards` 的清单面 |
 | 进化数据 | `topic_export` | 主题结构化包（`harvester.topic/1`） | 同 CLI `topic export` 的 JSON 出口 |
-| 进化数据 | `artifacts_list` | 产物清单（元数据＋体量，不含正文） | 本地 `artifacts_meta.db` |
+| 进化数据 | `artifacts_list` | 产物清单（元数据＋体量，不含正文）＋ `coverage`（仅 dsh 源 / 已登记 N 总会话 M / pct，P6-8） | 本地 `artifacts_meta.db` |
 
 **漂移门**：`TOOL_SOURCES`（`mcpserver.py`）声明每个工具的数据来源，
 `tests/test_v45_mcp_tools.py` 从 `apiserve.py` **源码 AST** 抽 `/api/*` 能力集，

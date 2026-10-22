@@ -227,15 +227,20 @@ class HarvesterMcpServer:
             "returned": min(limit, len(rows)), "cards": rows[:limit]})
 
     def tool_artifacts_list(self, arguments: dict) -> str:
-        """产物清单（元数据＋体量，不含正文）。按 sid 取正文用 show_artifacts。"""
-        from .artifacts import list_artifacts
+        """产物清单（元数据＋体量，不含正文）。按 sid 取正文用 show_artifacts。
+
+        P6-8：`coverage` 是**机器可读的覆盖度自陈**——产物只来自 dsh 源，
+        照这份清单下"全库产物如何"的结论会静默错，所以分母必须随数据一起给。
+        """
+        from .artifacts import coverage, list_artifacts
         meta = self._artifacts_meta
         if not meta:
             raise ValueError("未配置产物库（启动时给 --artifacts-meta）")
         limit = int(arguments.get("limit", 200))
         rows = list_artifacts(meta, limit=limit, sid=arguments.get("sid"))
         return self._json_text({
-            "meta": str(meta), "returned": len(rows), "artifacts": rows})
+            "meta": str(meta), "returned": len(rows), "artifacts": rows,
+            "coverage": coverage(self._db, meta)})
 
     # ---- MCP 协议 ----
     def _tools_manifest(self) -> list[dict]:

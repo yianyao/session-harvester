@@ -180,6 +180,53 @@ def show_artifacts(meta_path: Path, sid: str,
         con.close()
 
 
+def coverage(db_path, meta_path) -> dict:
+    """产物面的**覆盖度自陈**（P6-8）——只接 dsh 源，已登记 N / 总会话 M。
+
+    为什么非要有这个函数：本模块的产物只来自 **dsh 一个源**（见模块头 `:8`
+    「MVP 只接 dsh 源」），而库里绝大多数会话来自别的源。任何"产物面"的数字
+    若不带上这个分母，读者会把它当**全库**的产物画像——那正是设计 §3.3 说的
+    "拿部分覆盖冒充全库"。所以覆盖度**现算**，不写死、不手填。
+
+    两种缺失都按"什么都没登记"处理，且**都仍说「仅 dsh 源」**：
+    ① `meta_path` 不存在（没跑过 extract）；② 有库但 artifacts 表是空的。
+    这两种情况下 `pct=0.0` 而不是报错——服务侧少配一个库不该让页面挂掉，
+    但**必须看得出覆盖是 0**，不能静默显示成任何"看起来有数据"的样子。
+
+    返回 dict（全部可 JSON 化）：
+      `sources` / `sources_note` / `registered_sessions` / `registered_versions`
+      / `total_sessions` / `pct` / `line`（一行 markdown，人读出口用）
+    """
+    reg = vers = 0
+    mp = Path(meta_path) if meta_path else None
+    if mp is not None and mp.is_file():
+        con = _con(mp)
+        try:
+            row = con.execute(
+                "SELECT COUNT(DISTINCT sid), COUNT(*) FROM artifacts").fetchone()
+            reg, vers = int(row[0] or 0), int(row[1] or 0)
+        finally:
+            con.close()
+    total = 0
+    dp = Path(db_path) if db_path else None
+    if dp is not None and dp.is_file():
+        con = sqlite3.connect(f"file:{dp.as_posix()}?mode=ro", uri=True)
+        try:
+            total = int(con.execute(
+                "SELECT COUNT(*) FROM sessions").fetchone()[0] or 0)
+        finally:
+            con.close()
+    pct = round(reg * 100.0 / total, 1) if total else 0.0
+    note = ("其余源（豆包/元宝/千问）已实测判负：只有截断预览，"
+            "提不出完整产物（v0.51 登记）")
+    line = (f"- 覆盖度：**仅 dsh 源**（`artifacts.py:8` 自陈），"
+            f"已登记 {reg} / 总会话 {total}（{pct}%）——{note}；"
+            f"**本面不代表全库**")
+    return {"sources": ["dsh"], "sources_note": note,
+            "registered_sessions": reg, "registered_versions": vers,
+            "total_sessions": total, "pct": pct, "line": line}
+
+
 def list_artifacts(meta_path: Path, limit: int = 200,
                    sid: str | None = None) -> list[dict]:
     """**列出**产物（可按 sid 过滤）——只给元数据与体量，不给正文。

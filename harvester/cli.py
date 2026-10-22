@@ -2097,9 +2097,17 @@ def cmd_chain_validate(args) -> int:
 
 
 def cmd_artifacts(args) -> int:
-    """产物提取（T0-②，v0.22）：独立 meta 库 artifacts_meta.db。"""
-    from .artifacts import ensure_artifacts_db, extract_session, show_artifacts
+    """产物提取（T0-②，v0.22）：独立 meta 库 artifacts_meta.db。
+
+    P6-8：两个子命令都先印一行**覆盖度自陈**（仅 dsh 源 / 已登记 N 总会话 M），
+    `extract` 在提取**之后**印，这样数字反映的是"跑完这条命令"的状态。
+    """
+    from .artifacts import coverage, ensure_artifacts_db, extract_session, \
+        show_artifacts
     meta = ensure_artifacts_db(Path(args.meta))
+    # 两个子命令都先印**执行前**的覆盖度：这是最容易滑过去的诚实缺口——
+    # `show` 只印"这个 sid 有没有记录"，读者会以为产物面覆盖全库。
+    print(coverage(Path(args.db), meta)["line"])
     if args.cmd == "extract":
         dbp = Path(args.db)
         if not dbp.is_file():
