@@ -48,6 +48,13 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
    曾因此发出两条跑不通的命令（`chain-validate` 缺 file、`cards validate` 缺 `--root`）。
 4. **`commandgen` / `registrygen` 的漂移门是对的**：后端新增 CLI 子命令 → view 立刻红，
    修法是重生成 + 补 `COMMAND_CARD`，**别改门**。
+   P6-6 实测：新增只读命令后**会连红两次**（两道不同的门）——
+   ① `COMMAND_CARD` 漏了 → "命令 X 没有归并到任何动词卡"；
+   ② 归了卡、但 `READ_ACTIONS` 没加 → "**A 档命令没有可执行动作**"（`test_v54_cli_actions`）。
+   第 ② 条的口径是「**只读命令 = 页面能执行**」，只读却只能复制命令，等于把最安全
+   的一类动作挡在页面外。所以新增 A 档命令的完整动作是：`commandgen` 归卡 →
+   `registrygen.READ_ACTIONS` 加动作 → `actionsserve` 写 `_action_*` 处理器 →
+   `python -m actions.commandgen` + `python -m actions.registrygen` 重生成 → 两道 `--check`。
 5. **`var(--x)` 写错变量名不报错**，只是整条声明被丢弃（曾 13 处 `var(--sub)` 静默失效）。
 6. **`state.loaded.X = true` 不能写在 `switchTab(X)` 之前**——`switchTab` 用 `if (!state.loaded[name])` 当加载守卫，
    先置位会让加载函数**永不执行**（症状：页面永远「加载中…」）；门只看源码字符串，抓不到，
