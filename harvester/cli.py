@@ -746,6 +746,14 @@ def cmd_report_daily(args) -> int:
         ev = run_eval(dbp, meta_p)
         verify = sum(1 for e in ev.get("entries") or []
                      if e.get("verdict") == VERDICT_INCONCLUSIVE)
+        # P6-7：本面是**聚合面**，等级取"最弱一环"——四队列是计数、
+        # 三份摘要分别是工具/错误/链型计数，**没有一个分节带根因候选**
+        # （本命令不加载归因规则，错误段因此也不会是 R2/R3）。
+        from .reviewable import assess as _assess
+        L[5:5] = [_assess(entries=decide + repair + distill + verify,
+                          candidates=0,
+                          note="聚合面：四队列与三份摘要都是计数，无根因候选"
+                          ).render(), ""]
         L += ["## 一、四队列（待办速览）", "",
               "| 队列 | 数字 | 口径来源（与 view 工作台同源） |",
               "|---|---|---|",

@@ -41,6 +41,11 @@ from .behstats import collect_skill_invocations
 from .dbmeta import db_fingerprint
 from .errstats import (clean_error_sample, collect_errors_from_db,
                        pattern_stats)
+#: 等级判据只有一份：`reviewable.py`（P6-7）。本模块**委托**它算，
+#: 免得"证据包里的 R1"与"报告页上的 R1"两处口径漂移。
+from .reviewable import LEVELS as _LEVELS
+from .reviewable import backfill_available as _backfill_available
+from .reviewable import level_of, level_reason
 
 #: 本包支持的 kind。**`artifact` 故意不在内**——产物面只登记 dsh 源
 #: （`artifacts.py:8` 自陈，实测 ≈2% 覆盖率），把它打进"评审包"会让
@@ -51,7 +56,7 @@ KINDS = ("errors", "skills", "chains", "attrib")
 SLOT_COLS = ("verdict", "note", "reviewer", "reviewed_at")
 
 #: 等级（设计 §3.1）。R1 及以下**不得**标"可评审"。
-LEVELS = ("R0", "R1", "R2", "R3")
+LEVELS = _LEVELS
 
 JSON_SCHEMA = "evidence-pack/1"
 
@@ -63,45 +68,6 @@ def _fp(db: Path) -> dict:
     except Exception:  # pragma: no cover - 库异常时仍要出包（标"未知"而非 0）
         return {"sessions": None, "steps": None, "errors": None,
                 "db_mtime": None, "stale": None}
-
-
-def _backfill_available() -> bool:
-    """回填通道是否存在（= R3 的那一半）。
-
-    只查**真解析器**里有没有 `attrib-review` 子命令——不试写台账
-    （本模块只读；"能不能写"用"命令在不在"判定，与 `AGENTS.md` §三 3 同口径）。
-    """
-    try:
-        from .cli import build_parser
-        for act in build_parser()._actions:      # noqa: SLF001
-            choices = getattr(act, "choices", None)
-            if choices and "attrib-review" in choices:
-                return True
-    except Exception:  # pragma: no cover
-        return False
-    return False
-
-
-def level_of(entries: list[dict], backfill: bool) -> str:
-    """按**内容**定等级（不写死），并给出人读理由。"""
-    if not entries:
-        return "R0"          # 没有结构化条目 = 只有原文
-    if not any(e.get("attrib") for e in entries):
-        return "R1"          # 有计数与锚点，但无根因候选
-    return "R3" if backfill else "R2"
-
-
-def level_reason(entries: list[dict], level: str, backfill: bool) -> str:
-    if level == "R0":
-        return "窗口内没有可结构化的条目（只有原文，不可评审）"
-    if level == "R1":
-        return ("有条目计数与原文锚点，但**没有根因候选**——"
-                "这种数据给再强的模型也评不出根因（设计 §3.1）")
-    if level == "R2":
-        return "有条目 + 原文锚点 + 归因候选（why/fix/置信）"
-    return ("有条目 + 原文锚点 + 归因候选 + **回填通道**"
-            "（`attrib-review` 可把裁决落进 attribations 台账）"
-            if backfill else "R2（回填通道不可用）")
 
 
 def _entry(key: str, title: str, count: int, anchors: list[dict],

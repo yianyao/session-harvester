@@ -434,6 +434,16 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
                 for pat, d in sorted(stats.items(),
                                      key=lambda kv: (-kv[1]["count"], kv[0]))]
     n_got = sum(1 for p in patterns if p["attrib"])
+    # P6-7：本面的可评审等级（与 CLI `report-errors` **同一判据**，见
+    # reviewable.py）。归因不可用时只能 R1——页面据此决定能否说"可评审"，
+    # 绝不让前端自己按"有没有 used_rule"猜一个等级出来。
+    from .reviewable import assess as _assess
+    _lv = _assess(entries=len(errors),
+                  candidates=(sum(1 for p in patterns if p["attrib"])
+                              if attrib_status == "ok" else 0),
+                  note=("归因层未启用：本面只能数、不能评"
+                        if attrib_status != "ok" else
+                        f"已归因模式 {n_got}/{len(patterns)}"))
     return {"api_version": API_VERSION, "meta": meta,
             "by_class": dict(by_class), "by_bucket": dict(by_bucket),
             "by_source": {k: dict(v) for k, v in by_source.items()},
@@ -445,6 +455,8 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
                                "patterns_attributed": n_got,
                                "patterns_unattributed":
                                    len(patterns) - n_got},
+            # P6-7 additive：可评审分级（level/label/can_review/can_verdict）
+            "reviewable": _lv.as_dict(),
             # P1-3 additive：交叉表 class × harness × model（行序 total 降序）
             "cross": cross_stats(errors),
             # v0.23 #14 additive：交叉表 class × harness × skill

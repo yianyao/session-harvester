@@ -29,6 +29,19 @@ SPIN_MIN = 5      # 空转：连续 error 结果数（首错 + 重试 >3）
 TOP_N = 10
 
 
+def _level_line(entries: int) -> str:
+    """本报告面的可评审等级（P6-7）：链型面**没有根因候选**，所以封顶 R1。
+
+    这不是"暂时没做"，是判据：`long/streaks/loops/spins` 都是计数 + 锚点，
+    评不出"为什么连击"。要升 R2 得先给这些形态建归因规则——那是 P6-1 增量，
+    在它发生之前**本面一律 R1**，报告里也必须这么写。
+    """
+    from .reviewable import assess
+    return assess(entries=entries,
+                  candidates=0,
+                  note="链型面只有计数与锚点，没有根因候选").render()
+
+
 def _pct(ds: list[int], q: float) -> int:
     if not ds:
         return 0
@@ -143,12 +156,17 @@ def collect(db: Path, since_days: float | None = None,
 def render_report(d: dict, title: str = "工具链失败模式报告（report-chains）",
                   top: int = TOP_N) -> str:
     if not d["steps"]:
-        return (f"# {title}\n\n无 steps 数据。先运行 `harvester index`"
+        return (f"# {title}\n\n"
+                f"{_level_line(0)}\n\n"
+                "无 steps 数据。先运行 `harvester index`"
                 " 生成索引库，或确认 --db 指向正确。\n")
     err = d["error_results"]
     res = d["result_rows"]
+    n_entries = sum(len(d[k]) for k in ("long", "streaks", "loops",
+                                        "spins", "top") if d.get(k))
     lines = [
         f"# {title}", "",
+        _level_line(n_entries), "",
         f"- 会话: {d['sessions']} | 步数: {d['steps']}"
         f" | 全库 p95 步数: {d['p95']}",
         f"- 错误结果: {err}/{res}"

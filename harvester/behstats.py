@@ -158,6 +158,17 @@ def skill_summary(invocations: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _level_line(entries: int) -> str:
+    """本报告面的可评审等级（P6-7）：skill 面只有调用计数与行为链，**无根因候选**。
+
+    `calls / after_tools / 触发任务` 都是"发生了什么"，不是"为什么发生"——
+    所以本面封顶 R1，报告里必须自己说出来（R1 及以下不标「可评审」）。
+    """
+    from .reviewable import assess
+    return assess(entries=entries, candidates=0,
+                  note="skill 面带调用计数与行为链，没有根因候选").render()
+
+
 def render_skill_report(invocations: list[dict],
                         skill_filter: str | None = None,
                         min_calls: int = 0) -> str:
@@ -168,8 +179,10 @@ def render_skill_report(invocations: list[dict],
         invocations = [i for i in invocations if i["skill"] == skill_filter]
         if not invocations:
             return (f"# Skill 行为画像：{skill_filter}\n\n"
+                    f"{_level_line(0)}\n\n"
                     "steps 表中没有该 skill 的调用记录。\n")
         lines = [f"# Skill 行为画像：{skill_filter}（深挖清单）", "",
+                 _level_line(len(invocations)), "",
                  f"共 {len(invocations)} 次调用"
                  + ("（low-sample）" if 0 < min_calls > len(invocations) else "")
                  + "。以下每行可交给 Agent 按"
@@ -182,12 +195,14 @@ def render_skill_report(invocations: list[dict],
                 f"{inv['status']}｜任务：{args}｜后续：{chain}")
         return "\n".join(lines) + "\n"
     if not invocations:
-        return ("# Skill 行为画像（G4）\n\nsteps 表中没有 skill 调用记录。\n"
+        return ("# Skill 行为画像（G4）\n\n"
+                f"{_level_line(0)}\n\nsteps 表中没有 skill 调用记录。\n"
                 "说明：Chat 平台会话无工具遥测；本报告只覆盖 agent harness 会话。\n")
     summary = skill_summary(invocations)
     ok_total = sum(d["ok"] for d in summary.values())
     lines = [
         "# Skill 行为画像（G4）", "",
+        _level_line(len(invocations)), "",
         f"- skill {len(summary)} 个｜调用 {len(invocations)} 次｜"
         f"成功 {ok_total}（{ok_total / len(invocations) * 100:.0f}%）"
         f"｜失败 {sum(d['err'] for d in summary.values())}"

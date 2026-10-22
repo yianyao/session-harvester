@@ -467,6 +467,13 @@ def render_brief(result: dict, errors_meta: dict | None = None,
     if snapshot:
         L += ["> 库快照：" + "；".join(f"{k}={v}" for k, v in snapshot.items()
                                        if v), ""]
+    # P6-7：本出口就是**候选清单**，等级由内容算（有条目+候选+回填通道）。
+    from .reviewable import assess as _assess
+    L += [_assess(entries=s.get("patterns_total", 0),
+                  candidates=s.get("patterns_attributed", 0),
+                  note="归因候选面：候选 + why/fix + 台账回填通道"
+                  if s.get("patterns_attributed") else
+                  "规则全未命中：有计数、无根因候选").render(), ""]
     L += [
         f"- 模式 {s['patterns_total']} 个"
         f"（已归因 {s['patterns_attributed']} / 未归因 {s['patterns_unattributed']}）",

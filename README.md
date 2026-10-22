@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 998 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1020 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=957 failures=0 errors=88 skipped=14
+# ② 无 PyYAML 门禁：期望 GATE ran=979 failures=0 errors=88 skipped=21
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,33 +61,35 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 998 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=957 failures=0 errors=88 skipped=14** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=14` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1020 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=979 failures=0 errors=88 skipped=21** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=14` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（998 vs 957）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1020 vs 979）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
-另有 `skipped=14`（v0.79，四组，逐组可对）：
+另有 `skipped=21`（v0.79/P6-6/P6-7，五组，逐组可对）：
 - `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测用例**（递归回自己，
   子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip；`scripts/gate_no_yaml.py`
   自己设这一位，所以门禁绝不会跑门禁）；
 - `skipped=3` 是 `test_v57_chain_review` 的台账用例（chain 解析需 PyYAML 无降级，H9）；
 - `skipped=1` 是 `test_attrib.py` 的「API 归因 ok 态」（规则表读不出就无从断言 ok）；
 - `skipped=8` 是 `test_v67_evidencepack.py` 的集成对账用例（`build_pack` 要读归因
-  规则表；无 PyYAML 时跳过而不是失败——见本节末「`skipped` 也会漂」）。
-**`skipped` 不等于通过**：被跳过的两组正是"实测↔README 对账"与"包↔归因层对账"，
+  规则表；无 PyYAML 时跳过而不是失败——见本节末「`skipped` 也会漂」）；
+- `skipped=7` 是 `test_v68_reviewable.py` 的接线对账用例（分级判据本体不依赖
+  PyYAML，**7 条"各面真带等级行/API↔CLI 同判据"要真库与归因规则表**，同一纪律 skip）。
+**`skipped` 不等于通过**：被跳过的这几组正是"实测↔README 对账"与"面↔判据对账"，
 它们只在**顶层**那一次运行（有 PyYAML + 有真库）里真正执行。
 
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 998，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1020，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
 `test_v67_evidencepack` 又按同一纪律加了 8 条 `_NEED_REAL`（PyYAML + 真库），
-6 → **14**
+6 → 14；P6-7 的 `test_v68_reviewable` 再加 7 条，14 → **21**
 ——**新增需要 PyYAML 的用例时，正确做法是 skip（不是让它断言失败）**：
 门禁的唯一硬判据是 `failures=0`，写成断言失败会直接把门禁弄红。
 

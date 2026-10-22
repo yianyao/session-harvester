@@ -387,6 +387,26 @@ def _render_attrib_line(entry: dict | None) -> str:
             f"：{r.get('why')}　→ 应对：{r.get('fix')}")
 
 
+def reviewable_line(n: int, attributions: dict | None) -> str:
+    """本报告面的可评审等级（P6-7）。**判据只有一份**：`reviewable.py`。
+
+    `n` = 本窗口错误条目数；`attributions` = `attrib.collect_attributions`
+    的返回（None = 归因层未启用）。**没归因就只能是 R1，绝不因"报告很长"
+    而升级**——等级由内容算，不由篇幅算。
+    """
+    from .reviewable import assess
+    if attributions is None:
+        cand = 0
+        note = "归因层未启用：本面只能数、不能评"
+    else:
+        s = attributions.get("summary") or {}
+        cand = int(s.get("errors_attributed") or 0)
+        note = (f"归因覆盖 {cand}/{s.get('errors_total', n)} 条"
+                if cand else "规则全未命中：有计数、无根因候选")
+    lv = assess(entries=n, candidates=cand, note=note)
+    return lv.render()
+
+
 def _attrib_header(attributions: dict | None) -> str:
     """报告头的归因状态声明（P6-5）。三态必须能分开，不许含糊。
 
@@ -426,8 +446,8 @@ def render_report(errors: list[dict], meta: dict,
     if meta.get("since"):
         title += f"（最近 {meta['since']} 起）"
     if not errors:
-        return (f"# {title}\n\nsteps 表无错误记录"
-                f"（总步骤 {meta.get('total_steps', 0)}）。\n")
+        return (f"# {title}\n\n{reviewable_line(0, attributions)}\n\n"
+                f"steps 表无错误记录（总步骤 {meta.get('total_steps', 0)}）。\n")
     by_class: dict[str, int] = defaultdict(int)
     by_bucket: dict[str, int] = defaultdict(int)
     for e in errors:
@@ -436,6 +456,7 @@ def render_report(errors: list[dict], meta: dict,
     n = len(errors)
     lines = [
         f"# {title}", "",
+        reviewable_line(n, attributions), "",
         f"- 错误步骤 {n} / 总步骤 {meta['total_steps']}"
         f"（失败率 {n / max(meta['total_steps'], 1) * 100:.1f}%），"
         f"涉及 {meta['sessions']} 个会话", "",
