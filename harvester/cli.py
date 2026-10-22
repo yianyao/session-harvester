@@ -18,17 +18,28 @@
       （幂等，可挂定时；GC 见 keywords-gc，--no-prune-keywords 可关闭）
   python -m harvester aggregate [--from exports/|--all] [--out corpus.md]
       聚合会话为语料（蒸馏第 1 步的机械部分，带 SRC 溯源锚点）
-  python -m harvester report-tools [--sources] [--db] [--since 30d] [--out report.md]
+  python -m harvester report-tools [--sources] [--db] [--since N天] [--out report.md]
       工具调用/失败率统计（steps 表结构化口径，含重试/放弃率）
-  python -m harvester report-errors [--db] [--since 30d] [--out report.md]
-      错误三分类（env/tool_interface/context）+ 开场/中途/收尾分桶（G2）
+  python -m harvester report-errors [--db] [--since N天] [--out report.md]
+                            [--rules 规则表.yaml] [--no-attrib]
+      错误三分类（env/tool_interface/context）+ 开场/中途/收尾分桶（G2）；
+      每个模式行带归因**候选**（根因/应对/置信），未命中显式标「未归因」；
+      --no-attrib 只要事实层，--rules 换规则表（缺省用随包 attrib-rules.yaml）
+  python -m harvester attrib [--db] [--rules 规则表.yaml] [--json 文件]
+                            [--brief 文件] [--since N天] [--meta 台账库]
+      归因层：错误 → 根因候选 + 应对候选（人读/机读两出口不共用实现）
+  python -m harvester attrib-review [--meta 台账库] [--list]
+                            [--pattern 模式] [--rule 规则id] [--class 分类]
+                            [--verdict accepted|rejected|revise]
+                            [--note 备注] [--by 裁决人]
+      归因台账（B 档：人裁决进 attribations，裁过的不再进候选；只写台账，不碰采集库）
   python -m harvester report-skill [--db] [--skill <名>] [--out report.md]
       Skill 行为画像：按 skill 聚合调用/触发任务/调用后行为链（G4）
   python -m harvester suggest-agents [--db] [--min-count 3] [--out 文件] [--meta 路径]
       从错误模式生成 AGENTS.md 候选条目（建议池，人工审阅后并入）（G2 闭环）
   python -m harvester suggest-status --meta 路径 --key <key> --status pending|adopted|rejected
       建议池审阅结论落库（独立 meta 库 suggestion_status 表，不碰采集库）
-  python -m harvester triage [--db] [--since 7d] [--cards-root 目录] [--min-count 2] [--out 文件]
+  python -m harvester triage [--db] [--since N天] [--cards-root 目录] [--min-count 2] [--out 文件]
   python -m harvester draft --sid <sid> [--type pitfall] [--out 文件] [--max-chars 24000]
       蒸馏队列：新会话确定性初筛（新错误pattern/旧坑重现/Skill行为链/高信号会话）
   python -m harvester cards validate --root 目录 [--db] [--topics-meta 库]

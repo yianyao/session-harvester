@@ -2,7 +2,7 @@
 """归因层（attrib 子命令）——把"计数"变成"根因候选 + 应对候选"。
 
 对应《证据归因与可评审数据面设计-2026-10-22》§2 与
-`_eng/SOP-attrib-review.md` §3（纪律）、`_eng/TODO-attrib-review-P6.md` P6-1..P6-4。
+`_eng/SOP-attrib-review.md` §3（纪律）、`_eng/TODO-attrib-review-P6.md` P6-1..P6-5。
 
 ━━ 三层必须分开（SOP A1，绝不可混）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ① 事实 fact          机器算得出、零判断   → 计数 / 锚点 / 交叉表   【errstats 已有】
