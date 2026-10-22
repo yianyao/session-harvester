@@ -81,6 +81,22 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
   **唯一** import 兄弟仓库的地方，只调用不改）；页面 `/view/*` 必须走**绝对地址** `ACT_BASE`
   （相对路径会打到 8088 并 404）。
 
+### 四·补 · 判断纪律（P6-16，用户 2026-10-22 批准；**硬约束**）
+
+> **任何判断必须并排显示证据；禁止对裸 sid 做判断。**
+
+1. 做「这轮值不值得看」这类判断时，**必须同时给出证据包字段**（分诊 JSON 的
+   `first_user` 引文等，`noisetriage.py:249-256` 已齐备），**不许只给一个 sid 让人自己查**。
+2. **引文硬门：≥6 字**（承 `chainaudit.py:31` 先例）；引文必须可用 `search` 抽验命中。
+3. **事实 / 归因 / 裁决三层分离**（P6 冻结决策 A1）：机器只出事实与**候选**
+   （会错，须显式标 `candidate=True`），**裁决只进台账**（`attribations` / `card_review`）。
+4. **归因规则放数据文件**：`harvester/data/attrib-rules.yaml`（**随包分发**），
+   **不放 `.py`**——放代码就重演 `errstats._RULES` 的困境（新 Harness 接入时无人重审）。
+   四要素 `match`/`class`/`why`/`fix` **缺一即加载失败**（fail loud）。
+   **为什么不放 `docs/`**：`docs/` 被 `.gitignore:30` 整目录忽略 → 放那儿换机即丢。
+5. **人裁过的归因不再进候选**（同 `card_review` 语义）；被移出的落「已裁决」段，
+   **不许静默消失**（"处理过"不能看起来像"数据变少了"）。
+
 ## 五、工具化铁律（用户明确要求）
 
 做出来的必须是两个仓库的**工具本体**，不是一次性脚本。判定口径：**这个动作下次采集/起草还会不会重跑？**
@@ -109,6 +125,11 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
    `TODO-harvester-view-v2.md`（台账）→ `HANDOFF-view-v2-kickoff.md`（逐会话记录，**最新一节在最上面**）。
 8. **用户手动携带的冷启动副本**（内容最全，放在本仓外）：
    `D:\Data\AI\交接文档\` 下与本项目同名的那一份——用户换会话时会直接把它交给新会话。
+9. **P6 归因与可评审数据面工程**（进行中）：纪律在 `_eng\SOP-attrib-review.md`
+   （冻结决策 A1–A11 + 判据 ①–⑤），台账在 `_eng\TODO-attrib-review-P6.md`；
+   **依据文档已收编**到 `docs\inputs-2026-10-22\`（含逐份勘误，**冲突以勘误为准**）。
+   归因层已实装：`harvester/attrib.py` + `harvester/data/attrib-rules.yaml` +
+   CLI `attrib` / `attrib-review` + 测试 `tests/test_attrib.py`。
 
 ## 七、不受本仓控制的既有事实（别再重复踩）
 

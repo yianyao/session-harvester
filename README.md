@@ -18,9 +18,11 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  **61 条模块级报错**（依赖它的测试模块每模块计 1 条 error，数由门禁
-  `errors=61` 实测钉住）会明确报错——**这是预期行为，不是安装坏了**。
+  **88 条模块级报错**（依赖它的测试模块每模块计 1 条 error，数由门禁
+  `errors=88` 实测钉住）会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
+  ⚠️ **`attrib` 同样需要 PyYAML**（规则表是 YAML，同为 fail-loud 不降级），
+  但它是**归因层叠加**，不是 `report-errors` 的前置——缺 PyYAML 只影响 `attrib`。
 - ⚠️ **跑测试前先确认解释器有 PyYAML**。本机验证过的解释器：
   `C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
   （3.13 + PyYAML 6.0.3）。用无 PyYAML 的解释器会得到**设计行为**的
@@ -47,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 918 tests ... OK
+# ① 权威基线：全套件。期望 Ran 955 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=877 failures=0 errors=61 skipped=5
+# ② 无 PyYAML 门禁：期望 GATE ran=914 failures=0 errors=88 skipped=5
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -59,11 +61,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 918 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=877 failures=0 errors=61 skipped=5** | **只看 `failures=0`**；`61 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 955 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=914 failures=0 errors=88 skipped=5** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（918 vs 877）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（955 vs 914）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
 另有 `skipped=5`（v0.74）：其中 `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测
@@ -77,7 +79,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 918，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 955，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 
 **"红一次又好了"先查并发**：同一工作区里另有进程正在编辑文件时跑 ①/③，
@@ -464,6 +466,8 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `report-tools` | 工具调用/失败率统计 |
 | `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表；v0.23 追加 **活跃 skill×数据源×类别** 交叉表，API 字段 `cross_skill`） |
 | `report-chains` | 工具链失败模式报告（长回合/同工具连击/序列循环/空转） |
+| `attrib` | **归因层**（v0.79 P6）：把错误计数变成**根因候选 + 应对候选**。事实/归因/裁决三层分离（机器只出候选、**会错**，裁决进台账）；规则表是**数据文件** `harvester/data/attrib-rules.yaml`（随包分发，四要素 `match`/`class`/`why`/`fix` 缺一即加载失败），**不放 `.py`**——放代码就重演 `errstats._RULES` 的困境（新 Harness 接入时无人重审）。**人读/机读两个出口不共用实现**：`--json`（全量 + schema，供程序消费）/ `--brief`（一行一条、**不截断**，防"报告截断导致下游静默漏数据"）。只读 `harvester.db`；实测（2026-10-22 刷库后）7 条规则归因 **401/532** 条错误 |
+| `attrib-review` | **归因台账**（v0.79 P6）：抄 `card_review` 语义——**人裁过的归因不再进候选**。表 `attribations`（meta 库，结构与 `card_review` 同构 + 报备的 `class` 列）；三态 `accepted`/`rejected`/`revise`（归因会错，故必须有"驳回"档）。被移出的候选落「已裁决」段，**不许静默消失**。`--list` 列台账；`--pattern`+`--rule` 一言而决。**唯一写路径，只写台账库，绝不碰 `harvester.db`** |
 | `report-daily` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |
 | `noise` | **零散会话登记**（v0.81 P5-⑧）：判「不归任何主题」的会话写进 topics_meta 的 sessions_noise 表，主题候选簇（candidates/keywords）不再收它们。**只写 meta 表、不动会话数据**（可逆：删行即撤销）——与 suppress 删仓内副本是两码事。`add` 幂等（已在表跳过）、默认 dry-run、`--apply` 才写；`list` 列出已登记（何时/为什么）。**候选只列不裁决**：归宿（班规条目/问题清单）由人定 |
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |

@@ -1595,6 +1595,99 @@ def cmd_cards_review(args) -> int:
     return 0
 
 
+def cmd_attrib(args) -> int:
+    """归因层（P6-2/P6-3）：把"计数"变成"根因候选 + 应对候选"。
+
+    三层分离（SOP A1）：本命令只出**候选**（会错），裁决只进 attribations
+    台账。两个出口**不共用实现**（--json 机读全量 / --brief 人读不截断）。
+    只读：harvester.db 全程 mode=ro；唯一写路径是 `attrib review` 写台账库。
+    """
+    from .attrib import (collect_attributions, filter_reviewed, load_rules,
+                         render_brief, render_json)
+    from .errstats import collect_errors_from_db
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    errors, meta = collect_errors_from_db(dbp, since_days=args.since)
+    try:
+        rules = load_rules(Path(args.rules) if args.rules else None)
+    except Exception as e:  # noqa: BLE001 - 规则表不合规属"响亮失败"（A3）
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    result = collect_attributions(errors, rules)
+    meta_p = Path(args.meta) if getattr(args, "meta", None) else None
+    result = filter_reviewed(result, meta_p)
+    snapshot = {}
+    try:
+        from .dbmeta import db_fingerprint
+        snapshot = {k: v for k, v in db_fingerprint(dbp).items()
+                    if k in ("sessions", "messages", "steps", "errors")}
+    except Exception:  # noqa: BLE001 - 快照拿不到不阻断归因产出
+        snapshot = {}
+    gen = time.strftime("%Y-%m-%d %H:%M:%S")
+    if args.json:
+        text = render_json(result, meta, db_path=str(dbp), generated_at=gen,
+                           snapshot=snapshot)
+        _write_or_print(text, args.json, "归因机读出口")
+    if args.brief:
+        text = render_brief(result, meta, db_path=str(dbp), generated_at=gen,
+                            snapshot=snapshot)
+        _write_or_print(text, args.brief, "归因候选清单")
+    if not args.json and not args.brief:
+        # 缺省 = 人读出口打到 stdout（与 --brief 同实现，但**不落盘**）
+        print(render_brief(result, meta, db_path=str(dbp), generated_at=gen,
+                           snapshot=snapshot), end="")
+    return 0
+
+
+def _write_or_print(text: str, out: str, label: str) -> None:
+    """写盘或打印。落盘统一 UTF-8 无 BOM + LF（项目纪律）。"""
+    if out == "-":
+        print(text, end="")
+        return
+    p = Path(out)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8", newline="\n")
+    print(f"{label}已写入 {p}")
+
+
+def cmd_attrib_review(args) -> int:
+    """归因台账（P6-3）：抄 card_review 语义——人裁过的归因不再进候选。
+
+    --list 列台账；--pattern + --rule 一言而决（verdict 三态）。
+    **只写台账库**（meta），绝不碰 harvester.db。
+    """
+    from .attrib import list_verdicts, record_verdict
+    meta = Path(args.meta)
+    if args.list:
+        rows = list_verdicts(meta)
+        if not rows:
+            print("台账为空（还没有任何归因裁决）。")
+            return 0
+        for r in rows:
+            print(f"[{r['verdict']}] {r['rule_id']} ({r['class']})  "
+                  f"{r['pattern_key']}"
+                  + (f"  note={r['note']}" if r.get("note") else ""))
+        print(f"共 {len(rows)} 条裁决。")
+        return 0
+    if not args.pattern or not args.rule:
+        print("错误: 需要 --pattern <归一模式> 与 --rule <规则id>"
+              "（或 --list 查台账）", file=sys.stderr)
+        return 2
+    n = record_verdict(meta, args.pattern, args.rule,
+                       cls=args.cls or "unclassified", verdict=args.verdict,
+                       note=args.note or "", reviewed_by=args.by or "")
+    if not n:
+        print("未落账（--pattern/--rule 为空）。")
+        return 0
+    print(f"已落账 {n} 条裁决（{args.verdict}）：{args.rule} ← {args.pattern}")
+    print("重跑 attrib 即不再把该候选列进候选区"
+          "（事实计数不变，落在「已裁决」段）。")
+    return 0
+
+
 def cmd_topic(args) -> int:
     """主题注册表（T1 MVP，v0.22）：独立 meta 库 topics_meta.db。"""
     from .topics import (add_members, delete_topic, list_topics, merge_topics,
@@ -2201,6 +2294,43 @@ def build_parser() -> argparse.ArgumentParser:
                      help="只统计最近 N 天")
     pre.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
     pre.set_defaults(func=cmd_report_errors)
+
+    pat = sub.add_parser("attrib",
+                         help="归因层（P6）：把错误计数变成根因候选 + 应对候选"
+                              "（候选会错，裁决进 attribations 台账）")
+    pat.add_argument("--db", default="harvester.db", help="索引库路径（只读）")
+    pat.add_argument("--rules", default=None,
+                     help="归因规则表（缺省=随包的 "
+                          "harvester/data/attrib-rules.yaml）")
+    pat.add_argument("--json", metavar="PATH",
+                     help="机读出口：全量 + schema，可被程序消费（'-'=stdout）")
+    pat.add_argument("--brief", metavar="PATH",
+                     help="人读出口：一行一条、**不截断**（'-'=stdout）")
+    pat.add_argument("--since", type=float, default=None, metavar="DAYS",
+                     help="只统计最近 N 天")
+    pat.add_argument("--meta", default="attrib_meta.db",
+                     help="归因台账 meta 库（默认 attrib_meta.db；库/表不存在"
+                          "=零感知。人已裁决的候选不再列出）")
+    pat.set_defaults(func=cmd_attrib)
+
+    patr = sub.add_parser("attrib-review",
+                          help="归因台账（P6-3）：人裁过的归因不再进候选"
+                               "（抄 card_review 语义）")
+    patr.add_argument("--list", action="store_true",
+                      help="列出台账明细")
+    patr.add_argument("--pattern", help="归一模式（attrib 输出里的「模式：」行）")
+    patr.add_argument("--rule", help="归因规则 id（如 AR-001）")
+    patr.add_argument("--class", dest="cls", default=None,
+                      help="错误分类（写进台账；缺省 unclassified）")
+    patr.add_argument("--verdict", default="accepted",
+                      choices=["accepted", "rejected", "revise"],
+                      help="accepted=接受该归因；rejected=驳回（归因错了）；"
+                           "revise=方向对但 why/fix 需改（note 写怎么改）")
+    patr.add_argument("--note", help="裁决说明（写进台账）")
+    patr.add_argument("--by", help="谁裁决的（写进台账；缺省不猜身份）")
+    patr.add_argument("--meta", default="attrib_meta.db",
+                      help="归因台账 meta 库（唯一写路径；不碰 harvester.db）")
+    patr.set_defaults(func=cmd_attrib_review)
 
     prc = sub.add_parser("report-chains",
                          help="工具链失败模式报告（长回合/同工具连击/"

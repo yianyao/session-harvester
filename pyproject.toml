@@ -37,4 +37,6 @@ packages = ["harvester", "harvester.adapters"]
 [tool.setuptools.package-data]
 # 随包分发的通用停用词表（keywords 默认启用）。缺此声明会导致装包后
 # 默认表丢失 → 停用词静默失效。
-harvester = ["data/*.txt"]
+# data/*.yaml 是归因规则表（attrib，P6-1）：**必须随包分发**——
+# 放 docs/ 会被 .gitignore 忽略（换机即丢），而 SOP A2 要求它可被重审。
+harvester = ["data/*.txt", "data/*.yaml"]

@@ -1,0 +1,99 @@
+# 归因规则表（attrib）——本项目自定义：把"同一语义的不同字面"归一，产出根因候选。
+#
+# 铁律（SOP-attrib-review.md §0 A2/A3、TODO-attrib-review-P6.md 红线 #9）：
+#   规则放**数据文件**，不放 .py —— 写进代码就重演 errstats._RULES 的困境
+#   （英文短语正则写死在源码里，新 Harness 接入时无人重审）。
+#
+# 为什么本文件在 harvester/data/ 而不是 docs/：
+#   docs/ 整个目录被 .gitignore:32 忽略（见 TODO P6 的 X-7 勘误），放那里等于
+#   规则表不进版本库、换机即丢，与 A2 的"可被重审"理由直接矛盾。
+#   本文件随包分发（pyproject [tool.setuptools.package-data]），先例同
+#   harvester/data/stopwords_zh.txt（kwstats.py:88 用 __file__ 定位）。
+#
+# 四要素（缺任一 → 加载即失败，fail loud；见 harvester/attrib.py）：
+#   match  至少一条非空字符串（字面/正则片段，大小写不敏感）
+#   class  必须在 errstats.CLASSES 内（env/tool_interface/context/unclassified）
+#          —— 复用既有四分类，不另造分类体系
+#   why    根因候选（人读的一句话；**是候选，不是裁决**）
+#   fix    应对候选（知道有病还得有药方，否则上首页只增焦虑）
+# 另两个非四要素但强烈建议填的字段：
+#   confidence  high|medium|low（默认 medium）
+#   verified    人核过这条规则的日期（YYYY-MM-DD）；缺省表示尚未人工核验
+#
+# 语义分层（SOP §3.1，绝不可混）：
+#   ① 事实 fact —— 机器算得出、零判断（计数/锚点/交叉表）      【errstats 已有】
+#   ② 归因 attribution —— 机器出候选、**会错**（本文件 + attrib.py）【本层】
+#   ③ 裁决 verdict —— 只有人能下（attribations 台账）          【永不进本文件】
+
+version: 1
+rules:
+  - id: AR-001
+    class: tool_interface
+    match: ["FS_NOT_OBSERVED", "file has not been read", "not been read yet"]
+    why: 编辑前未读文件——机制要求先观察后写，违反即被拒
+    fix: 提示词前置「改任何文件前先 read」；或工具层把 read 并入 edit 原子操作
+    confidence: high
+    verified: "2026-10-22"
+
+  - id: AR-002
+    class: tool_interface
+    match: ["FS_EDIT_NOT_FOUND", "workspace_edit_match_not_found",
+            "apply_patch_match_not_found", "String to replace not found",
+            "replace not found in file", "Edit error on",
+            "old_string and new_string are exactly the same",
+            "old_string and new_string must differ"]
+    why: 编辑未命中或编辑无效——待替换文本与实际内容不符，或 old/new 完全相同
+    fix: 编辑前先用 read/Grep 取回真实文本，按原文整段替换；改前不做整文件改写
+    confidence: high
+    verified: "2026-10-22"
+    # ⚠ 刻意**不**收裸 "old_string" 作匹配项：实测它会劫持
+    #   "File not found: <path>. Use an empty old_string to create a new file."
+    #   ——那条的真实根因是**文件不存在**（context，归 AR-004），不是编辑未命中。
+    #   这正是 A1「归因会错」的实例：匹配词太弱 → 归错类。规则序即优先级，
+    #   故 AR-004 也排在 AR-002 之后，靠这里收紧而不是靠顺序兜。
+
+  - id: AR-003
+    class: tool_interface
+    match: ["FS_STALE_VERSION", "file changed since it was read"]
+    why: 文件被外部改过，读到的版本已过期——继续写会覆盖别人的改动
+    fix: 重读该文件后再编辑；批量改动前先确认没有并发写入者
+    confidence: high
+    verified: "2026-10-22"
+
+  # ── 以下四条来自 2026-10-22 刷库后实测（attrib --brief 的未归因 top 清单），
+  #    每条都先看到真实错误串与次数才立，不是凭空想出来的规则 ──────────
+  - id: AR-004
+    class: context
+    match: ["FS_NOT_FOUND", "Search path is not accessible",
+            "no such file or directory", "file no longer exists",
+            "File not found", "does not exist"]
+    why: 目标路径不存在——文件/目录已被移动、删除，或路径本身写错
+    fix: 先用 ls/Glob 确认路径存在再操作；批量处理前先枚举目录而不是猜路径
+    confidence: high
+    verified: "2026-10-22"
+    # 说明：`File not found` 是 prose 形态、`FS_NOT_FOUND` 是 DSH 码形态，
+    #   同一条规则同时收——这正是本层存在的理由（同一语义、不同字面）。
+
+  - id: AR-005
+    class: env
+    match: ["WEB_PROVIDER_ERROR"]
+    why: 联网检索服务端故障——web_fetch 的上游 provider 报错，非本地可修
+    fix: 重试或换检索词；连续失败时改走本地检索（search）而不是反复重试同一 URL
+    confidence: medium
+    verified: "2026-10-22"
+
+  - id: AR-006
+    class: tool_interface
+    match: ["subagent depth", "exceeds maxDepth"]
+    why: 子代理嵌套超过平台上限——调用方没意识到自己已在子代理内
+    fix: 由主会话承担再分发；子代理内需要并行时分派给平级而非再嵌套
+    confidence: high
+    verified: "2026-10-22"
+
+  - id: AR-007
+    class: env
+    match: ["tool_permission_revoked"]
+    why: 工具权限被撤销——授权范围在会话中途变化，agent 无法自愈
+    fix: 重新申请该工具的授权；批量操作前先确认授权仍在有效期内
+    confidence: high
+    verified: "2026-10-22"
