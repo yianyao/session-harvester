@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 955 tests ... OK
+# ① 权威基线：全套件。期望 Ran 966 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=914 failures=0 errors=88 skipped=5
+# ② 无 PyYAML 门禁：期望 GATE ran=925 failures=0 errors=88 skipped=6
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,14 +61,14 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 955 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=914 failures=0 errors=88 skipped=5** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=5` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 966 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=925 failures=0 errors=88 skipped=6** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=6` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（955 vs 914）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（966 vs 925）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
-另有 `skipped=5`（v0.74）：其中 `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测
+另有 `skipped=6`（v0.79）：其中 `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测
 用例**（递归回自己，子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip；
 `scripts/gate_no_yaml.py` 自己设这一位，所以门禁绝不会跑门禁），另 `skipped=3` 是
 `test_v57_chain_review` 的台账用例（chain 解析需 PyYAML 无降级，H9——门禁下按
@@ -79,8 +79,12 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 955，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 966，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
+**同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
+「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6
+——**新增需要 PyYAML 的用例时，正确做法是 skip（不是让它断言失败）**：
+门禁的唯一硬判据是 `failures=0`，写成断言失败会直接把门禁弄红。
 
 **"红一次又好了"先查并发**：同一工作区里另有进程正在编辑文件时跑 ①/③，
 会读到半写状态而假红。判别方法：停手后复跑，或看死代码扫描是否回了 3。
@@ -464,7 +468,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | 命令 | 用途 |
 |---|---|
 | `report-tools` | 工具调用/失败率统计 |
-| `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表；v0.23 追加 **活跃 skill×数据源×类别** 交叉表，API 字段 `cross_skill`） |
+| `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表；v0.23 追加 **活跃 skill×数据源×类别** 交叉表，API 字段 `cross_skill`）。**v0.79 P6-5：模式行接归因**——每个模式带**根因候选**（`why`）+ **应对候选**（`fix`）+ 置信；未命中的行**显式标「未归因」**（不许静默省略）。`--rules` 指定规则表，`--no-attrib` 关闭归因层；**归因不可用时报告头明说「本报告不含归因」，绝不渲染成「未归因」**（那会把故障说成结论）。**三分类计数仍是事实层原口径**（归因只补"为什么/怎么办"，不改计数）。同一份归因也进 `/api/reports/errors`（`attrib_status`/`attrib_summary`，页面出「根因/应对」列） |
 | `report-chains` | 工具链失败模式报告（长回合/同工具连击/序列循环/空转） |
 | `attrib` | **归因层**（v0.79 P6）：把错误计数变成**根因候选 + 应对候选**。事实/归因/裁决三层分离（机器只出候选、**会错**，裁决进台账）；规则表是**数据文件** `harvester/data/attrib-rules.yaml`（随包分发，四要素 `match`/`class`/`why`/`fix` 缺一即加载失败），**不放 `.py`**——放代码就重演 `errstats._RULES` 的困境（新 Harness 接入时无人重审）。**人读/机读两个出口不共用实现**：`--json`（全量 + schema，供程序消费）/ `--brief`（一行一条、**不截断**，防"报告截断导致下游静默漏数据"）。只读 `harvester.db`；实测（2026-10-22 刷库后）7 条规则归因 **401/532** 条错误 |
 | `attrib-review` | **归因台账**（v0.79 P6）：抄 `card_review` 语义——**人裁过的归因不再进候选**。表 `attribations`（meta 库，结构与 `card_review` 同构 + 报备的 `class` 列）；三态 `accepted`/`rejected`/`revise`（归因会错，故必须有"驳回"档）。被移出的候选落「已裁决」段，**不许静默消失**。`--list` 列台账；`--pattern`+`--rule` 一言而决。**唯一写路径，只写台账库，绝不碰 `harvester.db`** |

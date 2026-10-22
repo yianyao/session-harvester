@@ -366,9 +366,62 @@ def cross_stats_by_skill(errors: list[dict]) -> list[dict]:
     return rows
 
 
+def _render_attrib_line(entry: dict | None) -> str:
+    """把一条模式的归因候选渲染成一行（P6-5）。
+
+    **不截断 why/fix**：它们是要照着做的东西，截断等于让人按半句话行动。
+    未命中规则（entry 为 None）显式返回"未归因"——**不许静默省略**：
+    省略会让人以为"这行没有问题"，而事实是"机器没认出来"（A1 三层分离）。
+    """
+    if not entry or not entry.get("rule"):
+        return "      - 归因：**未归因**（机器未匹配任何规则；不是「没问题」）"
+    r = entry["rule"]
+    conf = {"high": "高", "medium": "中", "low": "低"}.get(
+        r.get("confidence"), r.get("confidence") or "未标")
+    # 归因类别与事实层类别不一致时显式标出：事实层计数**未被覆盖**（additive），
+    # 但在报告里让人看见"这条其实是用法病、只是旧规则没认出来"是有用信号。
+    cls_note = ""
+    if r.get("class") and r.get("class") != entry.get("class"):
+        cls_note = f"；归因类别 {r['class']}（事实层仍记 {entry.get('class')}）"
+    return (f"      - 归因候选 `{r.get('rule_id')}`（置信 {conf}{cls_note}）"
+            f"：{r.get('why')}　→ 应对：{r.get('fix')}")
+
+
+def _attrib_header(attributions: dict | None) -> str:
+    """报告头的归因状态声明（P6-5）。三态必须能分开，不许含糊。
+
+    - None            归因层未启用 → 明说"本报告不含归因"（不是"全部未归因"）；
+    - 已启用但零命中   明说"0 条命中"，让人知道规则表没起作用；
+    - 正常            给出已归因/未归因的确切条数。
+    """
+    if attributions is None:
+        return ("- 归因：**本报告不含归因**（归因层未启用：规则表不可用或无 PyYAML）"
+                "；模式行只给事实层聚类，**不代表「未归因」**")
+    s = attributions.get("summary") or {}
+    tot = s.get("errors_total", 0)
+    got = s.get("errors_attributed", 0)
+    rules = s.get("rules_hit", 0)
+    rules_tot = s.get("rules_total", 0)
+    return (f"- 归因（**候选**，机器判断会错；裁决请回填 attribations 台账）："
+            f"已归因 {got} / {tot} 条，未归因 {tot - got} 条；"
+            f"规则命中 {rules} / {rules_tot} 条")
+
+
 def render_report(errors: list[dict], meta: dict,
-                  max_detail: int = 12) -> str:
-    """渲染 Markdown 报告：三分类分布 + 位置分桶 + 模式明细（带锚点）。"""
+                  max_detail: int = 12,
+                  attributions: dict | None = None) -> str:
+    """渲染 Markdown 报告：三分类分布 + 位置分桶 + 模式明细（带锚点）。
+
+    `attributions`（P6-5，可选）是 `attrib.collect_attributions` 的返回：
+      - **None** = 归因层未启用（如无 PyYAML）。此时报告**一行归因都不印**，
+        并在头部显式声明"本报告不含归因"——绝不把"规则没载入"渲染成
+        "未归因"，那是把系统故障说成数据结论（本模块 docstring 同口径）。
+      - 传入 dict 时：每个模式行带根因候选（why）+ 应对（fix）+ 置信；
+        未命中的行显式标"未归因"。
+
+    errstats **不 import attrib**（attrib 反过来 import 本模块，且事实层必须
+    独立于归因层）：归因数据一律由调用方传入。
+    """
     title = "错误三分类报告"
     if meta.get("since"):
         title += f"（最近 {meta['since']} 起）"
@@ -386,6 +439,7 @@ def render_report(errors: list[dict], meta: dict,
         f"- 错误步骤 {n} / 总步骤 {meta['total_steps']}"
         f"（失败率 {n / max(meta['total_steps'], 1) * 100:.1f}%），"
         f"涉及 {meta['sessions']} 个会话", "",
+        _attrib_header(attributions), "",
         "## 三分类分布", "",
         "> 类别为本项目自定义分类（行业无直接对应；官方惯例参考 "
         "OpenTelemetry error.type，见 docs/TERMINOLOGY.md §2.2）", "",
@@ -475,6 +529,7 @@ def render_report(errors: list[dict], meta: dict,
     # 模式明细，按 class 分组、count 降序
     stats = pattern_stats(errors)
     order = sorted(stats.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    by_pat = (attributions or {}).get("by_pattern") or {}
     lines += ["", "## 错误模式明细（归一聚类，带锚点）", ""]
     for cls in CLASSES:
         items = [(p, d) for p, d in order if d["class"] == cls]
@@ -486,6 +541,8 @@ def render_report(errors: list[dict], meta: dict,
             unsolved = d.get("given_up", 0)
             lines.append(f"- **x{d['count']}** [{tools}] `{pat}`"
                          + (f"（未解决 {unsolved}）" if unsolved else ""))
+            if attributions is not None:
+                lines.append(_render_attrib_line(by_pat.get(pat)))
             for sid, seq, raw in d["samples"][:2]:
                 lines.append(f"      - `{sid}#{seq}` {raw[:140]}")
         if len(items) > max_detail:

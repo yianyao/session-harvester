@@ -65,6 +65,15 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
 12. **死代码门的并发保护**（v0.45 加）：扫描期间被改动的文件（戳变**或内容与扫描时不一致**，含撕裂读）
     其发现单列 `unstable_findings`、不计入死代码；CLI 只有不可信发现时回 **3（请重跑）**；
     套件那道门可区分 `skipTest`——**并发编辑期间不要对扫描类门下结论**。
+13. **变异/改写脚本必须先关字节码写入**（P6-5 实测踩到，**静默且会伪造结论**）：
+    Python 的 `.pyc` 校验只看 `(mtime, size)`。若变异串与原文**等长**（如 `规则命中`→`规则加载`）
+    且写入与还原落在**同一秒**，还原后 `.pyc` 仍被判为有效 → **跑的还是变异版字节码**。
+    症状：源文件明明是 A、运行时输出却是 B，而 `inspect.getsource` 读 `.py` 也显示 A（它不背锅），极难定位。
+    **正确做法**：① 变异脚本 env 设 `PYTHONDONTWRITEBYTECODE=1`；② 跑前清 `__pycache__/*.pyc`；
+    ③ 还原后**逐字节比对**自证（`read_text() == orig`），不等立刻中止；
+    ④ 手工改完源码怀疑没生效时，先删 `__pycache__/*.pyc` 再复测。
+    本仓两个变异脚本（`docs/reports/mutation-attrib.py`、`mutation-p65-view.py`）已按此加固；
+    它们的"全杀"结论只有在**加固后**跑出来的才算数。
 
 **收尾固定动作**（本仓历史证明有效）：① 死代码扫描（`harvester/` 与 `tests/` 两个根都要 0/0/0，行内 `# noqa` 视为有意保留）；
 ② 悬空路径检查（`git ls-files -c core.quotePath=false` 取已提交 `*.md`，逐个 `Test-Path` 其中 `docs/reports/...` 引用）；

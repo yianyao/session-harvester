@@ -58,6 +58,18 @@ CONFIDENCES = ("high", "medium", "low")
 #: 归因候选的证据锚点上限（人读/机读都给同一份锚点，只是渲染形态不同）。
 MAX_ANCHORS = 5
 
+#: PyYAML 可用性探针（体例同 `cards._HAS_YAML` / `topicchain._HAS_YAML`）：
+#: 测试据此 `skipUnless`，而不是"没有 yaml 就断言失败"——后者会把
+#: `scripts/gate_no_yaml.py` 的唯一硬判据（failures=0）打破。
+#: 注意语义差别：**探针在模块级**（只回答"装没装"），
+#: 而 `load_rules` 缺 yaml 时仍然 **fail loud**（H9：不降级解析）。
+try:
+    import yaml as _yaml_mod
+    _HAS_YAML = True
+except ImportError:  # pragma: no cover - venv 有 PyYAML
+    _yaml_mod = None
+    _HAS_YAML = False
+
 
 def _yaml():
     """PyYAML 缺失时给**项目约定**的清晰报错（体例同 planseed._yaml）。
@@ -66,13 +78,11 @@ def _yaml():
     （README「依赖边界」同口径）。注意：`attrib` 因此需要 PyYAML，
     与 `topic chain` 同类；但它**不是** report-errors 的前置（本层 additive）。
     """
-    try:
-        import yaml
-    except ImportError as exc:  # pragma: no cover - venv 有 PyYAML
+    if _yaml_mod is None:  # pragma: no cover - venv 有 PyYAML
         raise RuntimeError(
             "attrib 的规则表读写需要 PyYAML（venv 解释器，见 README「依赖边界」）；"
-            "不提供降级解析——归因规则读错比报错危险") from exc
-    return yaml
+            "不提供降级解析——归因规则读错比报错危险")
+    return _yaml_mod
 
 
 class RuleError(ValueError):
@@ -173,7 +183,13 @@ def attribute(error_text: str, compiled: list[tuple[dict, list[re.Pattern[str]]]
                 return {
                     "rule_id": r["id"], "class": r["class"],
                     "why": r["why"], "fix": r["fix"],
-                    "confidence": r["confidence"], "verified": r.get("verified"),
+                    # `confidence` 用 get 兜底：`load_rules` 会补缺省值，但
+                    # `collect_attributions(errors, rules)` 是公开函数，调用方
+                    # 可能直接传未补默认的规则（P6-5 测试就撞到 KeyError）。
+                    # 归因结果缺置信标注比"少一个字段"更糟——那让人无法判断
+                    # 该不该信，故缺省 medium 而非留空。
+                    "confidence": r.get("confidence") or "medium",
+                    "verified": r.get("verified"),
                     "matched": reg.pattern, "candidate": True,
                 }
     return None

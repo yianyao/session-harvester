@@ -23,11 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harvester.attrib import (  # noqa: E402
     ATTRIB_VERDICTS, DEFAULT_RULES, JSON_SCHEMA, MAX_ANCHORS, RuleError,
-    _compile, attribute, collect_attributions, ensure_attrib_db,
+    _HAS_YAML, _compile, attribute, collect_attributions, ensure_attrib_db,
     filter_reviewed, list_verdicts, load_rules, load_verdict_map,
     record_verdict, render_brief, render_json)
 from harvester.cards import _REVIEW_SCHEMA, ensure_review_db  # noqa: E402
-from harvester.errstats import CLASSES, classify_error  # noqa: E402
+from harvester.errstats import CLASSES, classify_error, render_report  # noqa: E402
 
 #: attribations 相对 card_review 的**额外列**（报备制：新增列须登记在此，
 #: 否则 test_schema_is_isomorphic_to_card_review 会红）。
@@ -567,6 +567,202 @@ class TestLedger(unittest.TestCase):
             brief = render_brief(filter_reviewed(res, meta))
             self.assertIn("已裁决", brief)
             self.assertIn("已核", brief)
+
+
+class TestReportAttribution(unittest.TestCase):
+    """P6-5：归因进 `report-errors` 报告（模式行带 why/fix/置信）。
+
+    本类钉住的三件**会红**的事：
+    1. 命中规则的行必须真的带 `why`/`fix`/置信（少任一项即红）；
+    2. 未命中的行必须**显式**写「未归因」（静默省略即红）；
+    3. **归因层未启用（None）绝不许渲染成「未归因」**——那是把系统故障
+       说成数据结论。这条是本类最重要的一条：把 `attributions or {}`
+       这类"顺手兜底"写回去，它立刻红。
+    """
+
+    _META = {"total_steps": 100, "sessions": 2}
+
+    def _rules(self):
+        return [{"id": "AR-T1", "class": "tool_interface",
+                 "match": ["FS_EDIT_NOT_FOUND"],
+                 "why": "编辑锚点未命中（原文变了或文件已改）",
+                 "fix": "先 read 确认锚点在，再 edit", "confidence": "high"}]
+
+    def _errs(self):
+        # 两条命中 AR-T1、一条谁都不命中
+        return _errors(
+            ("FS_EDIT_NOT_FOUND", "FS_EDIT_NOT_FOUND: old_string not found",
+             "tool_interface"),
+            ("某个没人管的模式", "weird failure nobody classifies",
+             "unclassified"),
+        )
+
+    def test_attributed_row_carries_why_fix_and_confidence(self):
+        """命中行必须带 why + fix + 置信标注（P6-5 的核心验收）。"""
+        errs = self._errs()
+        att = collect_attributions(errs, self._rules())
+        md = render_report(errs, self._META, attributions=att)
+        self.assertIn("AR-T1", md, "报告未标出命中的规则号")
+        self.assertIn("编辑锚点未命中", md, "报告缺 why（根因候选）")
+        self.assertIn("先 read 确认锚点在", md, "报告缺 fix（应对候选）")
+        self.assertIn("置信 高", md, "报告缺置信标注")
+        self.assertIn("候选", md, "归因必须标明是候选而非结论（A1）")
+
+    def test_unattributed_row_is_explicit(self):
+        """未命中的行必须显式标「未归因」，不许静默省略。"""
+        errs = self._errs()
+        att = collect_attributions(errs, self._rules())
+        md = render_report(errs, self._META, attributions=att)
+        self.assertIn("**未归因**", md)
+        # 且未归因那条模式真的出现在报告里（不是被整行吞掉）
+        self.assertIn("没人管的模式", md)
+
+    def test_disabled_attribution_is_not_rendered_as_unattributed(self):
+        """**本类最关键的门**：attributions=None 时不许出现「未归因」。
+
+        None 的语义是「归因层没启用」，不是「全都归因失败」。
+        若实现图省事写成 `attributions or {}`，这条立刻红——因为那样
+        每一行都会被打上「未归因」，读者会把系统故障当成数据结论。
+        """
+        errs = self._errs()
+        md = render_report(errs, self._META, attributions=None)
+        # 打的是**模式行**的前缀，不是全文搜「未归因」——报告头里就有
+        # 「…不**代表**「未归因」」这句说明，全文搜会打到自己的说明文字上
+        # （第一版就是这么写错的：门打在自己的措辞上，测不出真问题）。
+        self.assertNotIn("      - 归因：", md,
+                         "归因层未启用却给模式行打了归因结论")
+        self.assertIn("不含归因", md, "未启用时必须在报告头明说")
+        self.assertNotIn("归因候选", md, "未启用时不应出现归因候选行")
+
+    def test_zero_hit_rules_say_zero_not_silent(self):
+        """规则载入了但一条都没命中：头部要写「命中 0」，不许看起来像正常。"""
+        rules = [{"id": "AR-T9", "class": "env",
+                  "match": ["绝对不会出现的串_zqx"],
+                  "why": "w", "fix": "f"}]
+        errs = self._errs()
+        att = collect_attributions(errs, rules)
+        md = render_report(errs, self._META, attributions=att)
+        self.assertIn("规则命中 0 / 1", md, "零命中必须在头部显式给出")
+        self.assertIn("**未归因**", md)
+
+    def test_fact_class_counts_are_not_overridden_by_attribution(self):
+        """归因是**叠加层**：三分类计数必须与不带归因时逐字一致。
+
+        钉住"归因不改事实"：若有人让归因覆盖 class 字段，三分类数字会变，
+        这条立刻红（P6-4 明确不改 errstats 口径）。
+        """
+        errs = self._errs()
+        plain = render_report(errs, self._META, attributions=None)
+        with_att = render_report(
+            errs, self._META,
+            attributions=collect_attributions(errs, self._rules()))
+
+        def table(md):
+            rows = [ln for ln in md.splitlines() if ln.startswith("| ")
+                    and any(c in ln for c in ("env", "tool_interface",
+                                             "context", "unclassified"))]
+            return rows
+
+        self.assertEqual(table(plain), table(with_att),
+                         "归因改变了三分类计数（必须 additive）")
+
+    def test_class_mismatch_is_surfaced_but_fact_stays(self):
+        """归因类别与事实层不一致时要显示出来，但事实层计数不变。"""
+        rules = [{"id": "AR-T2", "class": "tool_interface",
+                  "match": ["weird failure"],
+                  "why": "其实是用法病", "fix": "改用法"}]
+        errs = self._errs()
+        att = collect_attributions(errs, rules)
+        md = render_report(errs, self._META, attributions=att)
+        self.assertIn("归因类别 tool_interface", md)
+        self.assertIn("事实层仍记 unclassified", md, "必须显示两侧口径")
+
+    def test_bad_rules_path_degrades_honestly(self):
+        """规则表不可用 → 归因层关闭 + stderr 说明；**不许冒充「未归因」**。"""
+        import contextlib
+        import io
+
+        from harvester.cli import _load_attributions
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            got = _load_attributions(self._errs(),
+                                     Path("definitely-not-here.yaml"))
+        self.assertIsNone(got, "规则表缺失时必须返回 None（关闭归因层）")
+        self.assertIn("归因层未启用", buf.getvalue(),
+                      "必须向 stderr 说明原因，不许静默关闭")
+
+    def test_cli_flags_are_real(self):
+        """`--rules` / `--no-attrib` 必须过真解析器（不是只写在文档里）。"""
+        from harvester.cli import build_parser
+        a = build_parser().parse_args(["report-errors", "--db", "x.db"])
+        self.assertFalse(a.no_attrib, "缺省应开启归因")
+        self.assertIsNone(a.rules)
+        b = build_parser().parse_args(
+            ["report-errors", "--db", "x.db", "--no-attrib",
+             "--rules", "r.yaml"])
+        self.assertTrue(b.no_attrib)
+        self.assertEqual(b.rules, "r.yaml")
+
+
+class TestApiAttribution(unittest.TestCase):
+    """P6-5 页面数据面：`api_reports_errors` 的归因三态（ok / unavailable）。
+
+    真实库永远是 ok，`unavailable` 只能用桩测——不测就等于没写：
+    那条分支一旦坏掉，页面会把"归因层没载入"渲染成"全部未归因"
+    （本模块最想防的那类谎）。
+    """
+
+    def _errs(self):
+        return _errors(
+            ("FS_STALE_VERSION", "FS_STALE_VERSION: file changed on disk",
+             "tool_interface"),
+            ("没人管的模式", "weird failure nobody classifies", "unclassified"),
+        )
+
+    @unittest.skipUnless(_HAS_YAML, "需要 PyYAML（归因规则表无降级解析）")
+    def test_status_ok_gives_rule_and_explicit_none(self):
+        """ok 态：命中的给候选 dict，未命中的**键存在且为 None**（不是缺键）。"""
+        from harvester.apiserve import _attrib_payload
+        st, note, by = _attrib_payload(self._errs())
+        self.assertEqual(st, "ok")
+        self.assertEqual(note, "")
+        self.assertIn("FS_STALE_VERSION", by)
+        rule = by["FS_STALE_VERSION"]
+        self.assertIsNotNone(rule, "该模式应被规则命中")
+        for k in ("rule_id", "class", "why", "fix", "confidence"):
+            self.assertTrue(rule.get(k), f"候选缺 {k}")
+        self.assertIs(rule.get("candidate"), True, "归因必须标 candidate")
+        # 未命中的模式必须**显式 None**（键在、值为 None）
+        self.assertIn("没人管的模式", by)
+        self.assertIsNone(by["没人管的模式"], "未归因必须显式 None，不能缺键")
+
+    def test_unavailable_is_distinguishable_from_unattributed(self):
+        """unavailable 态：status 明确 + note 有原因 + **不给任何 by_pattern**。
+
+        这条钉住"故障 ≠ 未归因"：若实现把异常吞掉返回 ("ok", "", {})，
+        页面会把 0 个候选渲染成"全部未归因"——这条立刻红。
+        """
+        from unittest.mock import patch
+
+        from harvester.apiserve import _attrib_payload
+        with patch("harvester.attrib.load_rules",
+                   side_effect=RuntimeError("缺 PyYAML")):
+            st, note, by = _attrib_payload(self._errs())
+        self.assertEqual(st, "unavailable")
+        self.assertIn("PyYAML", note, "必须把原因带出来")
+        self.assertEqual(by, {}, "不可用时不得给出候选映射")
+
+    def test_unavailable_on_broken_rules_file(self):
+        """规则表损坏（RuleError）同样是 unavailable，不是"全部未归因"。"""
+        from unittest.mock import patch
+
+        from harvester.apiserve import _attrib_payload
+        with patch("harvester.attrib.load_rules",
+                   side_effect=RuleError("规则表 YAML 解析失败")):
+            st, note, by = _attrib_payload(self._errs())
+        self.assertEqual(st, "unavailable")
+        self.assertIn("YAML", note)
+        self.assertEqual(by, {})
 
 
 class TestCardReviewSchemaConstantUsed(unittest.TestCase):

@@ -628,7 +628,13 @@ def cmd_report_traces(args) -> int:
 
 
 def cmd_report_errors(args) -> int:
-    """错误三分类报告（G2 确定性一半）：env/tool_interface/context + 位置分桶。"""
+    """错误三分类报告（G2 确定性一半）：env/tool_interface/context + 位置分桶。
+
+    P6-5：模式行接归因候选（why/fix/置信）。归因是**叠加层**——
+    三分类计数**仍是事实层原口径**（不因归因改写），归因只补"为什么/怎么办"。
+    归因不可用时**不降级成"未归因"**：报告头明说"不含归因"，
+    然后把报告照常给出（report-errors 不因归因层故障而不可用）。
+    """
     from .errstats import collect_errors_from_db, render_report
     dbp = Path(args.db)
     if not dbp.is_file():
@@ -636,8 +642,33 @@ def cmd_report_errors(args) -> int:
               file=sys.stderr)
         return 2
     errors, meta = collect_errors_from_db(dbp, since_days=args.since)
-    _emit_report(render_report(errors, meta), args)
+    attributions = None
+    if not getattr(args, "no_attrib", False):
+        attributions = _load_attributions(errors, getattr(args, "rules", None))
+    _emit_report(render_report(errors, meta, attributions=attributions), args)
     return 0
+
+
+def _load_attributions(errors: list, rules_path) -> dict | None:
+    """尽力加载归因层；**任何失败都不静默**（返回 None 时由报告头声明）。
+
+    为什么不 `raise`：`report-errors` 的职责是出事实报告，归因是 additive
+    增强（attrib.py docstring 同口径）。但"没启用"必须让人看见——
+    所以失败原因打到 stderr，且报告头会写"本报告不含归因"。
+    """
+    from .attrib import RuleError, collect_attributions, load_rules
+    try:
+        rules = load_rules(Path(rules_path) if rules_path else None)
+    except (RuleError, RuntimeError) as exc:
+        print(f"提示: 归因层未启用（{exc}）；本次报告不含归因。",
+              file=sys.stderr)
+        return None
+    try:
+        return collect_attributions(errors, rules)
+    except (RuleError, ValueError) as exc:      # 规则编译错等
+        print(f"提示: 归因层未启用（{exc}）；本次报告不含归因。",
+              file=sys.stderr)
+        return None
 
 
 def cmd_report_chains(args) -> int:
@@ -2293,6 +2324,11 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--since", type=float, default=None, metavar="DAYS",
                      help="只统计最近 N 天")
     pre.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pre.add_argument("--rules", default=None,
+                     help="归因规则表（缺省=随包的 "
+                          "harvester/data/attrib-rules.yaml）")
+    pre.add_argument("--no-attrib", action="store_true",
+                     help="不加载归因层（只要事实层三分类；报告头会明说）")
     pre.set_defaults(func=cmd_report_errors)
 
     pat = sub.add_parser("attrib",

@@ -379,9 +379,43 @@ def api_triage(con: sqlite3.Connection, db: Path,
     return r
 
 
+def _attrib_payload(errors: list[dict]) -> tuple[str, str, dict]:
+    """归因层给页面用的载荷（P6-5）：返回 (status, note, by_pattern)。
+
+    **status 三态可分**，这是本函数存在的全部理由：
+      - "ok"          规则表载入成功。`by_pattern[pat]` = 候选 dict 或 **None**
+                      （None 明确表示"未归因"）；
+      - "unavailable" 归因层不可用（无 PyYAML / 规则表缺失/损坏）。此时
+                      `by_pattern` 为空，且 note 写明原因。
+
+    两种情况的区别在页面上必须看得见：把 "unavailable" 渲染成"全部未归因"
+    等于把系统故障说成数据结论（errstats.render_report 同口径）。
+    归因是 **additive**：本函数不改 `class`、不改任何计数。
+    """
+    try:
+        from .attrib import RuleError, collect_attributions, load_rules
+        rules = load_rules()
+    except (RuleError, RuntimeError, ImportError) as exc:
+        return "unavailable", str(exc), {}
+    try:
+        res = collect_attributions(errors, rules)
+    except (RuleError, ValueError) as exc:
+        return "unavailable", str(exc), {}
+    by_pat = {}
+    for pat, row in (res.get("by_pattern") or {}).items():
+        by_pat[pat] = row.get("rule")      # None → 页面显式标「未归因」
+    return "ok", "", by_pat
+
+
 def api_reports_errors(con: sqlite3.Connection, db: Path,
                        params: dict) -> dict:
-    """G2 错误三分类：分布 + 模式聚类（决策要聚类不要流水，全量 errors 不出）。"""
+    """G2 错误三分类：分布 + 模式聚类（决策要聚类不要流水，全量 errors 不出）。
+
+    P6-5 additive：每个模式行附 `attrib`（根因候选 why / 应对 fix / 置信），
+    并给 `attrib_status` + `attrib_note` 说明归因层是否可用。
+    `attrib` 为 **null** 表示"该模式未归因"；归因层不可用时**没有** `attrib`
+    键且 `attrib_status="unavailable"` —— 两者在页面上必须分开呈现。
+    """
     errors, meta = collect_errors_from_db(db, since_days=_since_days(params),
                                           con=con)
     by_class = Counter(e["class"] for e in errors)
@@ -390,15 +424,27 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
     for e in errors:
         by_source[e["source"]][e["class"]] += 1
     stats = pattern_stats(errors)
+    attrib_status, attrib_note, attrib_by_pat = _attrib_payload(errors)
     patterns = [{"pattern": pat, "class": d["class"], "count": d["count"],
                  "tools": sorted(d["tools"]),
-                 "samples": _samples_json(d["samples"])}
+                 "samples": _samples_json(d["samples"]),
+                 # 归因候选：None=未归因；`attrib_status != "ok"` 时该键仍给
+                 # None，但页面按 status 分支，不会把它当"未归因"展示。
+                 "attrib": attrib_by_pat.get(pat)}
                 for pat, d in sorted(stats.items(),
                                      key=lambda kv: (-kv[1]["count"], kv[0]))]
+    n_got = sum(1 for p in patterns if p["attrib"])
     return {"api_version": API_VERSION, "meta": meta,
             "by_class": dict(by_class), "by_bucket": dict(by_bucket),
             "by_source": {k: dict(v) for k, v in by_source.items()},
             "patterns": patterns,
+            # P6-5 additive：归因层状态（"ok" / "unavailable"）
+            "attrib_status": attrib_status,
+            "attrib_note": attrib_note,
+            "attrib_summary": {"patterns_total": len(patterns),
+                               "patterns_attributed": n_got,
+                               "patterns_unattributed":
+                                   len(patterns) - n_got},
             # P1-3 additive：交叉表 class × harness × model（行序 total 降序）
             "cross": cross_stats(errors),
             # v0.23 #14 additive：交叉表 class × harness × skill
