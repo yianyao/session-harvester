@@ -117,6 +117,11 @@ class TestHonesty(unittest.TestCase):
             self.assertIsNone(FULL_CLAIM.search(cov["line"]),
                               "覆盖度行出现了「全库/全覆盖」措辞：" + cov["line"])
             self.assertEqual(cov["sources"], ["dsh"])
+            # 页面用纯文本形态：Markdown 标记不许漏到 HTML 上，且两形态同数
+            self.assertNotIn("**", cov["line_text"])
+            self.assertNotIn("`", cov["line_text"])
+            self.assertIn(f"已登记 {cov['registered_sessions']} / "
+                          f"总会话 {cov['total_sessions']}", cov["line_text"])
 
     def test_missing_db_does_not_raise_and_shows_zero(self):
         cov = coverage(None, None)

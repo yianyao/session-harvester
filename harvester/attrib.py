@@ -408,6 +408,55 @@ def filter_reviewed(result: dict, meta: Path | None) -> dict:
 JSON_SCHEMA = "attrib/1"
 
 
+def attribution_coverage(summary: dict) -> dict:
+    """归因覆盖度（P6-8 口径：**现算 + 必带分母 + 明说未覆盖部分**）。
+
+    分母是**本库本窗口**的模式数/错误数，不是"全库真理"：未归因的部分
+    **不在本面**。这条线要随数字一起给，否则读者会把"已归因 19 个模式"
+    读成"归因已经覆盖全部错误"——同一类错误（拿部分覆盖冒充全库）
+    在产物面（P6-8）刚刚栽过一次。
+
+    全部归因时也**不许**说"已全覆盖"：候选仍会错，裁决仍在台账。
+    """
+    pt = int(summary.get("patterns_total") or 0)
+    pa = int(summary.get("patterns_attributed") or 0)
+    pu = int(summary.get("patterns_unattributed") or 0)
+    et = int(summary.get("errors_total") or 0)
+    ea = int(summary.get("errors_attributed") or 0)
+    eu = int(summary.get("errors_unattributed") or 0)
+    pp = round(pa * 100.0 / pt, 1) if pt else 0.0
+    ep = round(ea * 100.0 / et, 1) if et else 0.0
+    if pu or eu:
+        tail = (f"；**未归因的 {pu} 个模式（{eu} 条错误）不在本面**"
+                "——这些条目只有计数、没有根因候选")
+    else:
+        tail = ("；**本库本窗口内的模式都有归因候选**"
+                "（候选仍会错，裁决请回填 attribations 台账）")
+    head = (f"- 覆盖度：**已归因 {pa} / {pt} 个模式（{pp}%）、"
+            f"{ea} / {et} 条错误（{ep}%）**")
+    # 页面要纯文本（`**` 在 HTML 里会原样显示）——两个形态**同源现算**，
+    # 不是前端去星号：口径只在这里写一次。
+    plain = (f"- 覆盖度：已归因 {pa} / {pt} 个模式（{pp}%）、"
+             f"{ea} / {et} 条错误（{ep}%）"
+             + tail.replace("**", ""))
+    return {"patterns_total": pt, "patterns_attributed": pa,
+            "patterns_unattributed": pu,
+            "errors_total": et, "errors_attributed": ea,
+            "errors_unattributed": eu,
+            "pct_patterns": pp, "pct_errors": ep,
+            "line": head + tail, "line_text": plain}
+
+
+def _summary_level(summary: dict):
+    """本出口的等级（P6-7 判据唯一一份在 `reviewable.py`，此处只喂事实）。"""
+    from .reviewable import assess as _assess
+    return _assess(entries=int(summary.get("patterns_total") or 0),
+                   candidates=int(summary.get("patterns_attributed") or 0),
+                   note="归因候选面：候选 + why/fix + 台账回填通道"
+                   if summary.get("patterns_attributed") else
+                   "规则全未命中：有计数、无根因候选")
+
+
 def render_json(result: dict, errors_meta: dict | None = None,
                 db_path: str = "", generated_at: str = "",
                 snapshot: dict | None = None) -> str:
@@ -428,6 +477,10 @@ def render_json(result: dict, errors_meta: dict | None = None,
         "snapshot": snapshot or {},
         "errors_meta": errors_meta or {},
         "summary": result["summary"],
+        # P6-8 口径：覆盖度现算并随数据给（P6-9 归因台直接用这一行）
+        "coverage": attribution_coverage(result["summary"]),
+        # P6-7 判据同源：等级由内容算，页面只显示不重算
+        "reviewable": _summary_level(result["summary"]).as_dict(),
         "reviewed": result.get("reviewed", []),
         "patterns": [result["by_pattern"][k]
                      for k in sorted(result["by_pattern"])],
@@ -468,12 +521,8 @@ def render_brief(result: dict, errors_meta: dict | None = None,
         L += ["> 库快照：" + "；".join(f"{k}={v}" for k, v in snapshot.items()
                                        if v), ""]
     # P6-7：本出口就是**候选清单**，等级由内容算（有条目+候选+回填通道）。
-    from .reviewable import assess as _assess
-    L += [_assess(entries=s.get("patterns_total", 0),
-                  candidates=s.get("patterns_attributed", 0),
-                  note="归因候选面：候选 + why/fix + 台账回填通道"
-                  if s.get("patterns_attributed") else
-                  "规则全未命中：有计数、无根因候选").render(), ""]
+    # 判据参数只写在 `_summary_level` 一处：两个出口的等级必须永远一致。
+    L += [_summary_level(s).render(), ""]
     L += [
         f"- 模式 {s['patterns_total']} 个"
         f"（已归因 {s['patterns_attributed']} / 未归因 {s['patterns_unattributed']}）",

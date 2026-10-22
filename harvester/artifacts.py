@@ -222,9 +222,15 @@ def coverage(db_path, meta_path) -> dict:
     line = (f"- 覆盖度：**仅 dsh 源**（`artifacts.py:8` 自陈），"
             f"已登记 {reg} / 总会话 {total}（{pct}%）——{note}；"
             f"**本面不代表全库**")
+    # 页面要纯文本（`**`/反引号在 HTML 里会原样显示）；与 `line` **同源现算**，
+    # 不让前端去星号——口径只在这里写一次。
+    line_text = (f"- 覆盖度：仅 dsh 源（artifacts.py:8 自陈），"
+                 f"已登记 {reg} / 总会话 {total}（{pct}%）——{note}；"
+                 f"本面不代表全库")
     return {"sources": ["dsh"], "sources_note": note,
             "registered_sessions": reg, "registered_versions": vers,
-            "total_sessions": total, "pct": pct, "line": line}
+            "total_sessions": total, "pct": pct,
+            "line": line, "line_text": line_text}
 
 
 def list_artifacts(meta_path: Path, limit: int = 200,
