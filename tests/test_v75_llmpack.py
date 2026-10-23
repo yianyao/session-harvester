@@ -10,13 +10,16 @@
 from __future__ import annotations
 
 import shlex
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from harvester import llmpack as L
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "harvester.db"
+TOPICS = ROOT / "knowledge" / "topics"
 
 
 class TestPackShape(unittest.TestCase):
@@ -206,6 +209,150 @@ class TestValidateCatches(unittest.TestCase):
         p["items"].append(dict(p["items"][0]))
         p["slot"]["entries"].append(dict(p["slot"]["entries"][0]))
         self.assertTrue(any("重复" in x for x in L.validate_pack(p)))
+
+
+class TestChainsFace(unittest.TestCase):
+    """chains 面：chain 是**文件**不是库行，证据来自 `chainaudit.audit_chain`。
+
+    门钉五件事（每条都能红）：
+      ① 选 chains 却不给 `chain_root` → 必须响亮（静默少一个面 = 用户以为没数据）；
+      ② `chain_root` 里只有主题文档 / 根本不是目录 → 必须响亮（主题文档没有
+         members，照单全收会把「成员 0、引文 0/0」的假条目塞进包 = R1 病）；
+      ③ 真库真文件：subject 自报事实、槽与 items 同序同号、包过 `validate_pack`；
+      ④ 证据纪律：只给 chain 名等于让 LLM 猜，每条至少要有引文/可疑锚点/覆盖之一；
+      ⑤ 只读：审计全程不许写库。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chain_files = sorted(TOPICS.glob("chain-*.md"))
+        cls.pack = None
+        cls.before = None
+        cls.after = None
+        if DB.is_file() and cls.chain_files:
+            cls.before = (DB.stat().st_mtime_ns, DB.stat().st_size)
+            cls.pack = L.build_pack(DB, faces=("chains",), limit=5,
+                                    chain_root=TOPICS)
+            cls.after = (DB.stat().st_mtime_ns, DB.stat().st_size)
+
+    @classmethod
+    def _real_pack(cls) -> dict:
+        """取真数据包；缺库/缺 chain 文件时**跳过**（说清缺哪一件）。"""
+        if not DB.is_file():
+            raise unittest.SkipTest("缺真库 harvester.db")
+        if not cls.chain_files:
+            raise unittest.SkipTest("缺真 chain 文件 knowledge/topics/chain-*.md")
+        return cls.pack
+
+    def test_chain_root_required(self):
+        """选了 chains 面就必须指明 chain 文件在哪：不能猜、也不能静默跳过。"""
+        with self.assertRaises(ValueError) as cm:
+            L.build_pack(DB, faces=("chains",))
+        self.assertIn("chain_root", str(cm.exception),
+                      "报错必须点名 chain_root，否则用户不知道该补什么")
+
+    def test_wrong_root_fails_loud(self):
+        """根目录里只有主题文档 / 根本不是目录：两种都要响亮，别当成「没有 chain」。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # 主题文档：frontmatter 没有 members（真数据里 01a/01b 就长这样）
+            (root / "01a-主题文档.md").write_text(
+                "---\ntopic: x\n---\n\n正文没有成员列表。\n", encoding="utf-8")
+            # members 是空列表也不算真 chain（判据是「非空 list」）
+            (root / "chain-空成员.md").write_text(
+                "---\ntopic: x\nmembers: []\n---\n\n空成员。\n", encoding="utf-8")
+            with self.assertRaises(ValueError) as cm:
+                L.build_pack(DB, faces=("chains",), chain_root=root)
+            self.assertIn("没有真 chain 文件", str(cm.exception),
+                          "只有主题文档时必须报「没有真 chain 文件」")
+
+            with self.assertRaises(ValueError) as cm2:
+                L.build_pack(DB, faces=("chains",),
+                             chain_root=root / "no-such-dir")
+            self.assertIn("不是目录", str(cm2.exception),
+                          "路径写错（不是目录）必须单独报出来")
+
+    def test_missing_yaml_is_not_disguised_as_no_chain(self):
+        """缺依赖要响亮（H9）：`load_chain` 抛「需要 PyYAML」时不许吞成
+        「没有真 chain 文件」——那句会把用户指向目录内容，真因是环境缺库。
+        （2026-10-23 由 chains 面测试会话点出，实现里改成原样上抛。）"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "chain-x.md").write_text("---\ntopic: x\n---\n", encoding="utf-8")
+
+            def _boom(_path):
+                raise RuntimeError("读取 chain 需要 PyYAML（pip install pyyaml）")
+
+            with mock.patch("harvester.topicchain.load_chain", _boom):
+                with self.assertRaises(RuntimeError) as cm:
+                    L.build_pack(DB, faces=("chains",), chain_root=root)
+            self.assertIn("PyYAML", str(cm.exception),
+                          "缺依赖的信息必须原样传出，不许改写成"
+                          "「没有真 chain 文件」")
+
+    def test_real_chains_are_packed(self):
+        """真库 + 真 chain 文件：条数、编号、subject 事实、槽对齐、包自洽。"""
+        pack = self._real_pack()
+        items = pack["items"]
+        self.assertEqual(pack["faces"], ["chains"])
+        self.assertEqual(pack["n_items"], len(items))
+        self.assertGreaterEqual(len(items), 1, "真数据里应当有可打包的 chain")
+        self.assertLessEqual(len(items), 5, "limit=5 不许超发")
+        self.assertEqual(len(items), min(5, len(self.chain_files)),
+                         "每份真 chain 文件都应进包（别静默漏文件）")
+        self.assertEqual(len({it["facts"]["file"] for it in items}), len(items),
+                         "同一个 chain 文件不许被打两次包")
+        for it in items:
+            self.assertRegex(it["item_id"], r"^C-\d{3}$")
+            self.assertEqual(it["face"], "chains")
+            for token in ("成员", "引文", "命中"):
+                self.assertIn(token, it["subject"],
+                              "subject 必须自报事实（缺「%s」）" % token)
+        self.assertTrue(any(it["facts"]["quotes"]["total"] > 0 for it in items),
+                        "真 chain 正文里有「」引文，至少一条应有引文可核")
+        self.assertEqual([i["item_id"] for i in items],
+                         [e["item_id"] for e in pack["slot"]["entries"]],
+                         "判定槽必须与 items 同序同号")
+        self.assertEqual(L.validate_pack(pack), [])
+
+    def test_every_item_carries_evidence(self):
+        """只给 chain 名 = 让 LLM 猜：facts 必须可回溯，且与 subject 同一口径。"""
+        pack = self._real_pack()
+        for it in pack["items"]:
+            f = it["facts"]
+            for key in ("file", "topic", "members", "quotes", "anchors",
+                        "coverage", "audit_ok"):
+                self.assertIn(key, f, "facts 缺 %s（只给名字等于让人猜）" % key)
+            self.assertTrue(str(f["file"]).endswith(".md"),
+                            "facts.file 必须是 chain 文件名（可回溯到文件）")
+            topic = f["topic"] or Path(f["file"]).stem
+            self.assertIn(topic, it["subject"],
+                          "subject 与 facts.topic 对不上号（人读那份别另算）")
+            self.assertGreaterEqual(f["members"], 1, "真 chain 文件必须真有成员")
+            # subject 里的每个数字都必须与 facts 同源（两套口径 = 静默漂移）
+            q = f["quotes"]
+            self.assertIn("引文 %d/%d 命中" % (q["hit"], q["total"]), it["subject"])
+            self.assertIn("成员 %d｜" % f["members"], it["subject"])
+            self.assertIn("可疑锚点 %d" % f["anchors"]["n_suspicious"],
+                          it["subject"])
+            self.assertIn("有锚点成员 %d/%d" % (f["coverage"]["anchored_members"],
+                                               f["members"]), it["subject"])
+            self.assertLessEqual(q["hit"], q["total"],
+                                 "命中数不可能超过引文总数")
+            self.assertTrue(
+                q["total"] > 0
+                or f["anchors"]["n_suspicious"] > 0
+                or f["coverage"]["anchored_members"] > 0,
+                "%s 三条证据全为 0，等于只给了个名字" % it["item_id"])
+            self.assertIsInstance(f["audit_ok"], bool)
+
+    def test_read_only(self):
+        """审计跑完库不许有写痕迹（mtime_ns 是最灵敏的那根针）。"""
+        self._real_pack()
+        self.assertEqual(self.after[0], self.before[0],
+                         "chains 面读库改动了 mtime（有写痕迹）")
+        self.assertEqual((DB.stat().st_mtime_ns, DB.stat().st_size), self.before,
+                         "chains 面跑完不许留下任何写痕迹")
 
 
 if __name__ == "__main__":  # pragma: no cover

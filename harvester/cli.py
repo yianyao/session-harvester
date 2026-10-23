@@ -581,7 +581,7 @@ def cmd_report_tools(args) -> int:
     - note 扫描：从数据源实时加载，按 [tool_call]/[tool_result] 标记汇总。
     """
     from .toolstats import (collect_stats, collect_stats_from_db,
-                            render_report)
+                            render_report, tool_rows)
     flow = None
     if args.db:
         dbp = Path(args.db)
@@ -600,12 +600,20 @@ def cmd_report_tools(args) -> int:
                                         render_model_table, render_source_table)
                 stats, flow = collect_stats_from_db(dbp,
                                                     since_days=args.since)
+                by_source = collect_source_stats(dbp, since_days=args.since)
+                by_model = collect_model_stats(dbp, since_days=args.since)
                 report = render_report(stats, flow=flow)
-                report += render_source_table(
-                    collect_source_stats(dbp, since_days=args.since))
-                report += render_model_table(
-                    collect_model_stats(dbp, since_days=args.since))
+                report += render_source_table(by_source)
+                report += render_model_table(by_model)
                 _emit_report(report, args)
+                if args.json:
+                    _emit_json(args.json, "report-tools/1", {
+                        "basis": "steps",
+                        "flow": flow,
+                        "tools": tool_rows(stats),
+                        "sources": _group_rows(by_source),
+                        "models": _group_rows(by_model),
+                    }, dbp=dbp)
                 return 0
         print(f"[warn] {args.db} 无 steps 数据，回退 note 扫描口径",
               file=sys.stderr)
@@ -623,8 +631,12 @@ def cmd_report_tools(args) -> int:
                     print(f"  [skip] {it['adapter']}#{it['session_id'][:12]}: {e}",
                           file=sys.stderr)
 
-    report = render_report(collect_stats(_records()))
-    _emit_report(report, args)
+    stats = collect_stats(_records())
+    _emit_report(render_report(stats), args)
+    if args.json:
+        _emit_json(args.json, "report-tools/1",
+                   {"basis": "notes", "tools": tool_rows(stats)},
+                   dbp=Path(args.db) if args.db else None)
     return 0
 
 
@@ -662,6 +674,10 @@ def cmd_report_errors(args) -> int:
     if not getattr(args, "no_attrib", False):
         attributions = _load_attributions(errors, getattr(args, "rules", None))
     _emit_report(render_report(errors, meta, attributions=attributions), args)
+    if args.json:
+        _emit_json(args.json, "report-errors/1",
+                   {"errors": errors, "meta": meta,
+                    "attributions": attributions}, dbp=dbp)
     return 0
 
 
@@ -697,6 +713,8 @@ def cmd_report_chains(args) -> int:
         return 2
     d = collect(dbp, since_days=args.since, top=args.top)
     _emit_report(render_report(d, top=args.top), args)
+    if args.json:
+        _emit_json(args.json, "report-chains/1", d, dbp=dbp)
     return 0
 
 
@@ -1202,7 +1220,8 @@ def cmd_suggest_agents(args) -> int:
 
 def cmd_report_skill(args) -> int:
     """Skill 行为画像（G4 确定性主干）：按 skill 聚合调用/行为链/触发任务。"""
-    from .behstats import collect_skill_invocations, render_skill_report
+    from .behstats import (collect_skill_invocations, render_skill_report,
+                           skill_summary)
     dbp = Path(args.db)
     if not dbp.is_file():
         print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
@@ -1212,6 +1231,15 @@ def cmd_report_skill(args) -> int:
     _emit_report(render_skill_report(invocations, skill_filter=args.skill,
                                      min_calls=args.min_calls),
                  args)
+    if args.json:
+        # 与文本路径**同一个过滤条件**与**同一个聚合函数**（skill_summary）
+        picked = ([i for i in invocations if i["skill"] == args.skill]
+                  if args.skill else invocations)
+        _emit_json(args.json, "report-skill/1", {
+            "filters": {"skill": args.skill, "min_calls": args.min_calls},
+            "summary": skill_summary(picked),
+            "invocations": picked,
+        }, dbp=dbp)
     return 0
 
 
@@ -1767,7 +1795,9 @@ def cmd_llm_pack(args) -> int:
     faces = tuple(f.strip() for f in (args.faces or "").split(",") if f.strip())
     try:
         pack = build_pack(dbp, faces=faces, limit=args.limit,
-                          rules=load_rules(Path(args.rules) if args.rules else None))
+                          rules=load_rules(Path(args.rules) if args.rules else None),
+                          chain_root=(Path(args.chain_root)
+                                      if getattr(args, "chain_root", None) else None))
     except Exception as e:  # noqa: BLE001 - 规则不合规/面不支持属响亮失败
         print(f"错误: {e}", file=sys.stderr)
         return 2
@@ -1788,6 +1818,59 @@ def _write_or_print(text: str, out: str, label: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8", newline="\n")
     print(f"{label}已写入 {p}")
+
+
+def _emit_json(path: str, schema: str, data, dbp=None) -> None:
+    """机读出口（G2 结构化层）：schema + generated_at + db_fingerprint + data。
+
+    `data` 必须来自**文本路径同一个聚合函数**（同一个 dict/list 对象或它
+    的直接序列化），**不许**另写一套聚合、也不许解析渲染后的文本——那是
+    两套口径，数字迟早对不上。形状与 `llm-pack`/`evidence-pack` 一致。
+
+    path == "-" → stdout（此时人读文本不占 stdout，见 `_emit_report`）；
+    否则落盘 UTF-8 无 BOM + LF。
+    """
+    import json as _json
+    fp: dict = {}
+    if dbp is not None and Path(dbp).is_file():
+        try:
+            from .dbmeta import db_fingerprint
+            fp = db_fingerprint(Path(dbp))
+        except Exception:  # noqa: BLE001 - 指纹拿不到不阻断机读出口
+            fp = {}
+    payload = {
+        "schema": schema,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "db_fingerprint": fp,
+        "data": data,
+    }
+    _write_or_print(_json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    path, "机读出口")
+
+
+def _group_rows(groups: dict) -> list[dict]:
+    """`{组名: ToolStats}` 或 `{组名: {工具: ToolStats}}` → 机读行。
+
+    两种形态都取自文本路径已用的聚合函数：`collect_model_stats` 给前者、
+    `collect_source_stats` 给后者（按工具再分一层）。calls/success/error
+    直接读 ToolStats，不在 JSON 侧重算库；逐工具明细由 `data.tools` 给。
+    排序与文本表一致：按调用数降序。
+    """
+    def _stats_of(group):
+        # ToolStats 是普通类（不是 dict），只有按源聚合时外面才是 dict
+        return group.values() if isinstance(group, dict) else (group,)
+
+    rows = []
+    for name in sorted(groups, key=lambda g: -sum(
+            st.calls for st in _stats_of(groups[g]))):
+        stats = list(_stats_of(groups[name]))
+        calls = sum(st.calls for st in stats)
+        errs = sum(st.error for st in stats)
+        rows.append({"name": name, "tools": len(stats), "calls": calls,
+                     "success": sum(st.success for st in stats),
+                     "error": errs,
+                     "fail_rate": round(errs / calls, 4) if calls else 0.0})
+    return rows
 
 
 def cmd_attrib_review(args) -> int:
@@ -2263,8 +2346,11 @@ def _emit_report(report: str, args) -> None:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(report, encoding="utf-8", newline="\n")
-        print(f"报告已写入 {out}")
-    else:
+        # `--json -` 时 stdout 归机读出口独占（否则 JSON 后面跟一行人读提示，
+        # 整段就无法 json.loads 了）；提示改走 stderr，人仍看得见。
+        msg = sys.stderr if getattr(args, "json", None) == "-" else sys.stdout
+        print(f"报告已写入 {out}", file=msg)
+    elif getattr(args, "json", None) != "-":
         print(report, end="")
 
 
@@ -2428,6 +2514,9 @@ def build_parser() -> argparse.ArgumentParser:
     prt.add_argument("--since", type=float, default=None, metavar="DAYS",
                      help="只统计最近 N 天（按步骤时间戳粗算；近似口径=不如逐条精确）")
     prt.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prt.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-tools/1）：schema + db_fingerprint + "
+                          "data（与文本同一个聚合函数）；'-'=stdout，缺省仍出文本")
     prt.add_argument("-v", "--verbose", action="store_true")
     prt.set_defaults(func=cmd_report_tools)
 
@@ -2438,6 +2527,10 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--since", type=float, default=None, metavar="DAYS",
                      help="只统计最近 N 天")
     pre.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pre.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-errors/1）：schema + db_fingerprint"
+                          " + data（与文本同一个聚合函数）；'-'=stdout，"
+                          "缺省仍出文本")
     pre.add_argument("--rules", default=None,
                      help="归因规则表（缺省=随包的 "
                           "harvester/data/attrib-rules.yaml）")
@@ -2506,7 +2599,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "交 LLM 复核；只读，不写库")
     plp.add_argument("--db", default="harvester.db", help="索引库路径（只读）")
     plp.add_argument("--faces", default="errors",
-                     help="要打包的面，逗号分隔（可选 errors,tools；默认 errors）")
+                     help="要打包的面，逗号分隔（errors,tools,skills,chains；默认 errors）")
+    plp.add_argument("--chain-root", default=None,
+                     help="chain 文件根目录（faces 含 chains 时必填，如 knowledge/topics）")
     plp.add_argument("--limit", type=int, default=40,
                      help="每面最多 N 条（默认 40；判定槽行数 = 条目数）")
     plp.add_argument("--rules", default=None, help="归因规则表路径（缺省随包那份）")
@@ -2525,6 +2620,10 @@ def build_parser() -> argparse.ArgumentParser:
     prc.add_argument("--top", type=int, default=10,
                      help="高步会话 Top N（默认 10）")
     prc.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prc.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-chains/1）：schema + db_fingerprint"
+                          " + data（与文本同一个聚合函数）；'-'=stdout，"
+                          "缺省仍出文本")
     prc.set_defaults(func=cmd_report_chains)
 
     prd = sub.add_parser(
@@ -2964,6 +3063,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="样本量阈值：calls<阈值的 skill 标 low-sample"
                           "（默认 0=不标）")
     prs.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prs.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-skill/1）：schema + db_fingerprint"
+                          " + data（与文本同一个聚合函数）；'-'=stdout，"
+                          "缺省仍出文本")
     prs.set_defaults(func=cmd_report_skill)
 
     ptp = sub.add_parser(

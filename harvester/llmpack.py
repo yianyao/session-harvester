@@ -31,9 +31,9 @@ SCHEMA = "llm-pack/1"
 #: 判定槽的列（LLM 只填后四列；前两列是身份，回填时用来对号）。
 SLOT_COLUMNS = ("item_id", "subject", "verdict", "rule_id", "class", "note")
 
-#: 支持自动收集的面。chains 仍缺（它要 chain 根目录里的文件，不是数据库里的行），
-#: 见 README「已知未做」；skills 已走**结构化函数**（behstats），不从文本里 parsing。
-AUTO_FACES = ("errors", "tools", "skills")
+#: 支持自动收集的面。chains 走**文件审计**（chain 根目录 → audit_chain），
+#: 不是库里的行；skills 走**结构化函数**（behstats），两者都不 parse 文本。
+AUTO_FACES = ("errors", "tools", "skills", "chains")
 
 HINT = ("本包给 LLM 用：每条 = 事实（不许改）+ 现有归因候选（可能错）+ 一个空的判定槽。"
         "请逐条复核候选，把结论填进 slot.entries 的 verdict/rule_id/class/note；"
@@ -41,7 +41,8 @@ HINT = ("本包给 LLM 用：每条 = 事实（不许改）+ 现有归因候选�
 
 
 def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
-               meta: Path | None = None) -> dict:
+               meta: Path | None = None,
+               chain_root: Path | str | None = None) -> dict:
     """收集待判项。`faces` 只能是 `AUTO_FACES` 的子集（其它面 → ValueError）。"""
     dbp = Path(db)
     want = tuple(faces) or ("errors",)
@@ -51,6 +52,8 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
     bad2 = [f for f in want if f not in FACES]
     if bad2:
         raise ValueError(f"未知面: {bad2}（可选 {list(FACES)}）")
+    if "chains" in want and not chain_root:
+        raise ValueError("faces 含 chains 时必须给 chain_root（chain 文件根目录）")
     if limit <= 0:
         raise ValueError("limit 必须为正数")
 
@@ -92,6 +95,9 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
         # 用户批准的 G2 路线就是"先接结构函数"。证据三件：调用数、样本锚点、
         # 行为链——只给一个 skill 名的行等于让 LLM 猜（R1）。
         items.extend(_skill_items(dbp, rules, limit))
+
+    if "chains" in want:
+        items.extend(_chain_items(dbp, rules, limit, Path(chain_root)))
 
     entry_of = {it["item_id"]: it for it in items}
     return {
@@ -175,6 +181,82 @@ def _skill_items(db, rules, limit: int) -> list[dict]:
                       "chain": a["chain"][:6],
                       "anchors": [a["anchor"]] if a["anchor"] else []},
             "attrib": attribute_face(subject, rules, face="skills"),
+        })
+    return out
+
+
+def _chain_items(db, rules, limit: int, chain_root: Path) -> list[dict]:
+    """chains 面：**文件审计**（不在库里）——chain 根目录里每份 `.md` 跑一次 audit。
+
+    证据三件（缺一件就不该进包）：
+      ① 引文（quotes）：正文引号是否能在库消息里逐字命中、未命中几条；
+      ② 锚点（anchors）：`sid#turn` 的可疑清单（= 点开就能核对）；
+      ③ 覆盖（coverage）：成员里有多少在库内有原文。
+    `subject` 只写事实（成员数/引文命中/可疑锚点/覆盖），**不写「待裁决」**
+    ——那是判断，进槽。审计口径复用 `chainaudit.audit_chain`（不另写一套）。
+
+    截断（未文档化的坑，2026-10-23 由测试会话点出后写在这里）：
+    `facts.anchors.suspicious` 只留前 5 条、`facts.quotes.misses` 只留前 3 条，
+    但**计数是全量**——`anchors.n_suspicious` 是全量可疑数，未命中条数用
+    `quotes.total - quotes.hit` 反推，别数清单长度。
+    """
+    from .chainaudit import audit_chain
+    from .topicchain import load_chain
+
+    if not chain_root.is_dir():
+        raise ValueError(f"chain_root 不是目录: {chain_root}")
+    # **只认真 chain 文件**（frontmatter 有 members 列表）：`knowledge/topics/`
+    # 里同时放着 01a/01b 这类"主题文档"，它们没有 members——照单全收会把
+    # 「引文 0/0、成员 0」的假条目塞进包（静默无价值，R1 病）。
+    chains = []
+    for path in sorted(chain_root.glob("*.md")):
+        try:
+            fm = load_chain(path).get("fm") or {}
+        except Exception as e:  # noqa: BLE001 - 单个坏文件不能拖垮整包
+            # **缺依赖要响亮（H9）**：`load_chain` 在无 PyYAML 时抛
+            # RuntimeError("…需要 PyYAML…")，若也当"不是 chain"吞掉，用户
+            # 看到的是「没有真 chain 文件」——指向目录内容，真因却是环境缺库。
+            # 这类错误原样上抛，别改写成"目录里没东西"。
+            if "pyyaml" in str(e).lower() or "yaml" in str(e).lower():
+                raise
+            continue
+        if isinstance(fm.get("members"), list) and fm["members"]:
+            chains.append(path)
+    if not chains:
+        raise ValueError(f"chain_root 里没有真 chain 文件（frontmatter 带 members）: "
+                         f"{chain_root}")
+    out: list[dict] = []
+    for n, path in enumerate(chains[:limit], 1):
+        a = audit_chain(path, Path(db), quotes=True, anchors=True, coverage=True)
+        q = a.get("quotes") or {}
+        an = a.get("anchors") or {}
+        cv = a.get("coverage") or {}
+        n_q = int(q.get("total") or 0)
+        hit = int(q.get("exact") or 0) + int(q.get("partial") or 0)
+        susp = an.get("suspicious") or []
+        mem = int(cv.get("members") or a.get("members") or 0)
+        anchored = int(cv.get("anchored_members") or 0)
+        subject = ("chain %s｜成员 %d｜引文 %d/%d 命中｜可疑锚点 %d｜有锚点成员 %d/%d"
+                   % (a.get("topic") or path.stem, mem, hit, n_q, len(susp),
+                      anchored, mem))
+        out.append({
+            "item_id": "C-%03d" % n,
+            "face": "chains",
+            "subject": subject,
+            "facts": {"file": path.name, "topic": a.get("topic"),
+                      "members": mem,
+                      "quotes": {"total": n_q, "hit": hit,
+                                 "ok": bool(q.get("ok")),
+                                 "vacuous": bool(q.get("vacuous")),
+                                 "misses": (q.get("misses") or [])[:3]},
+                      "anchors": {"n_suspicious": len(susp),
+                                  "suspicious": susp[:5]},
+                      "coverage": {"anchored_members": anchored,
+                                   "uncovered_reps": len(
+                                       cv.get("uncovered_reps") or []),
+                                   "body_only": len(cv.get("body_only") or [])},
+                      "audit_ok": bool(a.get("ok"))},
+            "attrib": attribute_face(subject, rules, face="chains"),
         })
     return out
 
