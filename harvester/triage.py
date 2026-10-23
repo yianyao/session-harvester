@@ -37,6 +37,7 @@ from .agent_suggest import _TEMPLATES, root_key_assign
 from .behstats import collect_skill_invocations
 from .dbmeta import ro_con
 from .errstats import attrib_hit, collect_errors_from_db
+from .toolstats import OK_STATUS
 
 _CARDS_CAP = 20        # 旧坑重现列表上限
 _SAMPLE_CAP = 3        # 每个候选的锚点样例数
@@ -154,11 +155,15 @@ def collect_triage(db: Path, since_days: float | None = None,
         })
         s["n_calls"] += 1
         s["sources"].add(i["source"])
-        if i["status"] == "ok" and s["sample"] is None:
-            s["sample"] = (i["sid"], i["seq"])
-        if i["status"] == "ok" and i["after_tools"] and not s["chain"]:
-            s["chain"] = i["after_tools"]
-        if i["status"] == "ok":
+        # v0.80：口径改取 `toolstats.OK_STATUS`（success/completed/ok）。
+        # 此前写死 `== "ok"`，而真库 status 只有 success/completed/no_result/error
+        # → n_ok 恒 0、锚点恒 None、行为链恒空，页面「锚点样例」整列为空
+        # **且不报错**（实测 37/37 全空）。
+        if i["status"] in OK_STATUS:
+            if s["sample"] is None:
+                s["sample"] = (i["sid"], i["seq"])
+            if i["after_tools"] and not s["chain"]:
+                s["chain"] = i["after_tools"]
             s["n_ok"] += 1
     skill_items = []
     for s in sorted(skills.values(), key=lambda x: -x["n_calls"]):

@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1099 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1106 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=1043 failures=0 errors=94 skipped=41
+# ② 无 PyYAML 门禁：期望 GATE ran=1044 failures=0 errors=95 skipped=42
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,14 +61,14 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1099 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1043 failures=0 errors=94 skipped=41** | **只看 `failures=0`**；`94 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=41` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1106 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1044 failures=0 errors=95 skipped=42** | **只看 `failures=0`**；`95 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=42` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1099 vs 1043）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1106 vs 1044）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
-另有 `skipped=41`（v0.80 起；逐组可对）：
+另有 `skipped=42`（v0.80 起；逐组可对）：
 - `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测用例**（递归回自己，
   子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip；`scripts/gate_no_yaml.py`
   自己设这一位，所以门禁绝不会跑门禁）；
@@ -78,17 +78,17 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
   规则表；无 PyYAML 时跳过而不是失败——见本节末「`skipped` 也会漂」）；
 - `skipped=7` 是 `test_v68_reviewable.py` 的接线对账用例（分级判据本体不依赖
   PyYAML，**7 条"各面真带等级行/API↔CLI 同判据"要真库与归因规则表**，同一纪律 skip）；
-- `skipped=10` 是 v0.80 新增的 `test_v76_class_single_source.py`：**类别只有一个
+- `skipped=11` 是 v0.80 新增的 `test_v76_class_single_source.py`：**类别只有一个
   来源（归因层）**，缺 PyYAML 时类别会降级，所以「类别对不对」整组跳过而不是断言失败
   （H9）；同一文件里 `first_seen` 那条不依赖归因层，照常真跑；
-- 其余 9 条是 v0.78–v0.79 之后各文件的 `_NEED_REAL` 组（未逐一点名，判据同 H9）。
+- 其余 10 条是 v0.78–v0.79 之后各文件的 `_NEED_REAL` 组（未逐一点名，判据同 H9）。
 **`skipped` 不等于通过**：被跳过的这几组正是"实测↔README 对账"与"面↔判据对账"，
 它们只在**顶层**那一次运行（有 PyYAML + 有真库）里真正执行。
 
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1099，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1106，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的

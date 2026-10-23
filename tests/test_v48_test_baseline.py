@@ -89,6 +89,13 @@ def readme_baseline(text: str) -> dict[str, int]:
 
 def _env(nested: bool = False) -> dict[str, str]:
     env = dict(os.environ)
+    # 剥掉本项目自己的环境变量再测：套件里别的用例会临时设 `HARVESTER_TEST_TMP`
+    # 之类的位（test_v50_scratch），**漏一个位就会让子进程的数字跟着变**
+    # （2026-10-23 实测：全量套件里量到 gate skipped=43，单独跑同一脚本是 42
+    # ——差的那一条正是被继承的临时根导致的跳过）。数字要对账，测量环境
+    # 就必须是干净的；真正要验证"继承行为"的用例自己用 mock.patch.dict。
+    for k in [k for k in env if k.startswith("HARVESTER_") and k != NESTED_FLAG]:
+        env.pop(k, None)
     env["PYTHONPATH"] = os.pathsep.join(
         [str(REPO)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     if nested:

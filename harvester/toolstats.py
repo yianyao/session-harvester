@@ -136,9 +136,13 @@ def collect_stats(session_records) -> dict[str, ToolStats]:
 
 # ---- 结构化统计（steps 表，v0.6） ----
 
-#: 成功状态的单一真值源：note 文本口径与 steps 表口径共用，
+#: 成功状态的**单一真值源**：note 文本口径与 steps 表口径共用，
 #: 真实数据里 WorkBuddy/DSH 用 completed、AutoClaw 用 success（同义不同词）。
-_OK_STATUS = ("success", "completed", "ok")
+#: v0.80 起公开为 `OK_STATUS`：triage / llmpack 也消费它——此前 triage 自己写死
+#: `== "ok"`，而真库 status 只有 success/completed/no_result/error，
+#: 于是 C 区 37 个 skill 的「锚点样例」与「行为链」**全空**且不报错（实测踩到）。
+OK_STATUS = ("success", "completed", "ok")
+_OK_STATUS = OK_STATUS  # 旧名保留（本模块内部与历史调用点）
 
 
 def _is_error_status(status: str) -> bool:

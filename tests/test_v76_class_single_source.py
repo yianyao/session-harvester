@@ -192,6 +192,27 @@ class TestTriagePayload(unittest.TestCase):
             self.assertIn("class", x)
             self.assertIn("why", x)
 
+    def test_skill_zone_has_anchors_and_chains(self):
+        """C 区必须带得出锚点与行为链。
+
+        什么时候会红：把 `OK_STATUS` 改回 `== "ok"`。真库 status 只有
+        success/completed/no_result/error，写死 "ok" 会让 n_ok 恒 0、
+        `sample` 恒 None、`chain` 恒空——页面上是整列空白，**不报任何错**
+        （2026-10-23 实测 37/37 全空，用户看到的是「有数据却点不开」）。
+        """
+        sk = self.d["skills"]
+        self.assertTrue(sk, "真库应有 skill 调用")
+        with_sample = [s for s in sk if s["sample"]]
+        with_chain = [s for s in sk if s["chain"]]
+        self.assertTrue(with_sample, "C 区一条锚点都没有 → 状态口径又写死了")
+        self.assertTrue(with_chain, "C 区一条行为链都没有 → 状态口径又写死了")
+        for s in with_sample:
+            self.assertEqual(len(s["sample"]), 2, "锚点必须是 (sid, seq) 两元组")
+            self.assertTrue(s["sample"][0], "锚点 sid 不许空")
+        for s in sk:
+            self.assertLessEqual(s["n_ok"], s["n_calls"],
+                                 "成功数不许超过调用数（口径串了）")
+
 
 if __name__ == "__main__":
     unittest.main()

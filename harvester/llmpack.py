@@ -31,9 +31,9 @@ SCHEMA = "llm-pack/1"
 #: 判定槽的列（LLM 只填后四列；前两列是身份，回填时用来对号）。
 SLOT_COLUMNS = ("item_id", "subject", "verdict", "rule_id", "class", "note")
 
-#: 只支持这两面自动化收集（chains/skills 的原料在 view 侧现算，
-#: 规则已可用 `attribute_face` 消费；要打包得等它们有稳定出口，见 README）。
-AUTO_FACES = ("errors", "tools")
+#: 支持自动收集的面。chains 仍缺（它要 chain 根目录里的文件，不是数据库里的行），
+#: 见 README「已知未做」；skills 已走**结构化函数**（behstats），不从文本里 parsing。
+AUTO_FACES = ("errors", "tools", "skills")
 
 HINT = ("本包给 LLM 用：每条 = 事实（不许改）+ 现有归因候选（可能错）+ 一个空的判定槽。"
         "请逐条复核候选，把结论填进 slot.entries 的 verdict/rule_id/class/note；"
@@ -87,6 +87,12 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
                 "attrib": attribute_face(name, rules, face="tools"),
             })
 
+    if "skills" in want:
+        # 结构化取数（behstats 扫 steps 表，含配对状态与行为链），**不 parse 文本**：
+        # 用户批准的 G2 路线就是"先接结构函数"。证据三件：调用数、样本锚点、
+        # 行为链——只给一个 skill 名的行等于让 LLM 猜（R1）。
+        items.extend(_skill_items(dbp, rules, limit))
+
     entry_of = {it["item_id"]: it for it in items}
     return {
         "schema": SCHEMA,
@@ -118,6 +124,59 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
             "items_by_id": list(entry_of),
         },
     }
+
+
+def _skill_items(db, rules, limit: int) -> list[dict]:
+    """skill 面：按调用聚合，只给**有证据**的行（锚点 + 行为链 + 计数）。
+
+    `subject` 刻意只写事实（调用/成功/失败 + 是否低样本），**不写「待鉴定」**
+    ——那是判断，判断归 LLM/人填进槽里。低样本线复用 `toolstats.RANK_MIN_CALLS`
+    （同一个"样本不足 20 不下结论"口径，避免第二套数字）。
+    """
+    from .behstats import collect_skill_invocations
+    from .toolstats import OK_STATUS, RANK_MIN_CALLS
+
+    invs = collect_skill_invocations(Path(db))
+    agg: dict[str, dict] = {}
+    for i in invs:
+        if not i.get("skill"):
+            continue
+        a = agg.setdefault(i["skill"], {
+            "skill": i["skill"], "calls": 0, "ok": 0, "err": 0,
+            "other": 0, "sources": set(), "anchor": None, "chain": []})
+        a["calls"] += 1
+        st = i.get("status") or ""
+        if st in OK_STATUS:
+            a["ok"] += 1
+            if a["anchor"] is None:
+                a["anchor"] = {"sid": i["sid"], "seq": i["seq"], "probe": "skill 成功调用"}
+                a["chain"] = list(i.get("after_tools") or [])
+        elif st in ("error", "failed"):
+            a["err"] += 1
+        else:
+            a["other"] += 1
+        a["sources"].add(i.get("source") or "?")
+
+    rows = sorted(agg.values(), key=lambda a: (-a["calls"], a["skill"]))
+    out: list[dict] = []
+    for n, a in enumerate(rows[:limit], 1):
+        low = a["calls"] < RANK_MIN_CALLS
+        subject = ("skill %s｜调用 %d 次｜成功 %d｜失败 %d%s"
+                   % (a["skill"], a["calls"], a["ok"], a["err"],
+                      "（低样本）" if low else ""))
+        out.append({
+            "item_id": "S-%03d" % n,
+            "face": "skills",
+            "subject": subject,
+            "facts": {"skill": a["skill"], "calls": a["calls"], "ok": a["ok"],
+                      "error": a["err"], "other": a["other"],
+                      "low_sample": low,
+                      "sources": sorted(a["sources"]),
+                      "chain": a["chain"][:6],
+                      "anchors": [a["anchor"]] if a["anchor"] else []},
+            "attrib": attribute_face(subject, rules, face="skills"),
+        })
+    return out
 
 
 def _now() -> str:

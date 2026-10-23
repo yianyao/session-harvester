@@ -90,6 +90,71 @@ class TestPackShape(unittest.TestCase):
         self.assertEqual(ns.verdict, "accepted")
 
 
+class TestSkillsFace(unittest.TestCase):
+    """skills 面（v0.80，用户批准的 G2 路线：**先接结构化函数**，不 parse 文本）。
+
+    这条面存在的理由：代码判不了「这个 skill 是好用法还是坑」，但库里已经有
+    调用数、配对状态、行为链——把证据打包给 LLM，比让人对着 skill 名猜强。
+    门钉三件事：① 行必须带锚点/链条（只有计数等于让人猜）；② 低样本标记与
+    调用数一致（同一个 20 的口径，别造第二套）；③ 判定槽与 items 一一对应。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not DB.is_file():
+            raise unittest.SkipTest("缺真库 harvester.db")
+        cls.before = (DB.stat().st_mtime_ns, DB.stat().st_size)
+        cls.pack = L.build_pack(DB, faces=("skills",), limit=8)
+        cls.items = cls.pack["items"]
+
+    def test_face_is_supported_and_labelled(self):
+        self.assertIn("skills", L.AUTO_FACES)
+        self.assertTrue(self.items, "真库应有带调用记录的 skill")
+        for it in self.items:
+            self.assertEqual(it["face"], "skills")
+            self.assertTrue(it["item_id"].startswith("S-"))
+            self.assertTrue(it["subject"].startswith("skill "))
+
+    def test_items_carry_anchors_or_chain(self):
+        """只给计数的行不许进包（无证据 = LLM 只能猜）。"""
+        for it in self.items:
+            f = it["facts"]
+            self.assertIn("skill", f)
+            self.assertTrue(f["anchors"] or f["chain"],
+                            "%s 既没有锚点也没有行为链，不许进包" % it["subject"])
+            if f["anchors"]:
+                a = f["anchors"][0]
+                self.assertTrue(a["sid"], "锚点必须有 sid")
+                self.assertIn("seq", a, "锚点必须有回合号（回原文要靠它）")
+
+    def test_low_sample_flag_matches_threshold(self):
+        from harvester.toolstats import RANK_MIN_CALLS
+        for it in self.items:
+            f = it["facts"]
+            self.assertEqual(f["low_sample"], f["calls"] < RANK_MIN_CALLS,
+                             "低样本标记与样本阈值不一致（两套口径）")
+            self.assertEqual(("低样本" in it["subject"]), f["low_sample"],
+                             "subject 与 facts 对不上（人读那份别另算）")
+            self.assertLessEqual(f["ok"] + f["error"] + f["other"], f["calls"])
+
+    def test_low_sample_hits_skill_rule(self):
+        low = [it for it in self.items if it["facts"]["low_sample"]]
+        self.assertTrue(low, "真库头部 skill 全是低样本，应命中 AR-S02")
+        for it in low:
+            self.assertIsNotNone(it["attrib"], "低样本行必须带归因候选")
+            self.assertTrue(it["attrib"]["rule_id"].startswith("AR-S"))
+            self.assertTrue(it["attrib"]["candidate"])
+
+    def test_slot_aligned_and_valid(self):
+        self.assertEqual([i["item_id"] for i in self.items],
+                         [e["item_id"] for e in self.pack["slot"]["entries"]])
+        self.assertEqual(L.validate_pack(self.pack), [])
+
+    def test_read_only(self):
+        self.assertEqual((DB.stat().st_mtime_ns, DB.stat().st_size), self.before,
+                         "skills 面读库不许留下写痕迹")
+
+
 class TestPackRejects(unittest.TestCase):
     def test_unknown_face_fails_loud(self):
         with self.assertRaises(ValueError):
