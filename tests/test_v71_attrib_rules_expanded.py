@@ -114,12 +114,15 @@ class TestCorpusMapping(unittest.TestCase):
             self.assertIn(hit["confidence"], ("high", "medium", "low"))
 
     def test_no_rule_is_dead_on_the_corpus(self):
-        """规则表里每条都必须在这批真实串里**至少命中一次**。
+        """**errors 面**的每条规则都必须在这批真实串里至少命中一次。
 
         死规则最坏：它让"规则表 24 条"看起来覆盖很广，实际没接任何真实形态。
+        （第④步起规则表分面：tools/chains/skills 的锚点不是错误串，各自在
+        `tests/test_v74_rule_faces.py` 里用真库工具名/真实文案核对，别在这里
+        拿错误语料判它们的死活。）
         """
         used = {attribute(t, self.compiled)["rule_id"] for t, _ in CORPUS}
-        all_ids = {r["id"] for r in self.rules}
+        all_ids = {r["id"] for r in self.rules if r["face"] == "errors"}
         self.assertEqual(all_ids - used, set(), "这些规则在语料里一次也没命中")
 
     def test_deliberately_open_ones_stay_open(self):
@@ -157,9 +160,23 @@ class TestOrderingTraps(unittest.TestCase):
 
 class TestTableShape(unittest.TestCase):
     def test_ids_are_contiguous(self):
-        ids = [r["id"] for r in load_rules()]
+        """**errors 面**连续编号（顺序即优先级）；另三面用 `AR-T/C/S` 前缀单独编。
+
+        第④步扩面后一张表里有四个面：混在一起编号会让人误以为顺序即全局优先级，
+        而面之间根本不互相匹配（`_compile(face=...)` 先过滤）。
+        """
+        ids = [r["id"] for r in load_rules() if r["face"] == "errors"]
         self.assertEqual(ids, ["AR-%03d" % i for i in range(1, len(ids) + 1)],
-                         "规则 id 必须连续编号（顺序即优先级，跳号会让人误判）")
+                         "errors 面规则 id 必须连续编号")
+
+    def test_other_faces_use_their_own_prefix(self):
+        prefix = {"tools": "AR-T", "chains": "AR-C", "skills": "AR-S"}
+        for face, pre in prefix.items():
+            ids = [r["id"] for r in load_rules() if r["face"] == face]
+            self.assertTrue(ids, f"{face} 面一条规则都没有")
+            for rid in ids:
+                self.assertTrue(rid.startswith(pre),
+                                f"{face} 面的 {rid} 没用 {pre} 前缀")
 
     def test_verified_date_shape(self):
         for r in load_rules():

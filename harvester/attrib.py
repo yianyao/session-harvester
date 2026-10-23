@@ -55,6 +55,20 @@ REQUIRED_FIELDS = ("match", "class", "why", "fix")
 #: 置信度取值。缺省 medium（未标 = 尚未人工评估过置信，别默认 high）。
 CONFIDENCES = ("high", "medium", "low")
 
+#: 归因面（第④步，用户 2026-10-23 批准"把 why/fix 推广到 tools/chains/skills"）。
+#:
+#: 一个面 = 一种「被判断对象」，每面的 subject 约定不同（`match` 打在上面）：
+#:   errors —— 错误串原文（`errstats` 归一后的 pattern；历史行为，缺省值）
+#:   tools  —— 工具名（`toolstats` 的 `tool`，如 `Edit` / `web_fetch`）
+#:   chains —— 卡片/chain 审计的结论文案（`cards.validate_cards` 的 warn/error）
+#:   skills —— skill 面状态词（`待鉴定` / `低样本`）
+#:
+#: **面之间不互相匹配**（`_compile(face=...)` 先按面过滤）——否则一条 tools 规则
+#: 会去劫持错误串（AGENTS §三 21 的"劫持"就是这种坏味）。
+FACES = ("errors", "tools", "chains", "skills")
+FACE_ERRORS = "errors"
+DEFAULT_FACE = FACE_ERRORS
+
 #: 归因候选的证据锚点上限（人读/机读都给同一份锚点，只是渲染形态不同）。
 MAX_ANCHORS = 5
 
@@ -141,8 +155,14 @@ def load_rules(path: Path | None = None) -> list[dict]:
         if conf not in CONFIDENCES:
             raise RuleError(
                 f"{where}（id={rid}）confidence={conf!r} 不在 {list(CONFIDENCES)}")
+        face = r.get("face", DEFAULT_FACE)
+        if face not in FACES:
+            raise RuleError(
+                f"{where}（id={rid}）face={face!r} 不在 {list(FACES)}"
+                f"——未知面等于规则永不生效，宁可加载即失败")
         out.append({
             "id": rid,
+            "face": face,
             "class": r["class"],
             "match": list(matches),
             "why": str(r["why"]),
@@ -153,10 +173,20 @@ def load_rules(path: Path | None = None) -> list[dict]:
     return out
 
 
-def _compile(rules: list[dict]) -> list[tuple[dict, list[re.Pattern[str]]]]:
-    """规则 → 已编译正则（大小写不敏感）。非法正则 fail loud（别静默不匹配）。"""
+def _compile(rules: list[dict], face: str = DEFAULT_FACE
+             ) -> list[tuple[dict, list[re.Pattern[str]]]]:
+    """规则 → 已编译正则（大小写不敏感）。非法正则 fail loud（别静默不匹配）。
+
+    `face` 决定**只编译哪一面的规则**：不同面的 subject 不同（错误串 / 工具名 /
+    审计文案 / 状态词），混在一起编译就会互相劫持（一条 `^edit$` 的 tools 规则
+    会去匹配错误串里的 "edit"）。
+    """
+    if face not in FACES:
+        raise RuleError(f"face={face!r} 不在 {list(FACES)}")
     out = []
     for r in rules:
+        if (r.get("face") or DEFAULT_FACE) != face:
+            continue
         regs = []
         for pat in r["match"]:
             try:
@@ -193,6 +223,20 @@ def attribute(error_text: str, compiled: list[tuple[dict, list[re.Pattern[str]]]
                     "matched": reg.pattern, "candidate": True,
                 }
     return None
+
+
+def attribute_face(subject: str, rules: list[dict],
+                   face: str = DEFAULT_FACE) -> dict | None:
+    """按**面**给一个对象做归因候选（第④步）。
+
+    与 `attribute()` 的区别只在"编译哪一面的规则"：
+      - errors 面仍走 `collect_attributions`（它按模式聚合，别绕过它）；
+      - tools/chains/skills 面调用本函数，subject 分别传
+        工具名 / 审计文案 / 状态词（见 `FACES` 注释）。
+
+    返回结构与 `attribute()` 一致（含 `candidate=True`）；未命中返回 None。
+    """
+    return attribute(subject, _compile(rules, face=face))
 
 
 def collect_attributions(errors: list[dict], rules: list[dict]) -> dict:

@@ -251,3 +251,133 @@ rules:
     fix: 先滚到可视区并关掉遮挡弹层，再用稳定选择器定位可点击元素
     confidence: medium
     verified: "2026-10-23"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 第④步（用户 2026-10-23 批准「把 why/fix 推广到 tools / chains / skills」）
+#
+# 每条的 `face` 决定 `match` 打在**哪种串**上（缺省 errors，见 attrib.FACES）：
+#   tools  —— 工具名（`toolstats` 的 tool；锚点 §是 name，故用 ^…$ 定界）
+#   chains —— 卡片/chain 审计的结论文案（`cards.validate_cards` 的 warn/error）
+#   skills —— skill 面状态词（`待鉴定` / `低样本`）
+#
+# 为什么 tools 规则要按工具名而不是错误串：错误串那一路已由 errors 面的 24 条
+# 规则覆盖；工具这一层的问题是**这个工具系统性地会怎么失败**。锚点来自实测
+# （docs/reports/probe-tool-patterns.py，2026-10-23 真库）：
+#   edit   : FS_STALE_VERSION 37.8% / FS_NOT_OBSERVED 26.5% / FS_EDIT_NOT_FOUND 17.3%
+#   Edit   : 目标串找不到 75.9%
+#   web_fetch: WEB_PROVIDER_ERROR 97.6%
+#   read   : tool_permission_revoked 58.3% / FS_NOT_FOUND 36.1%
+#   write  : 未读先写 55.6%（Write 大写口径 89.5%）
+#   Bash   : sandbox decisionRecord 缺资源主体 76.5%
+#   Grep   : 搜索路径不存在 81.2%
+# 每条 why 里的百分比都是上面那次数出来的，不是估计值；数据一变就该重算。
+# ─────────────────────────────────────────────────────────────────────────────
+
+  - id: AR-T01
+    face: tools
+    class: tool_interface
+    match: ["^edit$"]
+    why: 编辑前没读、或读的是旧版本——FS_STALE_VERSION 37.8%、FS_NOT_OBSERVED 26.5%、
+      FS_EDIT_NOT_FOUND 17.3%（2026-10-23 前 74/52/34 次）
+    fix: 每次 Edit 前先 Read 目标文件；一处改一次，冲突后重读再改（别拿旧内容硬套）
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-T02
+    face: tools
+    class: env
+    match: ["^web_fetch$"]
+    why: 几乎全是 WEB_PROVIDER_ERROR（97.6%，41/42）——抓取服务侧失败，不是你 URL 写错
+    fix: 换源，或先用 web_search 定位再抓；同一 URL 别连打（这类里 16 次标了"放弃"）
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-T03
+    face: tools
+    class: env
+    match: ["^read$"]
+    why: 过半是权限被撤销（tool_permission_revoked 58.3%），其次文件不存在（36.1%）
+    fix: 换可读路径或先申请权限；不在循环里重试同一路径（权限类重试不会变好）
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-T04
+    face: tools
+    class: tool_interface
+    match: ["^write$"]
+    why: 未读先写（大写 Write 口径 89.5%）或版本过期（小写 write 口径 55.6%）
+    fix: 先 Read 再 Write；一次写的范围小一点，减少与其它写入撞版本
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-T05
+    face: tools
+    class: env
+    match: ["^bash$"]
+    why: 沙箱裁决记录缺"资源主体"（76.5%，13/17）——命令没被识别出要动哪个资源
+    fix: 用显式路径参数，避免在管道/重定向里隐式读写；必要时拆成两条命令
+    confidence: medium
+    verified: "2026-10-23"
+
+  - id: AR-T06
+    face: tools
+    class: tool_interface
+    match: ["^grep$"]
+    why: 搜索路径不存在（81.2%，13/16）——路径拼错或目录已被移走
+    fix: 先 glob / Test-Path 确认目录存在，再 grep
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-C01
+    face: chains
+    class: tool_interface
+    match: ["frontmatter 缺失或不可解析"]
+    why: 卡片没有可解析的 YAML 头（§8 规范要求）——机器读不到任何字段，等于不是卡
+    fix: 用 `cards new` 重新生成脚手架，或手工补 frontmatter 后重跑 `cards validate`
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-C02
+    face: chains
+    class: context
+    match: ["不在索引库"]
+    why: 锚点指向的会话不在索引库——锚点失效（换机/换库）或 sid 前缀写错
+    fix: 先跑 `sync` 把会话收进来，再核对锚点 sid 是否带源前缀
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-C03
+    face: chains
+    class: tool_interface
+    match: ["未在锚点会话原文中找到"]
+    why: evidence 与锚点回合原文不一致——抄错、或经 adapter 改写后没复核
+    fix: 打开锚点回合逐字核对，改卡或改引文；别把"大意一致"当通过
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-C04
+    face: chains
+    class: tool_interface
+    match: ["定位精度不足"]
+    why: 锚点缺回合号（turn 为 null），只能定位到会话、定位不到是哪一轮
+    fix: 补回合号（seq）再校验——三跳定位靠它才能回原文
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-S01
+    face: skills
+    class: context
+    match: ["待鉴定"]
+    why: 这个 skill 有调用但没有定论——还没判它是好用法还是坑
+    fix: 看锚点回合确认，然后定稿成卡片或记进班规；别让它一直悬着
+    confidence: medium
+    verified: "2026-10-23"
+
+  - id: AR-S02
+    face: skills
+    class: context
+    match: ["低样本", "low-sample"]
+    why: 调用次数太少，失败率不可比（1 次调用 1 次失败也是 100%）
+    fix: 攒样本，或只看绝对失败次数；别用小样本下结论
+    confidence: high
+    verified: "2026-10-23"
