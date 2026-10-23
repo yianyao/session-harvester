@@ -142,6 +142,31 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
     `node tests/xxx.js` 报 `SyntaxError: Unexpected identifier '中文'`，
     看着像测试坏了，其实是 `static/index.html` 坏了）——中文串一律用「」。
 
+**24. 按"状态"分支前先探清真库的取值，别拿猜的枚举去比**（2026-10-23 实测，v0.80）：
+    `triage` 判 skill 调用成功写的是 `if i["status"] == "ok"`，而 steps.status 的真值是
+    `success/completed/no_result/error`（本项目 `toolstats.OK_STATUS` 早就是单一真值源）
+    → `n_ok` 恒 0、锚点恒 `None`、行为链恒空，**37/37 个 skill 的锚点整列为空且不报错**，
+    用户看到的只是"有数据却点不开"。规矩：① 新接一个状态分支先 `probe-*.py` 打
+    `SELECT DISTINCT status`；② 成功/失败的判据一律 import 现成常量（此处 `OK_STATUS`），
+    不写第二套字面量；③ 给这类"列整列为空"的面配真库断言（本次：
+    `test_v76.test_skill_zone_has_anchors_and_chains`），写回 `== "ok"` 立刻红。
+**25. 死代码扫描的根要含兄弟仓与 tests，先看"扫了几个文件"**（2026-10-23）：
+    只 `--root harvester` 会把"只在 tests 里被引用"的函数/常量报成死代码；
+    反过来，根不存在时它会**安静地扫 0 个文件**并打印「未发现死代码」——那不是干净，
+    是没覆盖。正确调用：`deadcode-scan --report-root <被查根> --root harvester --root tests --root <视图仓>`
+    （`docs/reports/` 下的一次性补丁脚本不计入，它们本来就不入库）。
+    **删 import 之前要 grep 到的不是"名字出现过"，而是"哪一行调用了它"**：
+    本轮把 `commandgen.py` 的 `from . import ensure_harvester_importable, upstream_root`
+    整行删了，因为只核了 `upstream_root(` ——而 `main()` 里还有
+    `err = ensure_harvester_importable()`，于是 `--check` 直接 NameError，
+    漂移门（`test_v35_actions.test_no_drift_against_real_parser`）报 error。
+    判据：删之前把该符号在本文件的**每个出现位置**列出来（`grep -n <符号>`），
+    只有"仅 import 行出现"才准删；删完立刻跑那道门（便宜的先跑）。
+**26. 对账类的门，测量环境必须干净**（2026-10-23 实测，同轮踩到）：
+    全量套件里量到 `gate skipped=43`，单独跑同一脚本是 `42`——差的那条来自**被继承的
+    `HARVESTER_*` 环境位**（别的用例临时设过测试根）。所以 `test_v48` 起子进程前会把
+    本项目的环境位剥掉（只留嵌套标记）；要验"继承行为"的用例自己用 `mock.patch.dict`。
+
 **收尾固定动作**（本仓历史证明有效）：① 死代码扫描（`harvester/` 与 `tests/` 两个根都要 0/0/0，行内 `# noqa` 视为有意保留）；
 ② 悬空路径检查（`git ls-files -c core.quotePath=false` 取已提交 `*.md`，逐个 `Test-Path` 其中 `docs/reports/...` 引用）；
 ③ 过期文本扫描（`git grep "TODO|FIXME|后续版本|待实现|暂未"`，逐条判断是「项目欠债」还是「在描述扫描本身」）。
