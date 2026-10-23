@@ -65,8 +65,8 @@ rules:
   - id: AR-004
     class: context
     match: ["FS_NOT_FOUND", "Search path is not accessible",
-            "no such file or directory", "file no longer exists",
-            "File not found", "does not exist"]
+            "filesystem_not_found", "no such file or directory",
+            "file no longer exists", "File not found", "does not exist"]
     why: 目标路径不存在——文件/目录已被移动、删除，或路径本身写错
     fix: 先用 ls/Glob 确认路径存在再操作；批量处理前先枚举目录而不是猜路径
     confidence: high
@@ -97,3 +97,157 @@ rules:
     fix: 重新申请该工具的授权；批量操作前先确认授权仍在有效期内
     confidence: high
     verified: "2026-10-22"
+
+  # ══════════════ P6-1 增量（2026-10-23）══════════════
+  # 来源：`attrib --json` 实测的 48 个未归因模式（131 条错误），逐条看**真实错误串**
+  # 之后才立（清单留档 docs/reports/unattributed-p69.txt）。规则序即优先级：
+  # 这些排在 AR-001..007 之后 → 只接"前面没人认领"的串，不会改写既有归因。
+  # ⚠ 仍未归因的那几条（如 `tool_executor_failed` / `ABORTED`）**故意不立规则**：
+  #   看不到具体根因就不编，宁可让覆盖度停在实测值。
+
+  - id: AR-008
+    class: env
+    match: ["sandbox-center cmd decisionRecord missing actual resource subject",
+            "SetNamedSecurityInfoW failed", "FS_SANDBOX_DENIED",
+            "ReplaceFileW EIO"]
+    why: 沙箱层拒绝写入——为工作区授写权限（ACL）时失败，操作停在沙箱而不是工具
+    fix: 用 diagnose-windows-sandbox-acl 诊断该路径；或把写入改到已授权目录
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-009
+    class: env
+    match: ["EPERM: operation not permitted"]
+    why: Windows 上目标文件被占用或目录不可写——原子改名/建目录被系统拒绝
+    fix: 关掉占用该文件的进程再重试；批量写前先确认目标目录可写
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-010
+    class: env
+    match: ["Permission to use"]
+    why: 平台权限层拒绝了该次调用（未获批或策略禁止），agent 自身无法绕过
+    fix: 改用已授权的只读工具，或先向用户申请该操作；批量探测前先确认授权边界
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-011
+    class: tool_interface
+    match: ["FS_AMBIGUOUS_EDIT",
+            "Found [0-9]+ matches of the string to replace"]
+    why: 待替换文本在文件里多处命中，工具无法确定改哪一处
+    fix: 给足上下文（前后各几行）再替换，或显式 replace_all
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-012
+    class: tool_interface
+    match: ["exceeds maximum allowed tokens"]
+    why: 工具结果超过单次返回上限，被落盘截断——拿到的是路径而不是内容
+    fix: 收窄查询范围/分页读取落盘文件，别整段读大文件
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-013
+    class: env
+    match: ["during web fetch", "URL redirected to different host"]
+    why: 联网抓取失败——上游不可达，或跨主机重定向被拒（非本地可修）
+    fix: 换检索词或镜像源；连续失败改走本地 search，别反复重试同一 URL
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-014
+    class: tool_interface
+    match: ["tool_input_invalid", "Invalid arguments for ",
+            "SEARCH_INVALID_PATTERN", "run_checklist_multiple_in_progress",
+            "tool_result_recall_invalid", "browser_wait_invalid",
+            "browser_timeout_invalid"]
+    why: 调用参数不符合工具 schema（缺必填、取值非法，或状态冲突）
+    fix: 按报错里的 required 列表补齐参数；同一时刻只保留一个进行中的 checklist
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-015
+    class: context
+    match: ["Can not find skill", "skill_asset_invalid",
+            "skill_asset_not_executable", "UNKNOWN_TOOL",
+            "No installed connector named", "unknown job "]
+    why: 引用的技能/工具/作业不存在或不可执行——名字写错、未安装或已过期
+    fix: 先列举已安装项（skills/tools/connectors）再引用；名称照注册名原样抄
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-016
+    class: env
+    match: ["Search time(?:d out|out) after", "TOOL_TIMEOUT"]
+    why: 本地检索或工具执行超时——范围太大或底层卡住，不是结果为空
+    fix: 缩小范围（限定目录/关键词）后重试；持续超时改分批读
+    confidence: medium
+    verified: "2026-10-23"
+    # ⚠ 上面写成 `Search time(?:d out|out) after` 是为了同时接 `Search timeout after`
+    #   与 `Search timed out after` 两种字面（实测只见到前者）。刻意不写裸
+    #   `timeout`：那会把 `browser_timeout_invalid`（参数非法，归 AR-014）劫持过来。
+
+  - id: AR-017
+    class: env
+    match: ["browser_instance_unknown", "browser_cancelled"]
+    why: 浏览器会话状态丢失——实例未注册或操作被取消，需重建会话
+    fix: 重新打开浏览器实例再操作；长流程中间别手动关闭窗口
+    confidence: medium
+    verified: "2026-10-23"
+
+  - id: AR-018
+    class: context
+    match: ["artifact_secret_detected"]
+    why: 产物里检出疑似密钥/凭据，落盘或导出被安全门拦下
+    fix: 把密钥替换成占位符或从产物中剔除后再重试
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-019
+    class: env
+    match: ["SEARCH_FAILED"]
+    why: 检索请求整体失败（索引或上游不可用），没有返回任何结果
+    fix: 重试一次；持续失败时缩小范围或改用文件内 Grep
+    confidence: medium
+    verified: "2026-10-23"
+
+  - id: AR-020
+    class: tool_interface
+    match: ["memory_tool_cursor_run_mismatch"]
+    why: 记忆工具的游标与当前 run 不匹配——会话恢复后状态错位
+    fix: 重置游标（从当前 run 重新取），不要跨 run 复用旧游标
+    confidence: medium
+    verified: "2026-10-23"
+
+  - id: AR-021
+    class: env
+    match: ["host_bridge_declared_error", "socket hang up"]
+    why: 与宿主/上游的连接层故障——桥接层报错或连接被对端断开
+    fix: 重试该调用；连续断开时查宿主进程与网络，而不是改提示词
+    confidence: low
+    verified: "2026-10-23"
+
+  - id: AR-022
+    class: context
+    match: ["plan_changes_requested"]
+    why: 计划被要求修改——这是正常的评审往返，不是工具故障
+    fix: 按评审意见改计划后重新提交审阅
+    confidence: high
+    verified: "2026-10-23"
+
+  - id: AR-023
+    class: tool_interface
+    match: ["FS_NOT_TEXT", "filesystem_offset_out_of_range"]
+    why: 文件读取方式不对——按文本读二进制，或偏移超出文件长度
+    fix: 先确认文件类型与大小再读；二进制走对应解析器，偏移从文件头算
+    confidence: medium
+    verified: "2026-10-23"
+
+  - id: AR-024
+    class: tool_interface
+    match: ["browser_element_obscured"]
+    why: 目标元素被其它元素遮挡，点击/输入落在遮挡物上
+    fix: 先滚到可视区并关掉遮挡弹层，再用稳定选择器定位可点击元素
+    confidence: medium
+    verified: "2026-10-23"

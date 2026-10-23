@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1041 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1051 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=1000 failures=0 errors=88 skipped=21
+# ② 无 PyYAML 门禁：期望 GATE ran=1003 failures=0 errors=92 skipped=21
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,11 +61,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1041 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1000 failures=0 errors=88 skipped=21** | **只看 `failures=0`**；`88 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=14` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1051 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1003 failures=0 errors=92 skipped=21** | **只看 `failures=0`**；`92 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期显式失败，不降级、不静默跳过），`skipped=14` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1041 vs 1000）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1051 vs 1003）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
 另有 `skipped=21`（v0.79/P6-6/P6-7，五组，逐组可对）：
@@ -84,7 +84,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1041，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1051，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
@@ -477,7 +477,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `report-tools` | 工具调用/失败率统计 |
 | `report-errors` | 错误三分类报告（含 数据源×model×类别 交叉表；v0.23 追加 **活跃 skill×数据源×类别** 交叉表，API 字段 `cross_skill`）。**v0.79 P6-5：模式行接归因**——每个模式带**根因候选**（`why`）+ **应对候选**（`fix`）+ 置信；未命中的行**显式标「未归因」**（不许静默省略）。`--rules` 指定规则表，`--no-attrib` 关闭归因层；**归因不可用时报告头明说「本报告不含归因」，绝不渲染成「未归因」**（那会把故障说成结论）。**三分类计数仍是事实层原口径**（归因只补"为什么/怎么办"，不改计数）。同一份归因也进 `/api/reports/errors`（`attrib_status`/`attrib_summary`，页面出「根因/应对」列） |
 | `report-chains` | 工具链失败模式报告（长回合/同工具连击/序列循环/空转） |
-| `attrib` | **归因层**（v0.79 P6）：把错误计数变成**根因候选 + 应对候选**。事实/归因/裁决三层分离（机器只出候选、**会错**，裁决进台账）；规则表是**数据文件** `harvester/data/attrib-rules.yaml`（随包分发，四要素 `match`/`class`/`why`/`fix` 缺一即加载失败），**不放 `.py`**——放代码就重演 `errstats._RULES` 的困境（新 Harness 接入时无人重审）。**人读/机读两个出口不共用实现**：`--json`（全量 + schema，供程序消费）/ `--brief`（一行一条、**不截断**，防"报告截断导致下游静默漏数据"）。只读 `harvester.db`；实测（2026-10-22 刷库后）7 条规则归因 **401/532** 条错误 |
+| `attrib` | **归因层**（v0.79 P6）：把错误计数变成**根因候选 + 应对候选**。事实/归因/裁决三层分离（机器只出候选、**会错**，裁决进台账）；规则表是**数据文件** `harvester/data/attrib-rules.yaml`（随包分发，四要素 `match`/`class`/`why`/`fix` 缺一即加载失败），**不放 `.py`**——放代码就重演 `errstats._RULES` 的困境（新 Harness 接入时无人重审）。**人读/机读两个出口不共用实现**：`--json`（全量 + schema，供程序消费）/ `--brief`（一行一条、**不截断**，防"报告截断导致下游静默漏数据"）。只读 `harvester.db`；实测（2026-10-22 刷库后，7 条规则）归因 **401/532** 条错误；**2026-10-23 扩容到 24 条规则后为 529/532（99.4%）、65/67 个模式**——剩下 `tool_executor_failed`（2 条）与 `ABORTED`（1 条）**故意不立规则**（报错没给根因，编一个就是假归因）；扩容门是 `tests/test_v71_attrib_rules_expanded.py`（真实串逐条对答案 + 死规则 + 劫持陷阱）|
 | `attrib-review` | **归因台账**（v0.79 P6）：抄 `card_review` 语义——**人裁过的归因不再进候选**。表 `attribations`（meta 库，结构与 `card_review` 同构 + 报备的 `class` 列）；三态 `accepted`/`rejected`/`revise`（归因会错，故必须有"驳回"档）。被移出的候选落「已裁决」段，**不许静默消失**。`--list` 列台账；`--pattern`+`--rule` 一言而决。**唯一写路径，只写台账库，绝不碰 `harvester.db`** |
 | `evidence-pack` | **评审包**（v0.79 P6-6）：把数据面打成**可评审**的包，固定三段——① **判据头**（口径/时间窗/库快照含 STALE/等级/覆盖度/边界）、② **证据体**（逐条计数 + 原文锚点 `sid#seq` + 归因候选 `why`/`fix`/置信）、③ **判定槽**（`pattern_key` 已填、裁决四列留空）。**③ 是"可评审"的定义性特征：没有判定槽的包不是评审包，是报告**（门禁 + 11 个变异用例钉住）。等级 **R0–R3 由内容算**而非写死：有计数无根因=R1（`skills`/`chains` 就是），有归因候选=R2，再加回填通道（`attrib-review`）才 R3（`errors`/`attrib`）。覆盖度**现算**并写进包头（实测 errors 面 81/1776 会话）——拿部分覆盖当全库结论是本工程明令禁止的事。`artifact` 类**故意不收**（只登记 dsh 源 ≈2%，归 P6-8）。只读；判定走既有台账通道，不在包里造第二条写路径。两个出口不共用实现：`--out`（md，可贴给任意 Agent）/`--json`（带 `schema=evidence-pack/1`） |
 | `report-daily` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |

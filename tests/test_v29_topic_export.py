@@ -154,23 +154,44 @@ class TestTopicExport(unittest.TestCase):
             topic_bundle(self.meta, self.db, "tp-nonexistent")
 
     def test_reproducible_except_generated_at(self):
-        """同库快照重跑：去掉 generated_at 后逐字节一致（可复现红线）。"""
+        """同库快照重跑：去掉 generated_at 后逐字节一致（可复现红线）。
+
+        `generated_at` 在载荷里**有两处**：顶层与 `db_fingerprint` 内（`dbmeta.py:165`
+        也按秒取当前时刻）。只 pop 顶层时，两次 render 若跨秒就会红——实测
+        `docs/reports/probe-v29-flake.py` 跑 400 轮出现 4 次，差异键恒为
+        `db_fingerprint`（2026-10-23 抓到的偶发）。故递归清掉**所有** `generated_at`：
+        要钉的是"除时间戳外可复现"，不是"两次跑落在同一秒"。
+        """
         a = render_topic_json(topic_bundle(self.meta, self.db, self.t,
                                            chain_root=self.chains))
         b = render_topic_json(topic_bundle(self.meta, self.db, self.t,
                                            chain_root=self.chains))
+
+        def strip(node):
+            if isinstance(node, dict):
+                node.pop("generated_at", None)
+                for v in node.values():
+                    strip(v)
+            elif isinstance(node, list):
+                for v in node:
+                    strip(v)
+
         da = json.loads(a)
         db_ = json.loads(b)
-        da.pop("generated_at")
-        db_.pop("generated_at")
+        strip(da)
+        strip(db_)
         self.assertEqual(da, db_)
-        # 显式传 generated_at 时完全一致
-        x = render_topic_json(topic_bundle(self.meta, self.db, self.t,
-                                           chain_root=self.chains,
-                                           generated_at="T"))
-        y = render_topic_json(topic_bundle(self.meta, self.db, self.t,
-                                           chain_root=self.chains,
-                                           generated_at="T"))
+        # 显式传 generated_at 时：顶层就用这个值，其余部分仍逐字段一致
+        x = json.loads(render_topic_json(topic_bundle(
+            self.meta, self.db, self.t, chain_root=self.chains,
+            generated_at="T")))
+        y = json.loads(render_topic_json(topic_bundle(
+            self.meta, self.db, self.t, chain_root=self.chains,
+            generated_at="T")))
+        self.assertEqual(x["generated_at"], "T")
+        self.assertEqual(y["generated_at"], "T")
+        strip(x)
+        strip(y)
         self.assertEqual(x, y)
 
     def test_json_is_machine_parseable_with_cjk_preserved(self):
