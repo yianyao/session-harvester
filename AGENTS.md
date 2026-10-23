@@ -190,6 +190,15 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
     CLI 的 JSON stdout 解析成结构字段（`pack`）一并返回，页面不 parse 文本。
     拿不到结构要**响亮报错并给原文**，不许静默空框。
 
+**30. 人读与机读都要时，不许用 `--json -`**（2026-10-23 P9-③）：
+    `--json -` 的定义是「stdout 归 JSON 独占」，人读文本让位（chain-audit 甚至
+    让位到 stderr）。所以**只要页面还要显示文本**，就不能用它——正确做法是
+    `--json <临时文件>`：stdout 保持原样、文件读回进 `result["json"]`、跑完即删。
+    推论：新增任何"两出口"动作，先问「人读文本还要不要」；要 → 临时文件。
+    门要打在**plumbing** 上（假 CLI 真写文件，断言 argv 追加了 `--json <路径>`、
+    读回成功、文件已删、坏了有 `json_error`），只在源码里断言 `_cli_report_both`
+    出现会被"改成不调用"骗过。
+
 **收尾固定动作**（本仓历史证明有效）：① 死代码扫描（`harvester/` 与 `tests/` 两个根都要 0/0/0，行内 `# noqa` 视为有意保留）；
 ② 悬空路径检查（`git ls-files -c core.quotePath=false` 取已提交 `*.md`，逐个 `Test-Path` 其中 `docs/reports/...` 引用）；
 ③ 过期文本扫描（`git grep "TODO|FIXME|后续版本|待实现|暂未"`，逐条判断是「项目欠债」还是「在描述扫描本身」）。
