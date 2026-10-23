@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1119 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1123 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=1051 failures=0 errors=96 skipped=42
+# ② 无 PyYAML 门禁：期望 GATE ran=1051 failures=0 errors=96 skipped=43
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,14 +61,14 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1119 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1051 failures=0 errors=96 skipped=42** | **只看 `failures=0`**；`95 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=42` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1123 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1051 failures=0 errors=96 skipped=43** | **只看 `failures=0`**；`95 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=42` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1119 vs 1051）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1123 vs 1051）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
-另有 `skipped=42`（v0.80 起；逐组可对）：
+另有 `skipped=43`（v0.80 起；逐组可对）：
 - `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测用例**（递归回自己，
   子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip；`scripts/gate_no_yaml.py`
   自己设这一位，所以门禁绝不会跑门禁）；
@@ -81,6 +81,9 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 - `skipped=11` 是 v0.80 新增的 `test_v76_class_single_source.py`：**类别只有一个
   来源（归因层）**，缺 PyYAML 时类别会降级，所以「类别对不对」整组跳过而不是断言失败
   （H9）；同一文件里 `first_seen` 那条不依赖归因层，照常真跑；
+- `skipped=1` 是 P9 扩面的 `test_v77_cli_json.CliJsonExtended`（chain-audit /
+  report-skill-join 要 PyYAML 读 chain：**不可用≠失败**，按不适用跳过；
+   「缺依赖要响亮」由 `test_v75` 的 H9 门单独盯）；
 - 其余 10 条是 v0.78–v0.79 之后各文件的 `_NEED_REAL` 组（未逐一点名，判据同 H9）。
 **`skipped` 不等于通过**：被跳过的这几组正是"实测↔README 对账"与"面↔判据对账"，
 它们只在**顶层**那一次运行（有 PyYAML + 有真库）里真正执行。
@@ -88,7 +91,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1119，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1123，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
@@ -485,11 +488,11 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `attrib-review` | **归因台账**（v0.79 P6）：抄 `card_review` 语义——**人裁过的归因不再进候选**。表 `attribations`（meta 库，结构与 `card_review` 同构 + 报备的 `class` 列）；三态 `accepted`/`rejected`/`revise`（归因会错，故必须有"驳回"档）。被移出的候选落「已裁决」段，**不许静默消失**。`--list` 列台账；`--pattern`+`--rule` 一言而决。**唯一写路径，只写台账库，绝不碰 `harvester.db`** |
 | `evidence-pack` | **评审包**（v0.79 P6-6）：把数据面打成**可评审**的包，固定三段——① **判据头**（口径/时间窗/库快照含 STALE/等级/覆盖度/边界）、② **证据体**（逐条计数 + 原文锚点 `sid#seq` + 归因候选 `why`/`fix`/置信）、③ **判定槽**（`pattern_key` 已填、裁决四列留空）。**③ 是"可评审"的定义性特征：没有判定槽的包不是评审包，是报告**（门禁 + 11 个变异用例钉住）。等级 **R0–R3 由内容算**而非写死：有计数无根因=R1（`skills`/`chains` 就是），有归因候选=R2，再加回填通道（`attrib-review`）才 R3（`errors`/`attrib`）。覆盖度**现算**并写进包头（实测 errors 面 81/1776 会话）——拿部分覆盖当全库结论是本工程明令禁止的事。`artifact` 类**故意不收**（只登记 dsh 源 ≈2%，归 P6-8）。只读；判定走既有台账通道，不在包里造第二条写路径。两个出口不共用实现：`--out`（md，可贴给任意 Agent）/`--json`（带 `schema=evidence-pack/1`） |
 | `llm-pack` | **LLM 包**（v0.80 第④b步）：把「现在判不了的东西」连证据打成 `schema=llm-pack/1` 交 LLM 复核。每条 = `item_id`/`face`/`subject`/`facts`（错误串锚点或工具名，**可回溯**）/`attrib`（现有候选，`candidate=true`）+ 一个空判定槽；`slot.entries` 与 `items` **一一对应**（对不上号 = 回填会丢，`--validate` 会红）。`ask` 写明纪律：只复核候选、不改事实、拿不准填 `unknown` 并说明缺什么证据。`readback` 给**逐条** `attrib-review` 命令（该命令没有批量导入，不假装有）。`--faces errors,tools`、`--limit`、`--json PATH`、`--rules`、`--validate PATH`。只读（库全程 `mode=ro`，跑完 mtime/size 不变，门钉住）；判定仍走 `attribations` 台账。 |
-| `report-daily` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |
+| `report-daily [--json PATH]` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |
 | `noise` | **零散会话登记**（v0.81 P5-⑧）：判「不归任何主题」的会话写进 topics_meta 的 sessions_noise 表，主题候选簇（candidates/keywords）不再收它们。**只写 meta 表、不动会话数据**（可逆：删行即撤销）——与 suppress 删仓内副本是两码事。`add` 幂等（已在表跳过）、默认 dry-run、`--apply` 才写；`list` 列出已登记（何时/为什么）。**候选只列不裁决**：归宿（班规条目/问题清单）由人定 |
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
 | `report-skill [--json PATH]` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
-| `report-skill-join` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |
+| `report-skill-join [--json PATH]` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |
 | `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db）。**排序口径 doc_freq 优先**（= 含该词的消息条数），freq 为出现总次数。默认启用随包通用停用词表（`harvester/data/stopwords_zh.txt`，只含通用虚词）；人名/专名请用 `--stopwords PATH` 叠加私有表（可多次），`--no-stopwords` 关闭过滤。**ASCII 段按整词统计**（英文切片片段已消除）；CJK 段为 2/3 字滑窗，跨词边界的片段（如「上的」）属无分词器的固有代价。`--keep-runs N` + `--vacuum` 在统计后顺手回收旧 run |
 | `keywords-gc` | **回收 keywords_meta.db**（v0.45）：`keyword_stats` 是**累积表**（每跑一次 keywords 追加一整份 n-gram 表），不回收就随运行次数线性膨胀。`--keep-runs N`（缺省 1）只留最近 N 次 run 并**按 run 删净**统计行（不留孤儿），`--vacuum` 确有删除时回收磁盘。真库实测：4 次 run / 435,583 行 → 40.2 MB，`--keep-runs 1 --vacuum` 后 **18.4 MB**（其中 22 MB 是**空闲页**，只有 VACUUM 能回收） |
 | `suggest-agents` | 从错误模式生成 AGENTS.md 候选条目（建议池，不直改）。`--coverage` 追加**建议池 ↔ 台账**覆盖核对，并给**人账总览**（「人账」= 人工登记的四本账：建议句台账 / 主题级台账 / 主题注册表 / 零散登记，v0.46 P2-5）。陈旧条目**分两类**：已采纳的（疑似规则生效，交 `harvest-eval`，**不删账**）与其他的（应清账）。真库实测：建议 9 条 / 台账 8 条（建议句）+ 14 条（`topic:` 命名空间），已裁决 6 / 待裁决 3 / 陈旧·已采纳 2 / 陈旧·其他 0 |
@@ -498,7 +501,15 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `harvest-eval` | **自进化评估闭环**（v0.46 P1-4）：对每条 adopted 规则，按分界 T（`adopted_at`，或回退 `--since`）取前后各 `--window-days` 天，比较**未解决率**（主判据）与**复发率**（只报告），输出**三值判定**（改善/无变化/变差）＋样本量；样本不足或没有分界日期一律写**「不下结论」**（≠「无变化」）。判定→处置口径固定：无变化→可退休、变差→建议回滚、改善→保持。**工具只评估，绝不自动改 `AGENTS.md`** |
 | `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
 
-> **机读出口（G2 结构化层）**：上述四个只读报告（`report-tools` / `report-errors` / `report-skill` / `report-chains`）支持 `--json PATH`，载荷固定为 `schema` / `db_fingerprint` / `data` 三段（`data` 与文本报告**同源聚合**；`-` = stdout），供程序消费；**人读仍默认**——不给 `--json` 时输出与旧版一致。
+> **机读出口（G2 结构化层）**：八条只读命令支持 `--json PATH`——
+> 四条报告（`report-tools` / `report-errors` / `report-skill` / `report-chains`）
+> ＋ P9 扩面四条（`report-daily` / `report-skill-join` / `chain-audit` /
+> `cards validate`）。`PATH` 写 `-` 即 stdout（人读文本让位：落 `--out`
+> 或改走 stderr，保证 stdout 是**纯 JSON**、可整体 `json.loads`）；不给
+> `--json` 时输出**与旧版逐字相同**。schema 分别是
+> `report-daily/1` / `report-skill-join/1` / `chain-audit/1` / `cards-validate/1`，
+> 与上面四条同形：`schema` / `generated_at` / `db_fingerprint` / `data`，
+> `data` 由**文本路径同一个聚合函数**产出（不解析渲染文本、不二次聚合）。，载荷固定为 `schema` / `db_fingerprint` / `data` 三段（`data` 与文本报告**同源聚合**；`-` = stdout），供程序消费；**人读仍默认**——不给 `--json` 时输出与旧版一致。
 
 ### 蒸馏与知识库
 
@@ -508,7 +519,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `triage` | 蒸馏队列：新错误 pattern/旧坑重现/Skill 行为链/高信号会话 |
 | `draft` | 蒸馏包：会话原文+卡片规范+指令 → 自包含 md 喂 Agent |
 | `artifacts` | 产物提取：Write/Edit args 回源 → artifacts_meta.db。**两个子命令都先印覆盖度自陈**（P6-8）：`仅 dsh 源，已登记 N / 总会话 M（pct）… 本面不代表全库`——产物只来自 dsh 一个源，不带分母就会把部分覆盖当成全库画像 |
-| `cards validate` | 校验卡片目录（§8 规范 + 锚点真实命中索引库）；可选 `--topics-meta topics_meta.db` 追加**卡 ↔ 主题一致性核对**（见「卡片校验与主题注册表打通」）；v0.74 起证据/综述拆角色（`summary` 不做逐字核对）、insight 豁免逐字核对、警告可人工裁决落账（`cards review`——人裁过的不许再烦人） |
+| `cards validate [--json PATH]` | 校验卡片目录（§8 规范 + 锚点真实命中索引库）；可选 `--topics-meta topics_meta.db` 追加**卡 ↔ 主题一致性核对**（见「卡片校验与主题注册表打通」）；v0.74 起证据/综述拆角色（`summary` 不做逐字核对）、insight 豁免逐字核对、警告可人工裁决落账（`cards review`——人裁过的不许再烦人） |
 | `cards new` | 从索引库会话生成卡片脚手架（evidence 留白；v0.78 含 `triggers` 现象词占位 + 「别再来」反面清单表——每条弯路必须写为什么不通） |
 | `cards index-md` | 触发词消歧素材（v0.78）：触发行清单 + 疑似易混对（归一子串口径，只列不裁决）+ 可整段贴进 AGENTS.md 的钩子模板（动手前搜现象词→读卡）；**只读**，机器不定稿消歧表 |
 | `kb-init` | 建知识库骨架（幂等） |

@@ -767,6 +767,9 @@ def cmd_report_daily(args) -> int:
         # P6-7：本面是**聚合面**，等级取"最弱一环"——四队列是计数、
         # 三份摘要分别是工具/错误/链型计数，**没有一个分节带根因候选**
         # （本命令不加载归因规则，错误段因此也不会是 R2/R3）。
+        # G2 机读出口（P9 扩面）：与本段文本**同一批变量**，不重算。
+        jdata: dict = {"queues": {"decide": decide, "repair": repair,
+                                  "distill": distill, "verify": verify}}
         from .reviewable import assess as _assess
         L[5:5] = [_assess(entries=decide + repair + distill + verify,
                           candidates=0,
@@ -800,12 +803,16 @@ def cmd_report_daily(args) -> int:
         else:
             stats, flow = collect_stats_from_db(dbp, since_days=args.since)
             L += [rr_tools(stats, flow=flow), ""]
+            from .toolstats import tool_rows as _tool_rows
+            jdata["tools"] = {"basis": "steps", "flow": flow,
+                              "tools": _tool_rows(stats)}
 
         # —— 三、错误分类摘要 ——
         from .errstats import collect_errors_from_db, render_report as rr_err
         L += ["## 三、错误分类摘要（最近 %.g 天）" % args.since, ""]
         errors, emeta = collect_errors_from_db(dbp, since_days=args.since,
                                                con=con)
+        jdata["errors"] = {"errors": errors, "meta": emeta}
         if emeta.get("error_count", 0) == 0:
             L += ["（窗口内无错误步骤——诚实空态。）", ""]
         else:
@@ -815,8 +822,9 @@ def cmd_report_daily(args) -> int:
         from .chainstats import collect as ch_collect
         from .chainstats import render_report as rr_chain
         L += ["## 四、工具链失败模式摘要（最近 %.g 天）" % args.since, ""]
-        L += [rr_chain(ch_collect(dbp, since_days=args.since, top=args.top),
-                       top=args.top), ""]
+        cd = ch_collect(dbp, since_days=args.since, top=args.top)
+        jdata["chains"] = cd
+        L += [rr_chain(cd, top=args.top), ""]
 
         # —— 五、账目 ——
         L += ["## 五、账目", "",
@@ -829,6 +837,8 @@ def cmd_report_daily(args) -> int:
     finally:
         con.close()
     _emit_report("\n".join(L), args)
+    if getattr(args, "json", None):
+        _emit_json(args.json, "report-daily/1", jdata, dbp=dbp)
     return 0
 
 
@@ -846,6 +856,8 @@ def cmd_report_skill_join(args) -> int:
     d = build_cross(Path(args.chain), dbp, skill=args.skill,
                     margin_days=args.margin_days)
     _emit_report(render_cross(d), args)
+    if getattr(args, "json", None):
+        _emit_json(args.json, "report-skill-join/1", d, dbp=dbp)
     return 0
 
 
@@ -1576,6 +1588,10 @@ def cmd_cards(args) -> int:
         return 2
     report = render_report(results, summary, root)
     _emit_report(report, args)
+    if getattr(args, "json", None):
+        _emit_json(args.json, "cards-validate/1",
+                   {"root": str(root), "summary": summary,
+                    "cards": results}, dbp=dbp)
     return 1 if summary["error"] else 0
 
 
@@ -2173,7 +2189,10 @@ def cmd_chain_audit(args) -> int:
         out.write_text(text, encoding="utf-8", newline="\n")
         print(f"[chain-audit] 报告已写入: {out}", file=sys.stderr)
     else:
-        print(text)
+        # `--json -` 时 stdout 归机读出口独占（同 _emit_report 的纪律）
+        print(text, file=(sys.stderr if args.json == "-" else sys.stdout))
+    if getattr(args, "json", None):
+        _emit_json(args.json, "chain-audit/1", r, dbp=Path(args.db))
     bits = []
     if "quotes" in r:
         q = r["quotes"]
@@ -2641,6 +2660,9 @@ def build_parser() -> argparse.ArgumentParser:
     prd.add_argument("--top", type=int, default=10,
                      help="高步会话 Top N（默认 10）")
     prd.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prd.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-daily/1）：schema + db_fingerprint"
+                          " + data（与文本同一个聚合）；'-'=stdout")
     prd.set_defaults(func=cmd_report_daily)
 
     psj = sub.add_parser("report-skill-join",
@@ -2655,6 +2677,9 @@ def build_parser() -> argparse.ArgumentParser:
                      dest="margin_days",
                      help="stage 时间窗向后放宽天数（默认 0）")
     psj.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    psj.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-skill-join/1）：schema + db_fingerprint + "
+                          "data（与文本同一个聚合）；'-'=stdout")
     psj.set_defaults(func=cmd_report_skill_join)
 
     ptc = sub.add_parser("topic-candidates",
@@ -3014,6 +3039,10 @@ def build_parser() -> argparse.ArgumentParser:
     pcap.add_argument("--show-review", dest="show_review", action="store_true",
                       help="连同已裁决警告一起显示（复核留痕用）")
     pcap.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pcap.add_argument("--json", metavar="PATH", default=None,
+                      help="机读出口（cards-validate/1）：schema + "
+                           "db_fingerprint + data（逐卡结果与文本同源）；"
+                           "'-'=stdout")
     pcap.set_defaults(func=cmd_cards)
     pcn = pcdsub.add_parser("new", help="从索引库会话生成卡片脚手架")
     pcn.add_argument("--sid", required=True,
@@ -3159,6 +3188,9 @@ def build_parser() -> argparse.ArgumentParser:
     pca.add_argument("--review-list", dest="review_list", action="store_true",
                      help="列出该 chain 的复核台账后退出")
     pca.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pca.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（chain-audit/1）：schema + db_fingerprint + "
+                          "data（与文本同一个聚合）；'-'=stdout")
     pca.set_defaults(func=cmd_chain_audit)
 
     par = sub.add_parser(

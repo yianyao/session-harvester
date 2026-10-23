@@ -14,6 +14,7 @@
 真库 `harvester.db` 缺失时整类 `skipTest`：夹具不在时不许判红。
 """
 
+import importlib.util
 import io
 import json
 import tempfile
@@ -165,6 +166,126 @@ class CliJsonExit(unittest.TestCase):
         chains = self.payloads["report-chains"]["data"]
         for k in ("long", "streaks", "loops", "spins", "top"):
             self.assertIsInstance(chains[k], list, f"{k} 应是列表")
+
+
+def _first_chain() -> Path | None:
+    """真库边上的第一份 chain 长文（skill-join / chain-audit 要它当输入）。"""
+    found = sorted((ROOT / "knowledge" / "topics").glob("chain-*.md"))
+    return found[0] if found else None
+
+
+class CliJsonExtended(unittest.TestCase):
+    """P9 扩面：report-daily / report-skill-join / chain-audit / cards validate。
+
+    与上类的差别只在**参数来源**（这几条要文件/目录当输入），口径完全一致：
+    `--json -` 的 stdout 必须整体可解析、schema 对、data 带顶层键，
+    并且**缺省行为不变**（人读文本、非空、不许吐 JSON）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not DB.is_file():
+            raise unittest.SkipTest("缺真库 harvester.db（不在缺夹具时判红）")
+        # 无 PyYAML 时 chain 加载**不可用**（不是链不存在）——按「不适用」跳过，
+        # 不按「失败」红。口径见 AGENTS §三 24：缺依赖要响亮，但缺依赖不等于
+        # 被测行为错了；no-YAML 门禁那边有三道专门的门盯 loud 行为。
+        try:
+            has_yaml = importlib.util.find_spec("yaml") is not None
+        except (ImportError, ModuleNotFoundError):
+            # 无 YAML 门禁（scripts/gate_no_yaml.py）把 find_spec 直接改成抛
+            # ModuleNotFoundError —— 「找不到」与「探针被拦」都按"不适用"处理。
+            has_yaml = False
+        if not has_yaml:
+            raise unittest.SkipTest("缺 PyYAML：chain 面不适用（H9 另有 loud 门）")
+        chain = _first_chain()
+        if chain is None:
+            raise unittest.SkipTest("缺 knowledge/topics/chain-*.md")
+        cards = ROOT / "knowledge" / "cards"
+        if not cards.is_dir():
+            raise unittest.SkipTest("缺 knowledge/cards 目录")
+        cls.cases = (
+            ("report-daily",
+             ["report-daily", "--db", str(DB), "--since", "1"],
+             "report-daily/1", ("queues", "tools", "errors", "chains")),
+            ("report-skill-join",
+             ["report-skill-join", "--chain", str(chain), "--db", str(DB)],
+             "report-skill-join/1", ("topic", "members", "joined", "stages")),
+            ("chain-audit",
+             ["chain-audit", str(chain), "--db", str(DB)],
+             "chain-audit/1", ("chain", "members", "quotes", "coverage")),
+            ("cards-validate",
+             ["cards", "validate", "--root", str(cards), "--db", str(DB)],
+             "cards-validate/1", ("root", "summary", "cards")),
+        )
+        cls.raw: dict[str, str] = {}
+        cls.payloads: dict[str, dict] = {}
+        with mock.patch("time.strftime", return_value=FROZEN):
+            for name, argv, _schema, _keys in cls.cases:
+                rc, out = _run_main(argv, ["--json", "-"])
+                cls.rc = rc
+                assert out.lstrip().startswith("{"), \
+                    f"{name} 的 --json - 不是纯 JSON（混了人读文本）"
+                cls.raw[name] = out
+                cls.payloads[name] = json.loads(out)
+
+    def test_stdout_is_pure_json(self):
+        for name, _argv, schema, keys in self.cases:
+            with self.subTest(cmd=name):
+                obj = self.payloads[name]
+                self.assertEqual(obj["schema"], schema)
+                self.assertIsInstance(obj["generated_at"], str)
+                self.assertIsInstance(obj["db_fingerprint"], dict)
+                for k in keys:
+                    self.assertIn(k, obj["data"],
+                                  f"{name} 的 data 缺顶层键 {k!r}")
+                self.assertNotIn("Traceback", self.raw[name])
+
+    def test_json_file_matches_stdout_bytes(self):
+        with mock.patch("time.strftime", return_value=FROZEN):
+            for name, argv, _schema, _keys in self.cases:
+                with self.subTest(cmd=name), \
+                        tempfile.TemporaryDirectory() as td:
+                    p = Path(td) / "out.json"
+                    _run_main(argv, ["--json", str(p)])
+                    self.assertEqual(
+                        p.read_bytes(), self.raw[name].encode("utf-8"),
+                        "落盘字节与 --json - 的 stdout 不一致")
+
+    def test_default_output_still_text(self):
+        """不给 --json 时行为零变化：人读文本、非空、不是 JSON。"""
+        for name, argv, _schema, _keys in self.cases:
+            if name == "chain-audit":
+                continue      # 它的缺省文本走 stdout，但退出码依赖门结果，
+                              # 由 test_v20 那类专门的门负责；此处不重复判
+            with self.subTest(cmd=name):
+                rc, out = _run_main(argv)
+                self.assertIn(rc, (0, 1), "只允许 0/1：无错误数据面")
+                self.assertTrue(out.strip(), "缺省报告不该是空的")
+                self.assertNotIn("Traceback", out)
+                with self.assertRaises(json.JSONDecodeError):
+                    json.loads(out)
+
+    # ---- 对账：data 与文本同源（会红的断言，不是形状检查） ----
+    def test_data_is_self_consistent(self):
+        daily = self.payloads["report-daily"]["data"]
+        self.assertEqual(set(daily["queues"]),
+                         {"decide", "repair", "distill", "verify"})
+        self.assertTrue(all(isinstance(v, int) for v in daily["queues"].values()))
+        # 错误段与 errors 面同源：条数 == meta.error_count
+        self.assertEqual(len(daily["errors"]["errors"]),
+                         daily["errors"]["meta"]["error_count"])
+        # 工具段逐工具失败合计 == flow.errors（同一份聚合）
+        self.assertEqual(sum(r["error"] for r in daily["tools"]["tools"]),
+                         daily["tools"]["flow"]["errors"])
+
+        audit = self.payloads["chain-audit"]["data"]
+        # 引文门自洽：exact+partial == total-hit（hit 是口径字段）
+        q = audit["quotes"]
+        self.assertLessEqual(q["exact"] + q["partial"], q["total"])
+
+        cards = self.payloads["cards-validate"]["data"]
+        self.assertEqual(cards["summary"]["cards"], len(cards["cards"]),
+                         "summary.cards 应等于逐卡结果条数（同一遍校验）")
 
 
 if __name__ == "__main__":
