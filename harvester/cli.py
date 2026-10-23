@@ -1731,6 +1731,54 @@ def cmd_evidence_pack(args) -> int:
     return 0
 
 
+def cmd_llm_pack(args) -> int:
+    """LLM 打包（第④b步）：给 LLM 的活——评论候选、填判定槽。
+
+    只读（库走 mode=ro）；`--validate` 只校验结构，不改任何文件。
+    """
+    import json as _json
+    from .attrib import load_rules
+    from .llmpack import build_pack, render_json, validate_pack
+    if args.validate:
+        p = Path(args.validate)
+        if not p.is_file():
+            print(f"错误: 包不存在: {p}", file=sys.stderr)
+            return 2
+        try:
+            pack = _json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001 - 坏 JSON 也是响亮失败
+            print(f"错误: 解析失败: {e}", file=sys.stderr)
+            return 2
+        problems = validate_pack(pack)
+        if problems:
+            print(f"不合格（{len(problems)} 处）：", file=sys.stderr)
+            for x in problems:
+                print(f"  - {x}", file=sys.stderr)
+            return 1
+        print(f"合格：{p}（items {len(pack.get('items') or [])} 条，"
+              f"判定槽 {len((pack.get('slot') or {}).get('entries') or [])} 行）")
+        return 0
+
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    faces = tuple(f.strip() for f in (args.faces or "").split(",") if f.strip())
+    try:
+        pack = build_pack(dbp, faces=faces, limit=args.limit,
+                          rules=load_rules(Path(args.rules) if args.rules else None))
+    except Exception as e:  # noqa: BLE001 - 规则不合规/面不支持属响亮失败
+        print(f"错误: {e}", file=sys.stderr)
+        return 2
+    text = render_json(pack)
+    if args.json:
+        _write_or_print(text, args.json, "LLM 包（机读）")
+    else:
+        print(text, end="")
+    return 0
+
+
 def _write_or_print(text: str, out: str, label: str) -> None:
     """写盘或打印。落盘统一 UTF-8 无 BOM + LF（项目纪律）。"""
     if out == "-":
@@ -2452,6 +2500,21 @@ def build_parser() -> argparse.ArgumentParser:
     pep.add_argument("--meta", default=None,
                      help="归因台账 meta 库（只用于标出「已裁决」；不写）")
     pep.set_defaults(func=cmd_evidence_pack)
+
+    plp = sub.add_parser("llm-pack",
+                         help="LLM 打包（第④b步）：事实 + 归因候选 + **判定槽**，"
+                              "交 LLM 复核；只读，不写库")
+    plp.add_argument("--db", default="harvester.db", help="索引库路径（只读）")
+    plp.add_argument("--faces", default="errors",
+                     help="要打包的面，逗号分隔（可选 errors,tools；默认 errors）")
+    plp.add_argument("--limit", type=int, default=40,
+                     help="每面最多 N 条（默认 40；判定槽行数 = 条目数）")
+    plp.add_argument("--rules", default=None, help="归因规则表路径（缺省随包那份）")
+    plp.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（llm-pack/1）输出路径；缺省打印到 stdout")
+    plp.add_argument("--validate", metavar="PATH", default=None,
+                     help="校验一个已填/未填的包（结构 + 判定槽对号），合格回 0")
+    plp.set_defaults(func=cmd_llm_pack)
 
     prc = sub.add_parser("report-chains",
                          help="工具链失败模式报告（长回合/同工具连击/"
