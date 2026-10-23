@@ -59,8 +59,8 @@ from .export_analysis import build_analysis
 from .indexing import search
 from .reader import split_turns
 from .suggestmeta import load_statuses
-from .toolstats import (collect_source_stats, collect_stats_from_db,
-                        tool_rows)
+from .toolstats import (RANK_MIN_CALLS, collect_source_stats,
+                        collect_stats_from_db, tool_rows)
 from .triage import collect_triage
 
 API_VERSION = 1
@@ -467,9 +467,15 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
 def api_reports_tools(con: sqlite3.Connection, db: Path,
                       params: dict) -> dict:
     """G1 工具统计：总表 + 重试/放弃 + 按源分布（工具名已归一）。
-    min_calls（v0.19 additive）：样本量阈值，calls<阈值的行 low_sample=true。"""
+
+    min_calls（v0.19 additive）：样本量阈值，calls<阈值的行 low_sample=true。
+    rank_min_calls（v0.79 additive，用户批准的第①步）：**排序下限**——
+    calls 低于它的行不进排行、排在末尾且 ranked=false（页面拆"样本不足"段）。
+    排序本身在 `toolstats.tool_rows` 一处（页面/CLI/导出同序）。
+    """
     days = _since_days(params)
     min_calls = _int_param(params, "min_calls", 0, 0, 10 ** 6)
+    rank_min = _int_param(params, "rank_min_calls", RANK_MIN_CALLS, 0, 10 ** 6)
     stats, flow = collect_stats_from_db(db, since_days=days, con=con)
     by_source = collect_source_stats(db, since_days=days, con=con)
     src_out = {}
@@ -477,11 +483,14 @@ def api_reports_tools(con: sqlite3.Connection, db: Path,
         src_out[src] = {
             "calls": sum(st.calls for st in tm.values()),
             "errors": sum(st.error for st in tm.values()),
-            "tools": tool_rows(dict(tm), min_calls=min_calls),
+            "tools": tool_rows(dict(tm), min_calls=min_calls,
+                               rank_min_calls=rank_min),
         }
     return {"api_version": API_VERSION,
-            "tools": tool_rows(stats, min_calls=min_calls),
+            "tools": tool_rows(stats, min_calls=min_calls,
+                               rank_min_calls=rank_min),
             "flow": flow, "by_source": src_out, "min_calls": min_calls,
+            "rank_min_calls": rank_min,
             "db_fingerprint": db_fingerprint(db, con=con)}
 
 

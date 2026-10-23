@@ -408,8 +408,30 @@ def aggregate_error_roots(errors: dict[str, int]) -> list[dict]:
     return sorted(out.values(), key=lambda g: (-g["count"], g["pattern"]))
 
 
-def tool_rows(stats: dict, min_calls: int = 0) -> list[dict]:
-    """ToolStats 字典 → 排序后的 JSON 行（失败率优先，与 render_report 同序）。
+#: 排序下限（2026-10-23，用户批准的第①步）：**调用次数低于它的工具不进"失败率排行"**。
+#:
+#: 为什么：`tool_rows` 原先按 `fail_rate` 倒序，于是"1 次调用 1 次失败"（100%）永远霸榜。
+#: 真库实测（`docs/reports/probe-tool-ordering.py`）：榜首 `skill_run_asset` 2 次调用、
+#: 榜二 `memory_source` 1 次调用，而 275 次失败（4.2%）的 `Edit` 排到十几名开外——
+#: 榜单头部两名合计 **3 次调用**，等于用噪声占据最显眼的位置。
+#:
+#: 口径（用户拍板）：① 样本不足的行**不进排行**、单列"样本不足"段（仍可见、不静默丢弃）；
+#: ② 排行按**绝对失败数**降序（次数说得清影响面，比率说不清样本量）。
+#: 20 这个数不是魔数：`--min-calls 5` 在既有文档里是最低"能下结论"的门槛（v0.19），
+#: 排序要更严一档，取 20 让"1–19 次调用"整体退到观察区。
+RANK_MIN_CALLS = 20
+
+
+def tool_rows(stats: dict, min_calls: int = 0,
+              rank_min_calls: int = RANK_MIN_CALLS) -> list[dict]:
+    """ToolStats 字典 → 排序后的 JSON 行（**唯一排序口径**，页面/CLI/导出共用）。
+
+    排序（v0.79 起）：先进"排行"段、再排"样本不足"段——
+      排行段（calls ≥ rank_min_calls）：-error（绝对失败数）、-fail_rate、tool 名；
+      样本不足段（calls < rank_min_calls）：-calls、tool 名（**不按失败率**，否则
+      1/1 = 100% 又会被顶到最前，等于没改）。
+    `ranked` 字段告诉调用方它属于哪一段（页面据此拆两张表）；**不删行**。
+
     v0.19 additive：given_up/retried（per-tool 失败后续行为）、raw_tools
     （归一前的原始写法，可追溯）、low_sample（min_calls>0 且 calls<阈值）。
     v0.21 P0-2 additive：roots（aggregate_error_roots 根因聚合，view G1
@@ -417,17 +439,21 @@ def tool_rows(stats: dict, min_calls: int = 0) -> list[dict]:
     （v0.22 P1-4 自 apiserve._tool_rows 迁入：纯函数归属数据层，
     export-analysis 统一导出器与 API 端点同源共用，禁第二套口径。）
     """
-    order = sorted(stats.items(),
-                   key=lambda kv: (-kv[1].fail_rate, -kv[1].calls, kv[0]))
-    return [{"tool": t, "calls": st.calls, "success": st.success,
+    rows = [{"tool": t, "calls": st.calls, "success": st.success,
              "error": st.error, "fail_rate": round(st.fail_rate, 4),
              "given_up": st.given_up, "retried": st.retried,
              "raw_tools": sorted(st.raw_names),
              "low_sample": bool(min_calls > 0 and st.calls < min_calls),
+             "ranked": bool(st.calls >= rank_min_calls),
              "roots": aggregate_error_roots(st.errors),
              "errors": [{"detail": d, "count": n} for d, n in
                         sorted(st.errors.items(), key=lambda kv: -kv[1])]}
-            for t, st in order]
+            for t, st in stats.items()]
+    ranked = sorted((r for r in rows if r["ranked"]),
+                    key=lambda r: (-r["error"], -r["fail_rate"], r["tool"]))
+    small = sorted((r for r in rows if not r["ranked"]),
+                   key=lambda r: (-r["calls"], r["tool"]))
+    return ranked + small
 
 
 def render_report(stats: dict[str, ToolStats], title: str = "工具调用统计",
@@ -452,14 +478,16 @@ def render_report(stats: dict[str, ToolStats], title: str = "工具调用统计"
         "| 工具 | 调用 | 成功 | 失败 | 失败率 | 放弃 |",
         "|---|---:|---:|---:|---:|---:|",
     ]
-    # 失败率高的排前面；无失败的按调用量排
-    order = sorted(stats.items(),
-                   key=lambda kv: (-kv[1].fail_rate, -kv[1].calls, kv[0]))
-    for tool, st in order:
-        lines.append(f"| {_tool_label(tool, st)} | {st.calls} | {st.success} "
-                     f"| {st.error} | {st.fail_rate * 100:.1f}% | "
-                     f"{st.given_up} |")
-    err_tools = [(t, s) for t, s in order if s.errors]
+    # 排序**只走 tool_rows 一处**（P6-1 增量配套）：CLI 报告与页面/导出同序，
+    # 免得"Markdown 按失败率、JSON 按失败数"变成第二套口径。
+    rows = tool_rows(stats)
+    for r in rows:
+        st = stats[r["tool"]]
+        mark = "" if r["ranked"] else "（样本不足）"
+        lines.append(f"| {_tool_label(r['tool'], st)}{mark} | {st.calls} | "
+                     f"{st.success} | {st.error} | "
+                     f"{st.fail_rate * 100:.1f}% | {st.given_up} |")
+    err_tools = [(r["tool"], stats[r["tool"]]) for r in rows if r["error"]]
     if err_tools:
         lines += ["", "## 错误明细（根因聚合，按失败次数排序）", "",
                   "- 同根因已归并：路径/引号/数字差异替换为占位符后聚类；"

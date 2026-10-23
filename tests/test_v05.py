@@ -146,7 +146,13 @@ class TestToolStats(unittest.TestCase):
         # result 比 call 多（跨 run 迟到结果）不崩溃，只如实计数
         self.assertAlmostEqual(st["read"].fail_rate, 0.0)
 
-    def test_render_orders_by_fail_rate(self):
+    def test_render_orders_small_sample_by_calls_then_name(self):
+        """2026-10-23 改了排序口径（用户批准的第①步）：不再按失败率倒序。
+
+        两个工具都只有 1 次调用 → 都进"样本不足"段 → 该段按调用量降序、再按名字，
+        所以 `bad` 仍在 `read` 前；但**排序理由变了**，行里也多了「（样本不足）」标记。
+        排序判据的完整覆盖见 `tests/test_v72_tool_rank.py`（本用例只管渲染不崩、不丢行）。
+        """
         rec = self._rec([
             "[tool_call] read: a",
             "[tool_result] read: success",
@@ -154,8 +160,9 @@ class TestToolStats(unittest.TestCase):
             "[tool_result] bad: error E_TIMEOUT",
         ])
         report = render_report(collect_stats([rec]))
-        self.assertIn("| bad | 1 | 0 | 1 | 100.0% |", report)
-        self.assertLess(report.index("| bad |"), report.index("| read |"))
+        self.assertIn("| bad（样本不足） | 1 | 0 | 1 | 100.0% |", report)
+        self.assertLess(report.index("| bad（样本不足）"),
+                        report.index("| read（样本不足）"))
         self.assertIn("E_TIMEOUT", report)
 
     def test_empty_state(self):
