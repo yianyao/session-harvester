@@ -127,6 +127,20 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
     是"报错没给根因"——为了 100% 覆盖率给它们编 why 就是**假归因**。
     门：`tests/test_v71_attrib_rules_expanded.py`（真实串对答案 + 无死规则 + 劫持陷阱）；
     **死规则**（一条也没命中的规则）与**劫持**（新规则抢走老规则的串）是扩容的两个典型坏味。
+22. **接口 handler 自己拼的载荷行会漏字段**（2026-10-23 实测，v0.80）：
+    `pattern_stats` 加了 `first_seen`，但 `/api/reports/errors` 的行是 `apiserve`
+    **手工重组**的（`{pattern,class,count,tools,samples,attrib}`）→ 新字段没透出，
+    页面那句「其中 N 条是本窗口首见」永远算成 0 条，**不报错**。
+    规矩：① 在下游那个文件里加 `first_seen` 时，去 handler/序列化层**逐个核字段**；
+    ② 门要打在**接口载荷**上（不是内部函数），且与库对账（`min(first_seen)` ==
+    `SELECT MIN(ts) … AND ts>=since`）；③ 窗口态的语义要写清（"本窗口内最早"≠"全库最早"）。
+23. **静态接线断言（源码文本）要找得到"真调用点"**（2026-10-23 实测，M8 假存活）：
+    断言 `html.includes("encodeURIComponent(q)")` 被**别处**同名调用掩护，
+    把目标处改成拼裸串仍绿。做法：断言串要带上**调用上下文**
+    （`/api/sessions?q="+encodeURIComponent(q)`），否则它测的是"仓库里有人这么写过"。
+    同类：JS 字符串里嵌 ASCII 双引号会把**页面**语法弄坏（症状是
+    `node tests/xxx.js` 报 `SyntaxError: Unexpected identifier '中文'`，
+    看着像测试坏了，其实是 `static/index.html` 坏了）——中文串一律用「」。
 
 **收尾固定动作**（本仓历史证明有效）：① 死代码扫描（`harvester/` 与 `tests/` 两个根都要 0/0/0，行内 `# noqa` 视为有意保留）；
 ② 悬空路径检查（`git ls-files -c core.quotePath=false` 取已提交 `*.md`，逐个 `Test-Path` 其中 `docs/reports/...` 引用）；
