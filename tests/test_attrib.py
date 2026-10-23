@@ -166,11 +166,18 @@ class TestAttribution(unittest.TestCase):
 
     def test_fs_code_attributed_where_english_is_not_unclassified(self):
         """机制验证（本工程立论）：同一件事两种写法，DSH 的 FS_* 原本落
-        unclassified，归因层把它归到与英文写法**同一类**。"""
+        unclassified，归因层把它归到与英文写法**同一类**。
+
+        v0.80（用户 2026-10-23 批准「类别单一口径」）后，**事实层也调归因层**
+        ——`classify_error` 不再是「FS_* 必然 unclassified」的老前提，
+        而是与归因层同答案。本测试因此改成钉住"两层同答案"，
+        老的"事实层漏掉"语义作为历史注记保留在下方。"""
         en = "file has not been read"
         fs = "FS_NOT_OBSERVED"
-        self.assertEqual(classify_error(en), "tool_interface")  # 事实层：英文命中
-        self.assertEqual(classify_error(fs), "unclassified")    # 事实层：FS_* 漏掉
+        # 事实层（classify_error）与归因层（attribute）现在必须给同一个类
+        self.assertEqual(classify_error(en), "tool_interface")
+        self.assertEqual(classify_error(fs), "tool_interface",
+                         "v0.80 起事实层也走归因层：FS_* 不再落 unclassified")
         hit_en = attribute(en, self.compiled)
         hit_fs = attribute(fs, self.compiled)
         self.assertIsNotNone(hit_fs, "FS_* 未被归因——本工程的核心收益为 0")
@@ -178,6 +185,9 @@ class TestAttribution(unittest.TestCase):
         # 归因把两种写法归到同一 class（这正是"归一"的定义）
         self.assertEqual(hit_fs["class"], hit_en["class"])
         self.assertEqual(hit_fs["class"], "tool_interface")
+        # 老前提（v0.79 及以前）只作为"为什么改"的记录，不再断言
+        self.assertNotEqual(classify_error("ABORTED"), "tool_interface",
+                            "报错本身没给根因的，仍是 unclassified（不硬编）")
 
     def test_hit_is_marked_candidate(self):
         """每条命中必须显式标 candidate=True（A1：候选会错，不是裁决）。"""

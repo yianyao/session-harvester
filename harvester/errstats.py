@@ -101,12 +101,65 @@ _WS_RE = re.compile(r"\s+")
 
 
 def classify_error(text: str) -> str:
-    """返回错误三分类。规则序即优先级（见 _RULES 注释）。"""
+    """返回错误三分类。**类别只有一个来源：归因层**（v0.80）。
+
+    口径变更（用户 2026-10-23 批准）：原先只有 `_RULES` 三条英文短语正则，
+    DSH 抛的 `FS_*` 大写下划线码与它们字面不相交 → 一律 `unclassified`
+    （实测 84 次的 FS_STALE_VERSION 也落在这里）。归因层
+    `harvester/data/attrib-rules.yaml` 已覆盖 187/189 种错误串、且每条都带
+    `why`/`fix`，所以类别改由它出：**同一份规则既出类别又出根因/应对**，
+    报告页与蒸馏队列因此只有一个口径。
+
+    归因层不可用时（缺 PyYAML / 规则表缺失）退回老的三条正则，再不行才
+    `unclassified`——降级只影响"类别精度"，不影响任何计数，也不静默。
+    """
+    rules = _attrib_rules()
+    if rules:
+        try:
+            from . import attrib
+            hit = attrib.attribute_face(text, rules, face="errors")
+        except Exception:  # noqa: BLE001 - 归因层坏掉不该让采集/报告崩
+            hit = None
+        if hit and hit.get("class"):
+            return hit["class"]
     for cls, regs in _COMPILED:
         for reg in regs:
             if reg.search(text):
                 return cls
     return "unclassified"
+
+
+_ATTRIB_RULES: list[dict] | None = None
+_ATTRIB_TRIED = False
+
+
+def _attrib_rules() -> list[dict] | None:
+    """懒加载归因规则（**函数内 import**：attrib 反向依赖本模块，顶部 import 会成环）。
+
+    失败返回 None（降级到老正则），缓存一次——不要在每条错误上重读 YAML。
+    """
+    global _ATTRIB_RULES, _ATTRIB_TRIED
+    if _ATTRIB_TRIED:
+        return _ATTRIB_RULES
+    _ATTRIB_TRIED = True
+    try:
+        from . import attrib
+        _ATTRIB_RULES = attrib.load_rules()
+    except Exception:  # noqa: BLE001 - 缺 PyYAML/规则表 → 降级，不阻断报告
+        _ATTRIB_RULES = None
+    return _ATTRIB_RULES
+
+
+def attrib_hit(text: str) -> dict | None:
+    """类别 + 根因 + 应对（蒸馏队列要 why/fix 给"为什么/怎么修"）。"""
+    rules = _attrib_rules()
+    if not rules:
+        return None
+    try:
+        from . import attrib
+        return attrib.attribute_face(text, rules, face="errors")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def normalize_error(text: str) -> str:
@@ -310,16 +363,23 @@ def _active_skill(index: dict[str, list[tuple[int, str]]], sid: str,
 
 def pattern_stats(errors: list[dict]) -> dict[str, dict]:
     """按归一模式聚类：pattern → {class, count, tools, samples[(sid,seq,text)],
-    given_up}。given_up（v0.19 additive）：模式内未解决（放弃）次数 =
-    resolved=False 的错误数；旧调用方传入无 resolved 字段的错误时按
-    resolved=True（自愈）处理，不误报未解决。"""
+    given_up, first_seen}。given_up（v0.19 additive）：模式内未解决（放弃）
+    次数 = resolved=False 的错误数；旧调用方传入无 resolved 字段的错误时按
+    resolved=True（自愈）处理，不误报未解决。
+    first_seen（v0.80 additive）：该模式在**本次输入里**最早出现的时刻
+    （ts 字典序即时间序）。用途：区分"老坑复发"与"窗口内新坑"——新意
+    与次数是两件事，1 次的新坑也值得做卡（用户 2026-10-23 批准的方案 B）。
+    """
     out: dict[str, dict] = {}
     for e in errors:
         p = out.setdefault(e["pattern"], {
             "class": e["class"], "count": 0, "tools": set(), "samples": [],
-            "given_up": 0})
+            "given_up": 0, "first_seen": e.get("ts") or ""})
         p["count"] += 1
         p["tools"].add(e["tool"])
+        ts = e.get("ts") or ""
+        if ts and (not p["first_seen"] or ts < p["first_seen"]):
+            p["first_seen"] = ts
         if not e.get("resolved", True):
             p["given_up"] += 1
         if len(p["samples"]) < 3:

@@ -36,7 +36,7 @@ from pathlib import Path
 from .agent_suggest import _TEMPLATES, root_key_assign
 from .behstats import collect_skill_invocations
 from .dbmeta import ro_con
-from .errstats import collect_errors_from_db
+from .errstats import attrib_hit, collect_errors_from_db
 
 _CARDS_CAP = 20        # 旧坑重现列表上限
 _SAMPLE_CAP = 3        # 每个候选的锚点样例数
@@ -111,8 +111,17 @@ def collect_triage(db: Path, since_days: float | None = None,
         hits = [i for i, creg in cregs
                 if creg.search(p["pattern"])
                 or any(creg.search(e["error"][:200]) for e in p["window"])]
+        # 归因用**真实错误串**取（规则是按原文写的），取不到再退回 pattern 名。
+        first_err = p["window"][0]["error"] if p["window"] else p["pattern"]
+        hit = attrib_hit(first_err) or {}
         return {
-            "pattern": p["pattern"], "class": p["class"],
+            "pattern": p["pattern"],
+            # v0.80（用户 2026-10-23 批准）：类别与根因/应对**同源**——都取归因层，
+            # 不再让 class 走老的三条英文正则（否则 A 区整列 unclassified）。
+            "class": hit.get("class") or p["class"],
+            "why": hit.get("why") or "",
+            "fix": hit.get("fix") or "",
+            "rule_id": hit.get("rule_id") or "",
             "tools": sorted(p["tools"]),
             "first_seen": p["first_seen"],
             "count": len(p["window"]),

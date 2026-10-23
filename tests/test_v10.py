@@ -65,6 +65,16 @@ def _make_db(tmp: Path) -> Path:
     con.close()
     return db
 
+def _attrib_ok() -> bool:
+    """归因层是否可用（缺 PyYAML 的门禁环境里类别会降级到老正则）。"""
+    try:
+        from harvester import attrib
+        attrib.load_rules()
+        return True
+    except Exception:  # noqa: BLE001 - 缺依赖/规则表都算"环境不支持"
+        return False
+
+
 class TestClassify(unittest.TestCase):
     def test_env(self):
         for t in ("tool_permission_revoked",
@@ -72,8 +82,13 @@ class TestClassify(unittest.TestCase):
                   "Error: SetNamedSecurityInfoW failed (Win32 5)",
                   "Error: web fetch failed: TypeError: fetch failed",
                   "browser_instance_unknown",
+                  # v0.80：类别改由归因层出（单一来源）。AR-018 把
+                  #「产物里检出密钥」判为 context（内容问题，不是环境未就绪）
+                  # ——这里跟着改口径，不在代码里另留第二套判断。
                   "artifact_secret_detected"):
-            self.assertEqual(classify_error(t), "env", t)
+            want = "context" if (t == "artifact_secret_detected" and _attrib_ok()) \
+                else "env"
+            self.assertEqual(classify_error(t), want, t)
 
     def test_tool_interface(self):
         for t in ("Error: String to replace not found in file. old_string...",

@@ -428,6 +428,9 @@ def api_reports_errors(con: sqlite3.Connection, db: Path,
     patterns = [{"pattern": pat, "class": d["class"], "count": d["count"],
                  "tools": sorted(d["tools"]),
                  "samples": _samples_json(d["samples"]),
+                 # v0.80：首见时刻（窗口态下页面要报「其中 N 条是本窗口首见」；
+                 # 不带这个字段，那句就永远是 0 条——静默失效）。
+                 "first_seen": d.get("first_seen") or "",
                  # 归因候选：None=未归因；`attrib_status != "ok"` 时该键仍给
                  # None，但页面按 status 分支，不会把它当"未归因"展示。
                  "attrib": attrib_by_pat.get(pat)}
