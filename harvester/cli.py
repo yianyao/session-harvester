@@ -558,9 +558,20 @@ def cmd_mcp_serve(args) -> int:
 def cmd_api_serve(args) -> int:
     """只读 HTTP JSON API（apiserve.run 自带自检与安全守卫）。"""
     from .apiserve import run
+    db = Path(args.db)
+    # v0.81 P0-3：chain-root / reviews-meta 的缺省一律**相对 db 解析**
+    # （不再相对 cwd）——从别的目录起服就静默丢链文件/丢台账，
+    # 页面显示"尚无 chain 长文"的假空态，是最难被发现的那类失效。
     chain_root = (Path(args.chain_root) if args.chain_root
-                  else Path("knowledge") / "topics")
-    return run(Path(args.db), port=args.port, host=args.host,
+                  else db.resolve().parent / "knowledge" / "topics")
+    reviews_meta = (Path(args.reviews_meta) if args.reviews_meta
+                    else db.resolve().parent / "cards_meta.db")
+    traces_root = (Path(args.traces_root) if args.traces_root
+                   else Path.home() / ".workbuddy" / "traces")
+    # v0.81 P1-4：库龄判定开关（默认关——要 stat 一遍语料盘）。开起来后
+    # /api/meta 的指纹才带真 stale（True/False），不开就恒 None（没判）。
+    want_wm = bool(getattr(args, "corpus_watermark", False))
+    return run(db, port=args.port, host=args.host,
                token=args.token,
                cards_root=Path(args.cards_root) if args.cards_root else None,
                suggestions_meta=Path(args.suggestions_meta)
@@ -570,10 +581,10 @@ def cmd_api_serve(args) -> int:
                chain_root=chain_root,
                keywords_meta=Path(args.keywords_meta)
                if getattr(args, "keywords_meta", None) else None,
-               reviews_meta=Path(args.reviews_meta)
-               if getattr(args, "reviews_meta", None) else None,
+               reviews_meta=reviews_meta,
                reports_dir=Path(args.reports_dir)
-               if getattr(args, "reports_dir", None) else None)
+               if getattr(args, "reports_dir", None) else None,
+               traces_root=traces_root, want_watermark=want_wm)
 
 
 def cmd_report_tools(args) -> int:
@@ -718,6 +729,21 @@ def cmd_report_chains(args) -> int:
     _emit_report(render_report(d, top=args.top), args)
     if args.json:
         _emit_json(args.json, "report-chains/1", d, dbp=dbp)
+    return 0
+
+
+def cmd_report_harness(args) -> int:
+    """Harness 体检报告（v0.81 P1-2）：每数据源一行画像。"""
+    from .harnessstats import collect, render_report
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    d = collect(dbp, since_days=args.since)
+    _emit_report(render_report(d), args)
+    if args.json:
+        _emit_json(args.json, "report-harness/1", d, dbp=dbp)
     return 0
 
 
@@ -2273,6 +2299,86 @@ def cmd_chain_validate(args) -> int:
     return 0 if r["ok"] else 1
 
 
+def cmd_chain_build(args) -> int:
+    """链创作包（v0.82）：产出**素材+格式契约**，供 Agent 写 chain 长文。
+
+    它是"生成链"的起点，但**不代笔**：链要求"思想/技法/观念的演变和转折"，
+    聚合器算不出来（用户 2026-10-24 裁决：命令出包 + Agent 写 + 命令校验落盘）。
+    确定性：不取时钟、不用随机——同库同参数两次输出逐字节一致。
+    """
+    from .chainbuild import build, render
+    try:
+        d = build(Path(args.db), Path(args.meta), args.id_,
+                  max_chars=args.max_chars)
+    except (ValueError, RuntimeError) as exc:
+        print(f"[chain-build] 失败: {exc}", file=sys.stderr)
+        return 2
+    text = render(d)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"[chain-build] 创作包已写入: {out}（{len(text)} 字符）",
+              file=sys.stderr)
+    else:
+        print(text)
+    c = d["counts"]
+    print(f"[chain-build] {d['topic']['id']}「{d['topic']['name']}」"
+          f"｜成员 {c['members']}｜时间桶 {c['buckets']}"
+          f"｜锚点候选 {c['anchor_candidates']} 给出 {c['anchor_shown']}"
+          f"{'（预算截断）' if d['budget']['truncated'] else ''}",
+          file=sys.stderr)
+    print("[chain-build] 下一步：把这份包交给 Agent 写 chain-*.md，"
+          "再用 chain-validate / chain-audit / chain-publish 把关",
+          file=sys.stderr)
+    if getattr(args, "json", None):
+        _emit_json(args.json, "chain-build/1", d, dbp=Path(args.db))
+    return 0
+
+
+def cmd_chain_publish(args) -> int:
+    """链发布（v0.82）：校验通过才落进知识正本。缺省 dry-run。
+
+    两道既有门都在这里合流：`chain-validate`（结构 + 锚点可回溯）与
+    `chain-audit`（引文逐字门）。任一门不过就不许落盘——这是"不许机器
+    代笔的未校验文本污染正本"的执行点。
+    """
+    from .chainbuild import publish
+    draft = (Path(args.draft) if getattr(args, "draft", None)
+             else Path("exports") / "chains" / ("%s.md" % args.id_))
+    try:
+        r = publish(draft, Path(args.chain_root), Path(args.meta),
+                    Path(args.db), name=None, apply=args.apply,
+                    force=args.force, allow_audit=args.allow_audit)
+    except (ValueError, RuntimeError) as exc:
+        print(f"[chain-publish] 失败: {exc}", file=sys.stderr)
+        return 2
+    v, a = r["validate"], r["audit"]
+    print(f"[chain-publish] validate {'通过' if v['ok'] else '未通过'}"
+          f"（stages {(v.get('stats') or {}).get('stages', 0)}"
+          f" / nodes {(v.get('stats') or {}).get('nodes', 0)}）"
+          f"｜audit {'通过' if a['ok'] else '未通过'}"
+          f"（引文未命中 {a['quotes_unmatched']}｜疑似错配 "
+          f"{a['anchors_suspicious']}）")
+    for e in (v.get("errors") or []):
+        print(f"  ERROR: {e}")
+    for w in (r.get("warnings") or []) + (v.get("warnings") or []):
+        print(f"  WARN: {w}")
+    if r["blockers"]:
+        for b in r["blockers"]:
+            print(f"  BLOCK: {b}")
+        print("[chain-publish] 未发布（上面的 BLOCK 全清掉再来）",
+              file=sys.stderr)
+        return 1
+    if r["applied"]:
+        print(f"[chain-publish] 已写入知识正本: {r['target']}")
+    else:
+        print(f"[chain-publish] 预演通过——会写到: {r['target']}")
+        print("[chain-publish] 确认无误后加 --apply 真写",
+              file=sys.stderr)
+    return 0
+
+
 def cmd_artifacts(args) -> int:
     """产物提取（T0-②，v0.22）：独立 meta 库 artifacts_meta.db。
 
@@ -2701,6 +2807,19 @@ def build_parser() -> argparse.ArgumentParser:
                           " + data（与文本同一个聚合函数）；'-'=stdout，"
                           "缺省仍出文本")
     prc.set_defaults(func=cmd_report_chains)
+
+    prh = sub.add_parser("report-harness",
+                         help="Harness 体检（每数据源一行画像：会话/消息/"
+                              "步骤/失败率/代表工具/代表 skill/最近活跃）")
+    prh.add_argument("--db", default="harvester.db", help="索引库路径")
+    prh.add_argument("--since", type=float, default=None, metavar="DAYS",
+                     help="只统计最近 N 天（按会话更新时间粗算）")
+    prh.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    prh.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（report-harness/1）：schema + db_fingerprint"
+                          " + data（与文本同一个聚合函数）；'-'=stdout，"
+                          "缺省仍出文本")
+    prh.set_defaults(func=cmd_report_harness)
 
     prd = sub.add_parser(
         "report-daily",
@@ -3252,6 +3371,47 @@ def build_parser() -> argparse.ArgumentParser:
                           "data（与文本同一个聚合）；'-'=stdout")
     pca.set_defaults(func=cmd_chain_audit)
 
+    pcb = sub.add_parser(
+        "chain-build",
+        help="链创作包（v0.82）：为主题产出「素材+格式契约」，供 Agent 写 chain 长文"
+             "（不代笔：演变与转折要人/Agent 判断；确定性输出，同库同参数两次一致）")
+    pcb.add_argument("--id", dest="id_", required=True, help="主题 id")
+    pcb.add_argument("--meta", default="topics_meta.db",
+                     help="主题 meta 库路径（默认 topics_meta.db）")
+    pcb.add_argument("--db", default="harvester.db",
+                     help="索引库路径（只读，取成员首轮原话与轮数）")
+    pcb.add_argument("--max-chars", dest="max_chars", type=int, default=None,
+                     help="创作包字符预算（默认 72000；超出只砍锚点并报数）")
+    pcb.add_argument("--out", help="包输出路径（缺省打印到 stdout）")
+    pcb.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（chain-build/1）：schema + fingerprint + 包数据")
+    pcb.set_defaults(func=cmd_chain_build)
+
+    pcp = sub.add_parser(
+        "chain-publish",
+        help="链发布（v0.82）：chain-validate + chain-audit 全过才落进 "
+             "knowledge/topics/；缺省预演，--apply 才写")
+    pcp.add_argument("--id", dest="id_", required=True,
+                     help="主题 id（草稿位按它定位：exports/chains/<id>.md）")
+    pcp.add_argument("--draft", default=None,
+                     help="草稿路径（缺省 exports/chains/<id>.md——"
+                          "与 VIEW「生成链创作包」给 Agent 的落点一致）")
+    pcp.add_argument("--chain-root", dest="chain_root",
+                     default="knowledge/topics",
+                     help="知识正本目录（默认 knowledge/topics）")
+    pcp.add_argument("--meta", default="topics_meta.db",
+                     help="主题 meta 库路径（默认 topics_meta.db）")
+    pcp.add_argument("--db", default="harvester.db",
+                     help="索引库路径（只读，锚点回溯与引文核对）")
+    pcp.add_argument("--apply", action="store_true",
+                     help="真写入正本（缺省只预演：报会落到哪、过没过）")
+    pcp.add_argument("--force", action="store_true",
+                     help="目标文件已存在时覆盖（缺省拦下）")
+    pcp.add_argument("--allow-audit", dest="allow_audit", action="store_true",
+                     help="允许 chain-audit 未过仍发布（只降级为警告；"
+                          "引文逐字门不合格时慎用）")
+    pcp.set_defaults(func=cmd_chain_publish)
+
     par = sub.add_parser(
         "artifacts",
         help="产物提取（T0-②）：Write/Edit args 回源提取 → artifacts_meta.db")
@@ -3430,19 +3590,28 @@ def build_parser() -> argparse.ArgumentParser:
                      help="主题注册 meta 库路径（可选；启用 /api/topics 与 "
                           "/api/topic/<id>/chain 端点）")
     pap.add_argument("--chain-root", dest="chain_root", default=None,
-                     help="topic-chain 长文目录（可选；默认 "
-                          "knowledge/topics，项目正本）")
+                     help="topic-chain 长文目录（可选；缺省=<db 同目录>/"
+                          "knowledge/topics，随项目走不随 cwd）")
     pap.add_argument("--keywords-meta", dest="keywords_meta",
                      default=None,
                      help="关键词 meta 库路径（可选；启用 /api/keywords）")
     pap.add_argument("--reviews-meta", dest="reviews_meta",
-                     default="cards_meta.db",
+                     default=None,
                      help="卡片复核台账 meta 库（/api/cards 据此隐去已裁决警告；"
-                          "库不存在=零感知。人裁过的不许再烦人）")
+                          "缺省=<db 同目录>/cards_meta.db；库不存在=零感知。"
+                          "人裁过的不许再烦人）")
+    pap.add_argument("--traces-root", dest="traces_root", default=None,
+                     help="OTel trace 目录（可选；启用 /api/reports/traces，"
+                          "缺省=~/.workbuddy/traces）")
     pap.add_argument("--reports-dir", dest="reports_dir", default=None,
                      help="日报目录（可选；启用 /api/report-daily 端点，"
                           "缺省=仓根 docs/reports；文件名白名单 "
                           "daily-YYYY-MM-DD.md）")
+    pap.add_argument("--corpus-watermark", dest="corpus_watermark",
+                     action="store_true", default=False,
+                     help="开启库龄判定（/api/meta 的库快照带真 stale："
+                          "语料比入库水位新 ⇒ True）。默认关——要 stat 一遍"
+                          "语料盘；不开时 stale 恒 null = **没判**，不是新鲜")
     pap.set_defaults(func=cmd_api_serve)
 
     return p

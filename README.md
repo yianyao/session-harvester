@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1112 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1132 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=1040 failures=0 errors=96 skipped=39
+# ② 无 PyYAML 门禁：期望 GATE ran=1060 failures=0 errors=96 skipped=44
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,14 +61,14 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1112 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1040 failures=0 errors=96 skipped=39** | **只看 `failures=0`**；`95 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=42` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1132 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1060 failures=0 errors=96 skipped=44** | **只看 `failures=0`**；`96 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=44` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1112 vs 1040）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1132 vs 1060）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
-另有 `skipped=39`（v0.80 起；逐组可对）：
+另有 `skipped=44`（v0.82 起；逐组可对）：
 - `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测用例**（递归回自己，
   子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip；`scripts/gate_no_yaml.py`
   自己设这一位，所以门禁绝不会跑门禁）；
@@ -85,6 +85,10 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 - `skipped=1` 是 P9 扩面的 `test_v77_cli_json.CliJsonExtended`（chain-audit /
   report-skill-join 要 PyYAML 读 chain：**不可用≠失败**，按不适用跳过；
    「缺依赖要响亮」由 `test_v75` 的 H9 门单独盯）；
+- `skipped=5` 是 v0.82 新增的 `test_v82_chainbuild`：链创作包的**确定性/分桶**
+  与**发布两道门**里，凡是要真解析 chain 的（`chain-validate` 的结构门、
+  `chain-audit` 的引文门）都不降级（H9），无 PyYAML 时按不适用跳过；
+  同一文件里出包、预算报数、逐字节复制等 7 条照常真跑；
 - 其余 10 条是 v0.78–v0.79 之后各文件的 `_NEED_REAL` 组（未逐一点名，判据同 H9）。
 **`skipped` 不等于通过**：被跳过的这几组正是"实测↔README 对账"与"面↔判据对账"，
 它们只在**顶层**那一次运行（有 PyYAML + 有真库）里真正执行。
@@ -92,14 +96,15 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1112，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1132，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
 `test_v67_evidencepack` 又按同一纪律加了 `_NEED_REAL`（PyYAML + 真库），
 6 → 14；P6-7 的 `test_v68_reviewable` 再加 7 条，14 → **21**；
 P10 把 `evidence-pack` 并进 `llm-pack`，该文件重写成 11 条、`_NEED_REAL` 从 8 降到 4，
-于是 43 → **39**（**删用例同样要回来改这里**，不是只有加才要改）
+于是 43 → **39**；v0.82 的 `test_v82_chainbuild` 加了 5 条要真解析 chain 的发布用例，
+39 → **44**（**删用例同样要回来改这里**，不是只有加才要改）
 ——**新增需要 PyYAML 的用例时，正确做法是 skip（不是让它断言失败）**：
 门禁的唯一硬判据是 `failures=0`，写成断言失败会直接把门禁弄红。
 
@@ -319,7 +324,33 @@ python -m harvester topic md --meta topics_meta.db --db harvester.db --id <tp-id
 python -m harvester chain-validate "C:/.../chain-长文.md"   # 主题 chain 长文独立校验（members/stages/nodes）
 python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db   # chain 内容审计（引文逐字 + 锚点语义 + 证据覆盖）
 python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db --quotes-ascii --list-limit 0   # 连 ASCII 引号一起核、明细不限条数
+python -m harvester chain-build --id <tp-id> --out exports/chains/<tp-id>.md   # 出「链创作包」（素材+格式契约，给 Agent 写链用；不代笔、不落正本）
+python -m harvester chain-publish --id <tp-id>                # 预演：草稿位 exports/chains/<tp-id>.md 过两道门，报会落到哪
+python -m harvester chain-publish --id <tp-id> --apply        # 真发布：校验全过才搬进 knowledge/topics/（逐字节，不二次加工）
 ```
+
+### 4.0 链创作包与链发布（v0.82，2026-10-24 用户裁决）
+
+链长文要的是「思想/技法/观念的演变和转折」，**聚合器算不出来**——历来由 Agent
+读完素材手写，于是流程散在人的记忆里：没有包、没有格式契约、没有"写完怎么把关"。
+v0.82 把它钉成两条命令（裁决：**命令出包 + Agent 写 + 命令校验落盘**，不接 LLM）：
+
+```powershell
+# ① 出包（确定性：同库同参数两次输出逐字节一致；只读，不写正本）
+python -m harvester chain-build --id <tp-id> --out exports/chains/<tp-id>.md
+# 包内含：判据头（库快照/成员/预算+被砍锚点报数）｜主题画像（月度分布）
+#        ｜按月分桶的锚点候选（每会话首轮原话 + 该会话轮数上界 turn_max）
+#        ｜chain 格式契约（YAML 模板，generated_from 指纹直接可抄）
+#        ｜硬性规则（校验器会拦的 6 条）｜写作指令（写变化不写摘要）｜权威成员清单
+# ② Agent 按包 §5 写，先落到草稿位（服务端定：exports/chains/<tp-id>.md）
+# ③ 校验 + 发布（两道门：chain-validate 结构/锚点 + chain-audit 引文逐字）
+python -m harvester chain-publish --id <tp-id>          # 预演，不写盘
+python -m harvester chain-publish --id <tp-id> --apply  # 过了才写 knowledge/topics/
+```
+
+判据：`--apply` 时**任一门不过就拒绝落盘**（不是警告），目标已存在必须 `--force`；
+落盘是**逐字节复制**草稿，不做二次加工。VIEW 侧对应 A 档动作 `chain_build`
+（一键出包，返回文本不落盘）与 B 档动作 `chain_publish`（两段提交 + 台账）。
 
 ### 4.1 chain 内容审计（写完 chain 必跑）
 
@@ -494,6 +525,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `report-daily [--json PATH]` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |
 | `noise` | **零散会话登记**（v0.81 P5-⑧）：判「不归任何主题」的会话写进 topics_meta 的 sessions_noise 表，主题候选簇（candidates/keywords）不再收它们。**只写 meta 表、不动会话数据**（可逆：删行即撤销）——与 suppress 删仓内副本是两码事。`add` 幂等（已在表跳过）、默认 dry-run、`--apply` 才写；`list` 列出已登记（何时/为什么）。**候选只列不裁决**：归宿（班规条目/问题清单）由人定 |
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
+| `report-harness [--json PATH]` | **Harness 体检**（v0.81 P1-2）：每个数据源一行画像——会话/消息/步骤/失败率/代表工具/代表 skill/最近活跃。**失败率分母 = result 相步骤数**，无工具遥测的源显示「—（无遥测）」、只落 call 相的显示「—（无结果相）」，两者**都不渲染成 0%**；无遥测源默认折叠并报数。与 API `/api/harness` 共用同一聚合函数（`harnessstats.collect`） |
 | `report-skill [--json PATH]` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
 | `report-skill-join [--json PATH]` | skill 进化 join：chain 锚点 × skill 调用锚点交叉表（T4）。`--margin-days` **只向后放宽**；落在 stage 结束后的调用标 `_after`（`after_stage=True`），与阶段内调用分开 |
 | `keywords` | n-gram 关键词统计（只统计 messages.raw；落 keywords_meta.db）。**排序口径 doc_freq 优先**（= 含该词的消息条数），freq 为出现总次数。默认启用随包通用停用词表（`harvester/data/stopwords_zh.txt`，只含通用虚词）；人名/专名请用 `--stopwords PATH` 叠加私有表（可多次），`--no-stopwords` 关闭过滤。**ASCII 段按整词统计**（英文切片片段已消除）；CJK 段为 2/3 字滑窗，跨词边界的片段（如「上的」）属无分词器的固有代价。`--keep-runs N` + `--vacuum` 在统计后顺手回收旧 run |
@@ -504,8 +536,9 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `harvest-eval` | **自进化评估闭环**（v0.46 P1-4）：对每条 adopted 规则，按分界 T（`adopted_at`，或回退 `--since`）取前后各 `--window-days` 天，比较**未解决率**（主判据）与**复发率**（只报告），输出**三值判定**（改善/无变化/变差）＋样本量；样本不足或没有分界日期一律写**「不下结论」**（≠「无变化」）。判定→处置口径固定：无变化→可退休、变差→建议回滚、改善→保持。**工具只评估，绝不自动改 `AGENTS.md`** |
 | `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
 
-> **机读出口（G2 结构化层）**：八条只读命令支持 `--json PATH`——
-> 四条报告（`report-tools` / `report-errors` / `report-skill` / `report-chains`）
+> **机读出口（G2 结构化层）**：九条只读命令支持 `--json PATH`——
+> 五条报告（`report-tools` / `report-errors` / `report-skill` /
+> `report-chains` / `report-harness`）
 > ＋ P9 扩面四条（`report-daily` / `report-skill-join` / `chain-audit` /
 > `cards validate`）。`PATH` 写 `-` 即 stdout（人读文本让位：落 `--out`
 > 或改走 stderr，保证 stdout 是**纯 JSON**、可整体 `json.loads`）；不给

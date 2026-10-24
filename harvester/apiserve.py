@@ -21,7 +21,11 @@ v2 端点（仍然 api_version=1，只增不改）：
 - GET /api/triage?days=&min_count=&top=   蒸馏队列（T1 四类候选）
 - GET /api/reports/errors?days=           G2 错误三分类 + 模式聚类
 - GET /api/reports/tools?days=            G1 工具统计 + 重试/放弃
+- GET /api/reports/chains?days=&top=      工具链失败模式（长回合/连击/循环/空转）
+- GET /api/reports/traces                OTel trace 工具统计（耗时/失败率/取消率；
+  需 --traces-root，缺省 ~/.workbuddy/traces）
 - GET /api/reports/skills?days=           G4 Skill 行为画像（skill_summary 口径）
+- GET /api/harness?days=                  Harness 体检：每数据源一行画像
 - GET /api/reports/agents?days=&min_count=&max_items=  G2 建议条目（结构化）
 - GET /api/cards                          G3 卡片校验（需 --cards-root）
 - GET /api/export-analysis?kind=&format=md|json&sids=  统一分析导出（P1-4，
@@ -200,7 +204,22 @@ def _schema_fingerprint() -> str:
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
 
 
-def api_meta(con: sqlite3.Connection, db: Path) -> dict:
+def _current_corpus_mtime() -> float | None:
+    """当前语料的最新 mtime（只 stat、不解析）。失败 → None = **未判定**。
+
+    只在开启 `--corpus-watermark` 时调用（默认关）：语料盘在网络上或语料
+    巨大时会变慢，不该让每个 /api/meta 都替它付这笔钱（同上游 H104 之后
+    actionsserve 的做法）。
+    """
+    try:
+        from .outline import corpus_watermark
+        return corpus_watermark().get("mtime")
+    except Exception:  # noqa: BLE001 - 判定失败 = 没判，不是新鲜
+        return None
+
+
+def api_meta(con: sqlite3.Connection, db: Path,
+             corpus_mtime: float | None = None) -> dict:
     n = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     row = con.execute("SELECT MIN(updated_at), MAX(updated_at) "
                       "FROM sessions").fetchone()
@@ -210,7 +229,10 @@ def api_meta(con: sqlite3.Connection, db: Path) -> dict:
             "sessions": n,
             "time_min": row[0], "time_max": row[1],
             # v0.19 additive：库快照指纹（前端 meta 行与消费方判陈旧用）
-            "db_fingerprint": db_fingerprint(db, con=con)}
+            # v0.81 P1-4：corpus_mtime 传入 ⇒ 指纹里带真 stale（True/False）；
+            # 不传 = 不做判定，stale=None（**"没判"不等于"新鲜"**）。
+            "db_fingerprint": db_fingerprint(db, con=con,
+                                             corpus_mtime=corpus_mtime)}
 
 
 def api_facets(con: sqlite3.Connection, db: Path) -> dict:
@@ -495,6 +517,87 @@ def api_reports_tools(con: sqlite3.Connection, db: Path,
             "flow": flow, "by_source": src_out, "min_calls": min_calls,
             "rank_min_calls": rank_min,
             "db_fingerprint": db_fingerprint(db, con=con)}
+
+
+def api_reports_chains(con: sqlite3.Connection, db: Path,
+                       params: dict) -> dict:
+    """工具链失败模式（v0.81 P1-1，与 CLI `report-chains` 同一聚合函数）。
+
+    G1 数的是**单件工具**的调用/失败；这里数的是**打法**：长回合
+    （步数超 p95）、同工具连击（连续同工具 call）、序列循环
+    （A↔B 完整周期）、空转（同工具连续 error 不换招）——harness
+    "打转/空转/循环"的感知主力，单工具统计看不见这些形态。
+    top：高步会话 Top N（默认 10，与 CLI 同缺省）。
+    """
+    from .chainstats import collect as _chains_collect
+    days = _since_days(params)
+    top = _int_param(params, "top", 10, 1, 100)
+    d = _chains_collect(db, since_days=days, top=top)
+    d["api_version"] = API_VERSION
+    # 注意：collect 的 "top" 键=高步会话清单（list）；Top N 参数另起名，
+    # 不许覆盖（踩过：同名直接把清单换成 int，页面拿到就崩）。
+    d["top_n"] = top
+    d["db_fingerprint"] = db_fingerprint(db, con=con)
+    return d
+
+
+def api_reports_traces(params: dict, traces_root: Path | None) -> dict:
+    """OTel trace 工具统计（v0.81 P1-1，与 CLI `report-traces` 同一聚合函数）。
+
+    与 G1（steps 表）分工：steps 来自会话轨迹（对齐对话轮次，可算
+    重试/放弃）；traces 来自运行时遥测（精确耗时 + 用户取消 +
+    子代理维度）。**取消率只在这里有**——"用户手动打断"是现有全部
+    报告都不覆盖的失败形态。traces_root 缺省 None = 未配置 → 空态 +
+    hint（不猜目录，与 cards_root 同纪律：路径启动时钉死）。
+    """
+    from .tracestats import collect as _traces_collect
+    if traces_root is None:
+        return {"api_version": API_VERSION, "configured": False,
+                "tools": [], "generation": None, "summary": None,
+                "hint": "未配置 traces-root（起服加 --traces-root；"
+                        "缺省 ~/.workbuddy/traces）"}
+    stats, gen, summary = _traces_collect(Path(traces_root))
+
+    def _pcts(durations: list) -> tuple:
+        if not durations:
+            return (0, 0)
+        ds = sorted(durations)
+        return (ds[min(len(ds) - 1, int(0.5 * (len(ds) - 1)))],
+                ds[min(len(ds) - 1, int(0.95 * (len(ds) - 1)))])
+
+    gp50, gp95 = _pcts(gen.durations)
+    tools = [{"tool": name, "calls": st.calls, "errors": st.errors,
+              "cancelled": st.cancelled, "running": st.running,
+              "fail_rate": round(st.fail_rate, 4),
+              "cancel_rate": round(st.cancelled / st.calls, 4) if st.calls else 0.0,
+              "p50_ms": st.p(0.5), "p95_ms": st.p(0.95)}
+             for name, st in sorted(stats.items(),
+                                    key=lambda kv: -kv[1].calls)]
+    return {"api_version": API_VERSION, "configured": True,
+            "tools": tools,
+            "generation": {"calls": gen.calls, "errors": gen.errors,
+                           "total_ms": gen.total_ms,
+                           "p50_ms": gp50, "p95_ms": gp95},
+            "summary": summary,
+            "traces_root": str(traces_root)}
+
+
+def api_harness(con: sqlite3.Connection, db: Path, params: dict) -> dict:
+    """Harness 体检（v0.81 P1-2，与 CLI `report-harness` 同一聚合函数）。
+
+    每个数据源（=Agent Harness 身份）一行画像：会话/消息/步骤/失败率/
+    代表工具/代表 skill/最近活跃。VIEW 定位②（harness 感知与治理）的
+    底座——一眼看出哪个 harness 在真干活、哪个只是聊天平台、哪个
+    错误率异常。
+
+    无遥测的源（Chat 平台）fail_rate=null 而非 0：「没有数据」与
+    「没有错误」是两件事，页面必须分开呈现。
+    """
+    from .harnessstats import collect as _harness_collect
+    d = _harness_collect(db, since_days=_since_days(params), con=con)
+    d["api_version"] = API_VERSION
+    d["db_fingerprint"] = db_fingerprint(db, con=con)
+    return d
 
 
 def api_reports_skills(con: sqlite3.Connection, db: Path,
@@ -858,8 +961,14 @@ def make_handler(db: Path, token: str | None,
                  chain_root: Path | None = None,
                  keywords_meta: Path | None = None,
                  reviews_meta: Path | None = None,
-                 reports_dir: Path | None = None):
-    """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。"""
+                 reports_dir: Path | None = None,
+                 traces_root: Path | None = None,
+                 want_watermark: bool = False):
+    """生成 Handler 类（闭包携带配置，便于测试时随机端口起停）。
+
+    want_watermark（v0.81 P1-4）：开启后 /api/meta 的库快照指纹带**真**
+    的 stale 判定（每次请求 stat 一遍语料盘）。默认关。
+    """
 
     class ApiHandler(BaseHTTPRequestHandler):
         server_version = f"harvester/{__version__}"
@@ -922,7 +1031,10 @@ def make_handler(db: Path, token: str | None,
                         self._json({"error": "sid 不存在"}, 404)
                     return
                 if path == "/api/meta":
-                    self._json(api_meta(con, db))
+                    self._json(api_meta(
+                        con, db,
+                        corpus_mtime=(_current_corpus_mtime()
+                                      if want_watermark else None)))
                 elif path == "/api/facets":
                     self._json(api_facets(con, db))
                 elif path == "/api/sessions":
@@ -933,8 +1045,14 @@ def make_handler(db: Path, token: str | None,
                     self._json(api_reports_errors(con, db, qs))
                 elif path == "/api/reports/tools":
                     self._json(api_reports_tools(con, db, qs))
+                elif path == "/api/reports/chains":
+                    self._json(api_reports_chains(con, db, qs))
+                elif path == "/api/reports/traces":
+                    self._json(api_reports_traces(qs, traces_root))
                 elif path == "/api/reports/skills":
                     self._json(api_reports_skills(con, db, qs))
+                elif path == "/api/harness":
+                    self._json(api_harness(con, db, qs))
                 elif path == "/api/reports/agents":
                     self._json(api_reports_agents(con, db, qs,
                                                   meta_db=suggestions_meta))
@@ -1009,7 +1127,9 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
         chain_root: Path | None = None,
         keywords_meta: Path | None = None,
         reviews_meta: Path | None = None,
-        reports_dir: Path | None = None) -> int:
+        reports_dir: Path | None = None,
+        traces_root: Path | None = None,
+        want_watermark: bool = False) -> int:
     """启动入口（cli 调用）。自检失败/配置非法 → 打印问题并返回 1。"""
     err = _check_host(host, token)
     if err:
@@ -1037,7 +1157,9 @@ def run(db: Path, port: int = 8765, host: str = "127.0.0.1",
                                                          chain_root,
                                                          keywords_meta,
                                                          reviews_meta,
-                                                         reports_dir))
+                                                         reports_dir,
+                                                         traces_root,
+                                                         want_watermark))
     real = srv.socket.getsockname()[1]
     tok = "（已启用 X-Token 鉴权）" if token else ""
     print(f"[api-serve] api_version={API_VERSION} schema 自检通过 | "
