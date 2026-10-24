@@ -1054,7 +1054,8 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
 def scaffold_card(db: Path, sid_query: str, out_dir: Path,
                   ctype: str = "pitfall", title: str | None = None,
                   turn: int | None = None,
-                  dupe_warnings: list[str] | None = None) -> Path:
+                  dupe_warnings: list[str] | None = None,
+                  dry_run: bool = False) -> Path:
     """从索引库会话生成卡片脚手架（frontmatter 锚点真实、evidence 留白）。
 
     sid_query 匹配 sessions.sid 或 session_id。id 自动编号
@@ -1064,6 +1065,8 @@ def scaffold_card(db: Path, sid_query: str, out_dir: Path,
     该会话错误步骤的 normalize_error 归一键（唯一权威键，禁第二把）在
     既有卡（排除本次生成卡）evidence/正文中命中时，警告"疑似已有卡"，
     口径与 triage 的"疑似已有卡"一致（宽松归一子串比对）。
+    dry_run（P10 additive，可选）：True 时**一个字节都不写**（连目录都不建），
+    只算"会写到哪、多少字"——页面 B 档预演要的就是这个（预演零副作用）。
     """
     if ctype not in REQUIRED_TYPES:
         raise ValueError(f"type={ctype!r} 不在 {sorted(REQUIRED_TYPES)}")
@@ -1084,7 +1087,8 @@ def scaffold_card(db: Path, sid_query: str, out_dir: Path,
     today = time.strftime("%Y%m%d")
     created = time.strftime("%Y-%m-%d")
     # id 自动编号：扫描既有卡片
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
     max_n = 0
     for p in out_dir.rglob(f"kc-{today}-*.md"):
         m = re.search(rf"^kc-{today}-(\d+)", p.name)
@@ -1121,7 +1125,8 @@ def scaffold_card(db: Path, sid_query: str, out_dir: Path,
     path = out_dir / f"{card_id}.md"
     if dupe_warnings is not None:
         dupe_warnings.extend(_dupe_check(db, row["sid"], out_dir))
-    path.write_text(text, encoding="utf-8", newline="\n")
+    if not dry_run:
+        path.write_text(text, encoding="utf-8", newline="\n")
     return path
 
 

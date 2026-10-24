@@ -49,9 +49,13 @@ class PublishMasterTest(unittest.TestCase):
         self.assertEqual((self.mirror / "cards" / "a.md").read_text(
             encoding="utf-8"), "card-a")
         # 幂等：正本没变，重跑 = 0 复制
+        # （P10 起报表带 `dry_run` 标记：预演与真跑共用同一份"数了几个"的结构，
+        #   靠这个字段区分"只是算数"还是"已经写了"）
         rep2 = publish_master(self.master, self.mirror)
-        self.assertEqual(rep2["cards"], {"copied": 0, "skipped": 1})
-        self.assertEqual(rep2["topics"], {"copied": 0, "skipped": 1})
+        self.assertEqual(rep2["cards"],
+                         {"copied": 0, "skipped": 1, "dry_run": False})
+        self.assertEqual(rep2["topics"],
+                         {"copied": 0, "skipped": 1, "dry_run": False})
 
     def test_newer_master_overwrites_stale_mirror(self):
         old = time.time() - 3600

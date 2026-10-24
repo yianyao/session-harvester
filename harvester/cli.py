@@ -409,10 +409,13 @@ def cmd_kb_publish(args) -> int:
     """
     from .distill import publish_master
     try:
-        rep = publish_master(Path(args.root), Path(args.dest))
+        rep = publish_master(Path(args.root), Path(args.dest),
+                             dry_run=bool(args.dry_run))
     except FileNotFoundError as e:
         print(f"错误: {e}", file=sys.stderr)
         return 2
+    if args.dry_run:
+        print("[预演] 下面只是算数，**一个文件都没写**（确认后去掉 --dry-run 再跑）")
     for sub in ("cards", "topics"):
         if sub in rep:
             r = rep[sub]
@@ -1607,11 +1610,15 @@ def cmd_cards_new(args) -> int:
         dupes: list[str] = []
         path = scaffold_card(dbp, args.sid, Path(args.root),
                              ctype=args.type, title=args.title,
-                             turn=args.turn, dupe_warnings=dupes)
+                             turn=args.turn, dupe_warnings=dupes,
+                             dry_run=bool(args.dry_run))
     except (KeyError, ValueError) as e:
         print(f"错误: {e}", file=sys.stderr)
         return 2
-    print(f"脚手架已生成: {path}")
+    if args.dry_run:
+        print(f"[预演] 会写入: {path}（这一个文件；目录与卡片都没动）")
+    else:
+        print(f"脚手架已生成: {path}")
     for w in dupes:
         print(f"⚠️ {w}")
     print("下一步: 补全 evidence（原会话证据原文）与正文，然后 "
@@ -1742,32 +1749,47 @@ def cmd_attrib(args) -> int:
 
 
 def cmd_evidence_pack(args) -> int:
-    """评审包（P6-6）：一个包、三种消费者（判据头 / 证据体 / 判定槽）。
+    """评审包（**兼容别名**，P10 起并入 `llm-pack`）。
 
-    **③ 判定槽是"可评审"的定义性特征**——没有判定槽的包不是评审包，是报告。
-    本命令只读（harvester.db 全程 mode=ro），判定走既有台账通道
-    （`attrib-review`），不在包里造第二条写路径。
+    用户 2026-10-24 裁决：两条命令一套实现。这里只做三件事——把 `--kind`
+    翻译成 llm-pack 的 `--faces`、把 `--top` 翻译成 `--limit`、在 stderr
+    说明"已弃用"。取数/渲染/判定槽全部走 `harvester.llmpack`，**不再有
+    第二套证据包代码**（漂移就是这么长出来的）。
     """
-    from .evidencepack import KINDS, build_pack, render_json, render_md
+    from .llmpack import (build_pack as _lp_build, render_json as _lp_json,
+                          render_md as _lp_md)
+    from .attrib import load_rules
+    print("提示: evidence-pack 已并入 llm-pack（本命令保留为兼容别名，"
+          "等价于 llm-pack --faces <面> --limit <top>）；新脚本请直接用 llm-pack。",
+          file=sys.stderr)
     dbp = Path(args.db)
     if not dbp.is_file():
         print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
               file=sys.stderr)
         return 2
-    if args.kind not in KINDS:
-        print(f"错误: 不支持的 kind：{args.kind}（可选：{'|'.join(KINDS)}）",
+    face_of = {"errors": "errors", "attrib": "attrib",
+               "skills": "skills", "chains": "chains"}
+    if args.kind not in face_of:
+        print(f"错误: 不支持的 kind：{args.kind}（可选：{'|'.join(face_of)}）",
               file=sys.stderr)
         return 2
+    face = face_of[args.kind]
+    chain_root = None
+    if face == "chains":
+        chain_root = (Path(args.chain_root) if args.chain_root
+                      else Path(__file__).resolve().parent.parent
+                      / "knowledge" / "topics")
     try:
-        pack = build_pack(args.kind, dbp, since_days=args.since,
-                          meta=Path(args.meta) if args.meta else None,
-                          top=args.top)
+        pack = _lp_build(dbp, faces=(face,), limit=args.top,
+                         rules=load_rules(Path(args.rules) if args.rules else None),
+                         meta=Path(args.meta) if args.meta else None,
+                         chain_root=chain_root, since_days=args.since)
     except Exception as e:  # noqa: BLE001 - 规则表不合规等属"响亮失败"
         print(f"错误: {e}", file=sys.stderr)
         return 2
     if args.json:
-        _write_or_print(render_json(pack), args.json, "评审包机读出口")
-    md = render_md(pack)
+        _write_or_print(_lp_json(pack), args.json, "评审包机读出口")
+    md = _lp_md(pack)
     if args.out:
         _write_or_print(md, args.out, "评审包（人读）")
     if not args.out and not args.json:
@@ -1776,13 +1798,14 @@ def cmd_evidence_pack(args) -> int:
 
 
 def cmd_llm_pack(args) -> int:
-    """LLM 打包（第④b步）：给 LLM 的活——评论候选、填判定槽。
+    """打包（第④b步）：给 LLM 的活——评论候选、填判定槽；也是人读评审包。
 
     只读（库走 mode=ro）；`--validate` 只校验结构，不改任何文件。
+    `--out` 出人读 md（与 `--json` 可同给：md 给人、json 给程序）。
     """
     import json as _json
     from .attrib import load_rules
-    from .llmpack import build_pack, render_json, validate_pack
+    from .llmpack import build_pack, render_json, render_md, validate_pack
     if args.validate:
         p = Path(args.validate)
         if not p.is_file():
@@ -1812,16 +1835,20 @@ def cmd_llm_pack(args) -> int:
     try:
         pack = build_pack(dbp, faces=faces, limit=args.limit,
                           rules=load_rules(Path(args.rules) if args.rules else None),
+                          meta=Path(args.meta) if args.meta else None,
+                          since_days=args.since,
                           chain_root=(Path(args.chain_root)
                                       if getattr(args, "chain_root", None) else None))
     except Exception as e:  # noqa: BLE001 - 规则不合规/面不支持属响亮失败
         print(f"错误: {e}", file=sys.stderr)
         return 2
-    text = render_json(pack)
+    md = render_md(pack)
+    if args.out:
+        _write_or_print(md, args.out, "评审包（人读）")
     if args.json:
-        _write_or_print(text, args.json, "LLM 包（机读）")
-    else:
-        print(text, end="")
+        _write_or_print(render_json(pack), args.json, "LLM 包（机读）")
+    if not args.json and not args.out:
+        print(render_json(pack), end="")
     return 0
 
 
@@ -2373,8 +2400,25 @@ def _emit_report(report: str, args) -> None:
         print(report, end="")
 
 
+def _default_report_path(kind: str, fmt: str) -> Path:
+    """`export-analysis --save` 的落点：`<仓>/docs/reports/<kind>-YYYY-MM-DD.<fmt>`。
+
+    这个目录**必须**与 `apiserve.default_reports_dir()` 是同一个——页面
+    「报告索引」列的就是那里；写成两个表达式就会悄悄漂开（有门对账）。
+    """
+    stamp = time.strftime("%Y-%m-%d")
+    return (Path(__file__).resolve().parent.parent / "docs" / "reports"
+            / f"{kind}-{stamp}.{fmt}")
+
+
 def cmd_export_analysis(args) -> int:
-    """export-analysis 统一导出器（P1-4）：五类分析产物，md/JSON 同源。"""
+    """export-analysis 统一导出器（P1-4）：五类分析产物，md/JSON 同源。
+
+    P10 起加 `--save`：不指定 `--out` 时把产物**落到标准报告目录**
+    （`<仓>/docs/reports/<kind>-YYYY-MM-DD.<md|json>`）并打印路径——页面
+    「导出到服务器」与「报告索引」看的是同一份文件，不用再从浏览器下载一份
+    到 Downloads 里当孤儿。
+    """
     from .export_analysis import build_analysis, to_json
     dbp = Path(args.db)
     if not dbp.is_file():
@@ -2391,8 +2435,11 @@ def cmd_export_analysis(args) -> int:
         print(f"错误: {e}", file=sys.stderr)
         return 2
     text = to_json(obj) if args.format == "json" else md
-    if args.out:
-        out = Path(args.out)
+    out_arg = args.out
+    if args.save and not out_arg:
+        out_arg = str(_default_report_path(args.kind, args.format))
+    if out_arg:
+        out = Path(out_arg)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8", newline="\n")
         print(f"已写入 {out}（kind={args.kind} format={args.format}）")
@@ -2595,8 +2642,8 @@ def build_parser() -> argparse.ArgumentParser:
     patr.set_defaults(func=cmd_attrib_review)
 
     pep = sub.add_parser("evidence-pack",
-                         help="评审包（P6-6）：判据头 + 证据体 + **判定槽**"
-                              "（没有判定槽的包不是评审包，是报告）")
+                         help="评审包（**已并入 llm-pack，保留兼容别名**）："
+                              "判据头 + 证据体 + 判定槽")
     pep.add_argument("--kind", default="errors",
                      choices=["errors", "skills", "chains", "attrib"],
                      help="包类型（errors/attrib 含归因候选=R3；"
@@ -2611,19 +2658,29 @@ def build_parser() -> argparse.ArgumentParser:
                      help="机读出口：与 md **不共用实现**，结构带 schema")
     pep.add_argument("--meta", default=None,
                      help="归因台账 meta 库（只用于标出「已裁决」；不写）")
+    pep.add_argument("--chain-root", default=None,
+                     help="chain 文件根目录（kind=chains 时用；缺省 knowledge/topics）")
+    pep.add_argument("--rules", default=None, help="归因规则表路径（缺省随包那份）")
     pep.set_defaults(func=cmd_evidence_pack)
 
     plp = sub.add_parser("llm-pack",
-                         help="LLM 打包（第④b步）：事实 + 归因候选 + **判定槽**，"
-                              "交 LLM 复核；只读，不写库")
+                         help="打包：事实 + 归因候选 + **判定槽**，交 LLM 复核；"
+                              "也出人读评审包（--out）；只读，不写库")
     plp.add_argument("--db", default="harvester.db", help="索引库路径（只读）")
     plp.add_argument("--faces", default="errors",
-                     help="要打包的面，逗号分隔（errors,tools,skills,chains；默认 errors）")
+                     help="要打包的面，逗号分隔"
+                          "（errors,tools,skills,chains,attrib；默认 errors）")
     plp.add_argument("--chain-root", default=None,
                      help="chain 文件根目录（faces 含 chains 时必填，如 knowledge/topics）")
     plp.add_argument("--limit", type=int, default=40,
                      help="每面最多 N 条（默认 40；判定槽行数 = 条目数）")
+    plp.add_argument("--since", type=float, default=None, metavar="DAYS",
+                     help="只取最近 N 天（errors/attrib/skills 生效）")
+    plp.add_argument("--meta", default=None,
+                     help="归因台账 meta 库（只标出「已裁决」；不写）")
     plp.add_argument("--rules", default=None, help="归因规则表路径（缺省随包那份）")
+    plp.add_argument("--out", metavar="PATH", default=None,
+                     help="人读出口（Markdown）输出路径；可与 --json 同给")
     plp.add_argument("--json", metavar="PATH", default=None,
                      help="机读出口（llm-pack/1）输出路径；缺省打印到 stdout")
     plp.add_argument("--validate", metavar="PATH", default=None,
@@ -3053,6 +3110,8 @@ def build_parser() -> argparse.ArgumentParser:
     pcn.add_argument("--title", help="覆盖标题（默认用会话标题）")
     pcn.add_argument("--turn", type=int, help="锚点回合号（可选）")
     pcn.add_argument("--db", default="harvester.db", help="索引库路径")
+    pcn.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="只算会写到哪个文件，不建目录、不写卡片（页面预演用）")
     pcn.set_defaults(func=cmd_cards_new)
     pcr = pcdsub.add_parser("review",
                             help="复核台账：人裁过的不许再烦人（v0.74）")
@@ -3244,6 +3303,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="triage kind：高信号会话条数（默认 10）")
     pea.add_argument("--cards-root", help="triage kind：既有卡片目录")
     pea.add_argument("--out", help="输出路径（缺省打印到 stdout）")
+    pea.add_argument("--save", action="store_true",
+                     help="不打印，落盘到标准报告目录 "
+                          "docs/reports/<kind>-YYYY-MM-DD.<md|json>"
+                          "（与页面「报告索引」同一个目录；给了 --out 时以 --out 为准）")
     pea.set_defaults(func=cmd_export_analysis)
 
     pdr = sub.add_parser(
@@ -3286,6 +3349,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="正本根目录（缺省 knowledge，相对仓根跑）")
     ppub.add_argument("--dest", default=str(KB_DEFAULT_ROOT),
                       help="镜像位（缺省 WorkBuddy 知识库位置）")
+    ppub.add_argument("--dry-run", dest="dry_run", action="store_true",
+                      help="只算会复制几个文件，不建目录、不写镜像位（页面预演用）")
     ppub.set_defaults(func=cmd_kb_publish)
 
     pix = sub.add_parser("index", help="构建 FTS5 全文索引")

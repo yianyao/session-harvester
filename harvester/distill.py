@@ -32,7 +32,7 @@ MASTER_DEFAULT_ROOT = Path("knowledge")
 PUBLISH_SUBDIRS = ("cards", "topics")
 
 
-def publish_master(root: Path, dest: Path) -> dict:
+def publish_master(root: Path, dest: Path, dry_run: bool = False) -> dict:
     """把项目正本（knowledge/）单向发布到 WorkBuddy 知识库镜像位。
 
     语义（安全优先）：
@@ -40,7 +40,9 @@ def publish_master(root: Path, dest: Path) -> dict:
       （shutil.copy2 保留 mtime，靠 mtime 比较判新旧）；
     - **永不删除**镜像位里的多余文件——镜像位归 WorkBuddy 管，本命令只喂不收；
     - 幂等：正本没变时重跑 = 0 复制，输出可对账（copied/skipped 逐目录计数）。
-    返回 {"cards": {"copied": n, "skipped": m}, "topics": {...},
+    dry_run=True 时**只算不写**（不建目录、不复制）：页面 B 档预演要看到
+    "会复制几个、跳过几个"，而不是边预演边改镜像位。
+    返回 {"cards": {"copied": n, "skipped": m, "dry_run": bool}, "topics": {...},
           "missing": [没找到的子目录]}。
     """
     root, dest = Path(root), Path(dest)
@@ -53,7 +55,8 @@ def publish_master(root: Path, dest: Path) -> dict:
             report["missing"].append(sub)
             continue
         dst_dir = dest / sub
-        dst_dir.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            dst_dir.mkdir(parents=True, exist_ok=True)
         copied = skipped = 0
         for src in sorted(src_dir.rglob("*")):
             if not src.is_file():
@@ -62,10 +65,12 @@ def publish_master(root: Path, dest: Path) -> dict:
             if dst.is_file() and dst.stat().st_mtime >= src.stat().st_mtime:
                 skipped += 1
                 continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            if not dry_run:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
             copied += 1
-        report[sub] = {"copied": copied, "skipped": skipped}
+        report[sub] = {"copied": copied, "skipped": skipped,
+                       "dry_run": bool(dry_run)}
     return report
 
 INDEX_TEMPLATE = """---

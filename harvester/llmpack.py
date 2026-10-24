@@ -1,26 +1,30 @@
 # -*- coding: utf-8 -*-
-"""LLM 打包（`llm-pack`，第④b步）：把「现在判断不了的东西」连证据一起交给 LLM。
+"""打包（`llm-pack`）：把「现在判断不了的东西」连证据一起交给人/LLM 评审。
 
 用户 2026-10-23 的原则：「数据在、LLM 可能不足 → 要给数据导出接口」。
-`export-analysis` 是**人读/机读的数据导出**，`evidence-pack` 是**评审包**；
-本模块补第三种用途：**给 LLM 干的活**——每条待判项 = 事实 + 现有候选 + 判定槽，
-LLM 只负责"复核候选 + 填槽"，事实层不许它改。
+用户 2026-10-24 裁决：**`evidence-pack` 并入 `llm-pack`**（两条命令此前各有一套
+取数与渲染，改一边忘另一边）。现在只有这一个打包器：
+
+- 面（`--faces`）：`errors` / `tools` / `skills` / `chains` / `attrib`；
+- 窗口（`--since`）与已裁决标注（`--meta`）对所有面生效（不支持的会写在边界里）；
+- 两个出口：`--json`（机读，schema=`llm-pack/1`，含判定槽）+ `--out`（人读 md）；
+- `evidence-pack` 保留为**兼容别名**（内部走同一打包器，stderr 提示已弃用）。
 
 ━━ 三条纪律 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. **只读**：库全程 `mode=ro`；裁决只能回填既有台账（`attrib-review`），
    本包不造第二条写路径。
 2. **判定槽必须自洽**：`slot.entries` 与 `items` 一一对应（`--validate` 会红），
-   否则 LLM 交回来的东西对不上号。
+   否则交回来的东西对不上号。
 3. **没有证据的项不入包**：`facts` 里必须有可回溯的东西（错误串/工具名/审计文案），
-   只给计数的行等于让 LLM 猜（R1 数据给再强的 LLM 也评不出东西）。
+   只给计数的行等于让人猜（R1 数据给再强的 LLM 也评不出东西）。
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from .attrib import (ATTRIB_VERDICTS, FACES, attribute_face,
-                     collect_attributions, load_rules)
+from .attrib import (ATTRIB_VERDICTS, attribute_face,
+                     collect_attributions, load_rules, load_verdict_map)
 from .dbmeta import db_fingerprint
 from .errstats import collect_errors_from_db
 from .toolstats import collect_stats_from_db
@@ -33,7 +37,8 @@ SLOT_COLUMNS = ("item_id", "subject", "verdict", "rule_id", "class", "note")
 
 #: 支持自动收集的面。chains 走**文件审计**（chain 根目录 → audit_chain），
 #: 不是库里的行；skills 走**结构化函数**（behstats），两者都不 parse 文本。
-AUTO_FACES = ("errors", "tools", "skills", "chains")
+#: attrib（P10 合并进本模块）＝错误面 + 规则候选 + 是否已被人工裁决。
+AUTO_FACES = ("errors", "tools", "skills", "chains", "attrib")
 
 HINT = ("本包给 LLM 用：每条 = 事实（不许改）+ 现有归因候选（可能错）+ 一个空的判定槽。"
         "请逐条复核候选，把结论填进 slot.entries 的 verdict/rule_id/class/note；"
@@ -42,16 +47,19 @@ HINT = ("本包给 LLM 用：每条 = 事实（不许改）+ 现有归因候选�
 
 def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
                meta: Path | None = None,
-               chain_root: Path | str | None = None) -> dict:
-    """收集待判项。`faces` 只能是 `AUTO_FACES` 的子集（其它面 → ValueError）。"""
+               chain_root: Path | str | None = None,
+               since_days: float | None = None) -> dict:
+    """收集待判项。`faces` 只能是 `AUTO_FACES` 的子集（其它面 → ValueError）。
+
+    `since_days`：只取最近 N 天（`errors`/`attrib`/`skills` 生效；
+    `tools`/`chains` 是累计/文件口径，不受窗口影响——边界里写明）。
+    `meta`：归因裁决台账（`attrib_meta.db`）；给了就把"已裁决"标在 items 上。
+    """
     dbp = Path(db)
     want = tuple(faces) or ("errors",)
     bad = [f for f in want if f not in AUTO_FACES]
     if bad:
         raise ValueError(f"faces 不支持自动收集: {bad}（可选 {list(AUTO_FACES)}）")
-    bad2 = [f for f in want if f not in FACES]
-    if bad2:
-        raise ValueError(f"未知面: {bad2}（可选 {list(FACES)}）")
     if "chains" in want and not chain_root:
         raise ValueError("faces 含 chains 时必须给 chain_root（chain 文件根目录）")
     if limit <= 0:
@@ -61,7 +69,7 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
     items: list[dict] = []
 
     if "errors" in want:
-        errors, _ = collect_errors_from_db(dbp)
+        errors, _ = collect_errors_from_db(dbp, since_days=since_days)
         agg = collect_attributions(errors, rules)
         rows = sorted(agg["by_pattern"].values(), key=lambda r: -r["count"])
         for i, r in enumerate(rows[:limit], 1):
@@ -73,6 +81,29 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
                           "tools": sorted(r["tools"]),
                           "anchors": r["anchors"][:3]},
                 "attrib": r["rule"],
+            })
+
+    if "attrib" in want:
+        # 归因面＝错误面 + 「这条候选有没有被人裁过」。裁决台账只读，
+        # 不给就是零感知（同 card_review 口径：没人裁过 = 全部待评）。
+        errors, _ = collect_errors_from_db(dbp, since_days=since_days)
+        agg = collect_attributions(errors, rules)
+        vmap = load_verdict_map(meta)
+        rows = sorted(agg["by_pattern"].values(), key=lambda r: -r["count"])
+        for i, r in enumerate(rows[:limit], 1):
+            rule = r["rule"]
+            v = (vmap.get((r["pattern"], (rule or {}).get("rule_id", "")))
+                 if rule else None) or {}
+            items.append({
+                "item_id": "A-%03d" % i,
+                "face": "attrib",
+                "subject": r["pattern"],
+                "facts": {"count": r["count"], "given_up": r["given_up"],
+                          "tools": sorted(r["tools"]),
+                          "anchors": r["anchors"][:3],
+                          "reviewed": v.get("verdict") or "",
+                          "rule_gap": rule is None},
+                "attrib": rule,
             })
 
     if "tools" in want:
@@ -94,20 +125,25 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
         # 结构化取数（behstats 扫 steps 表，含配对状态与行为链），**不 parse 文本**：
         # 用户批准的 G2 路线就是"先接结构函数"。证据三件：调用数、样本锚点、
         # 行为链——只给一个 skill 名的行等于让 LLM 猜（R1）。
-        items.extend(_skill_items(dbp, rules, limit))
+        items.extend(_skill_items(dbp, rules, limit, since_days=since_days))
 
     if "chains" in want:
         items.extend(_chain_items(dbp, rules, limit, Path(chain_root)))
 
     entry_of = {it["item_id"]: it for it in items}
+    fp = db_fingerprint(dbp)
     return {
         "schema": SCHEMA,
         "generated_at": _now(),
-        "db_fingerprint": db_fingerprint(dbp),
+        "window": (f"最近 {since_days:g} 天" if since_days else "全库（无时间窗）"),
+        "since_days": since_days,
+        "db_fingerprint": fp,
         "hint": HINT,
         "faces": list(want),
         "n_items": len(items),
         "items": items,
+        "coverage": _coverage(items, want, fp.get("sessions")),
+        "boundaries": _boundaries(want, since_days, meta),
         "ask": ("逐条复核 items[].attrib（why/fix/confidence 都是**候选**）。"
                 "判定词只用 %s。事实字段（facts）不许改。" % "/".join(ATTRIB_VERDICTS)),
         "slot": {
@@ -132,17 +168,23 @@ def build_pack(db, faces=("errors",), limit: int = 40, rules=None,
     }
 
 
-def _skill_items(db, rules, limit: int) -> list[dict]:
+def _skill_items(db, rules, limit: int, since_days=None) -> list[dict]:
     """skill 面：按调用聚合，只给**有证据**的行（锚点 + 行为链 + 计数）。
 
     `subject` 刻意只写事实（调用/成功/失败 + 是否低样本），**不写「待鉴定」**
     ——那是判断，判断归 LLM/人填进槽里。低样本线复用 `toolstats.RANK_MIN_CALLS`
     （同一个"样本不足 20 不下结论"口径，避免第二套数字）。
+    `since_days`：按调用时刻过滤（与错误面同一窗口口径）。
     """
     from .behstats import collect_skill_invocations
     from .toolstats import OK_STATUS, RANK_MIN_CALLS
 
     invs = collect_skill_invocations(Path(db))
+    if since_days:
+        import time as _t
+        cutoff = _t.strftime("%Y-%m-%d %H:%M:%S",
+                             _t.localtime(_t.time() - since_days * 86400))
+        invs = [i for i in invs if str(i.get("ts") or "") >= cutoff]
     agg: dict[str, dict] = {}
     for i in invs:
         if not i.get("skill"):
@@ -259,6 +301,134 @@ def _chain_items(db, rules, limit: int, chain_root: Path) -> list[dict]:
             "attrib": attribute_face(subject, rules, face="chains"),
         })
     return out
+
+
+def _coverage(items: list[dict], want: tuple, sessions_total) -> dict | None:
+    """覆盖度：**只对错误/归因面有意义**（它们来自库里的错误步骤）。
+
+    其它面（tools 累计 / chains 文件 / skills 调用）分母不是"会话"，硬套
+    一个百分比就是拿错的数冒充覆盖率——返回 None 并在边界里说明。
+    """
+    if not ({"errors", "attrib"} & set(want)):
+        return None
+    sids = set()
+    for it in items:
+        for a in (it.get("facts") or {}).get("anchors") or []:
+            sid = a.get("sid") if isinstance(a, dict) else None
+            if sid:
+                sids.add(str(sid))
+    total = int(sessions_total or 0)
+    covered = len(sids)
+    pct = (covered / total * 100.0) if total else 0.0
+    return {"covered": covered, "total": total, "pct": round(pct, 1),
+            "basis": "窗口内有错误步骤的会话",
+            "note": ("**本包只覆盖上述会话**；覆盖度由库现算，不是估计值。"
+                     "拿部分覆盖的结果当全库结论是本工程明令禁止的事。")}
+
+
+def _boundaries(want: tuple, since_days, meta) -> list[str]:
+    """本包的**边界声明**（诚实：没拿到的东西写出来，别让评审者以为有）。"""
+    out = [
+        "归因候选是**机器判断，会错**（candidate=true）；判定只进台账，"
+        "本包不含任何已定论。",
+        "`artifact` 类**不在本包**：产物面只登记 dsh 源（实测个位数百分比），"
+        "打进评审包等于拿它冒充全库。",
+    ]
+    if {"tools", "chains"} & set(want):
+        out.append("`tools`（累计调用）与 `chains`（chain 文件审计）**不按 "
+                   "`--since` 截窗**：它们的分母不是「这 N 天」，套窗口会算出"
+                   "两个对不上的数。")
+    if "skills" in want:
+        out.append("Skill 面是 R1：能计数、能回原文，但**没有归因候选**，"
+                   "评不出根因。")
+    if "chains" in want:
+        out.append("链型判定阈值是项目自定义口径（`chainstats`），评审时请"
+                   "连同阈值一起看；锚点是**会话级**（`sid#0`），跳不到确切回合。")
+    if "attrib" in want and meta:
+        out.append("`facts.reviewed` 非空 = 这条候选**已经人裁过**（台账只读"
+                   "标注，不改变候选内容）。")
+    if since_days:
+        out.append(f"窗口：最近 {since_days:g} 天；窗口外的老坑不在本包里，"
+                   "别据此说「这类问题已经没有了」。")
+    return out
+
+
+def render_md(pack: dict) -> str:
+    """人读出口：可直接贴给任意 Agent 评审的 Markdown。**不截断**。"""
+    L: list[str] = []
+    faces = "、".join(pack.get("faces") or [])
+    L.append(f"# 评审包 · {faces}（{pack.get('n_items', 0)} 条）")
+    L.append("")
+    L.append(f"- 生成时间：{pack.get('generated_at')}")
+    L.append(f"- 窗口：{pack.get('window')}")
+    fp = pack.get("db_fingerprint") or {}
+    L.append(f"- 库快照：会话 {fp.get('sessions')} / 步骤 {fp.get('steps')} / "
+             f"错误 {fp.get('errors')}（{fp.get('db_mtime')}）")
+    cov = pack.get("coverage")
+    if cov:
+        L.append(f"- 覆盖：{cov['covered']} / {cov['total']} 个会话"
+                 f"（{cov['pct']}%，{cov['basis']}）——**本包不代表全库**")
+    L.append("")
+    L.append("## 边界（先读这段，别把「没给」当成「没问题」）")
+    L.append("")
+    for b in pack.get("boundaries") or []:
+        L.append(f"- {b}")
+    L.append("")
+    L.append("## 待判项（事实不许改，只填判定槽）")
+    L.append("")
+    for it in pack.get("items") or []:
+        facts = it.get("facts") or {}
+        L.append(f"### {it['item_id']} · {it['subject']}（{it.get('face')}）")
+        kv = "；".join(f"{k}={_fmt(v)}" for k, v in facts.items()
+                       if k != "anchors")
+        if kv:
+            L.append(f"- 事实：{kv}")
+        anchors = facts.get("anchors") or []
+        if anchors:
+            L.append("- 锚点：" + "、".join(_fmt_anchor(a) for a in anchors))
+        a = it.get("attrib")
+        if a:
+            L.append(f"- 候选归因：`{a.get('rule_id')}`（{a.get('class')}，"
+                     f"置信 {a.get('confidence')}）")
+            L.append(f"  - 为什么：{a.get('why')}")
+            L.append(f"  - 怎么办：{a.get('fix')}")
+        else:
+            L.append("- 候选归因：（无——规则还没覆盖到，这本身就是待办）")
+        L.append("- 判定槽：待填（verdict / rule_id / class / note 四列）")
+        L.append("")
+    slot = pack.get("slot") or {}
+    L.append("## 判定槽（整表；回填用 `readback.command`）")
+    L.append("")
+    L.append("| " + " | ".join(slot.get("columns") or []) + " |")
+    L.append("|" + "---|" * len(slot.get("columns") or []))
+    for e in slot.get("entries") or []:
+        # 判定槽的空格必须**真是空的**（渲染成「—」会让"没填"看起来像填了值）
+        L.append("| " + " | ".join(str(e.get(c) or "")
+                                   for c in slot.get("columns") or []) + " |")
+    L.append("")
+    rb = pack.get("readback") or {}
+    L.append("## 怎么回填")
+    L.append("")
+    L.append(f"- 逐条命令：`{rb.get('command')}`")
+    L.append(f"- {rb.get('note')}")
+    L.append("")
+    return "\n".join(L)
+
+
+def _fmt(v) -> str:
+    if v is None or v == "":
+        return "—"
+    if isinstance(v, (list, tuple)):
+        return "、".join(str(x) for x in v) or "—"
+    return str(v)
+
+
+def _fmt_anchor(a) -> str:
+    if isinstance(a, dict):
+        return f"`{a.get('sid')}#{a.get('seq')}`"
+    return f"`{a}`"
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
 def _now() -> str:

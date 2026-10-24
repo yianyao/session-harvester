@@ -210,6 +210,39 @@ python -m pytest tests -q          # 或按 README 顶部「测试基线」一�
     ③ 前端**不许**再维护第二张 CLI→动作映射表——反查必须走 `/api/actions` 的 `cmd`
       （含 `"cards validate"` 这种命令名里带子动作的形态），否则新增动作页面永远不认。
 
+**32. "合并两条命令"的验收不是"留了一个名字"，是"只剩一套实现"**（2026-10-24 P10 实测）：
+    `evidence-pack` 并进 `llm-pack` 时，光把旧命令改成转发还不够——旧模块
+    `harvester/evidencepack.py`（383 行）里那套双 schema（`JSON_SCHEMA`/`KINDS`/
+    `SLOT_COLS`）只要还活着，就还是"两个维护点"。做法：① 把要保留的能力
+    （attrib 面、`--since`、`--meta`、`render_md`、coverage、boundaries）**搬进新家**；
+    ② 删旧文件；③ 门要能证明"合并真的发生了"——本仓的判据是
+    **alias 的 md 与 `llm-pack --faces … --out -` 逐字相同**（除时间戳行）+
+    **旧模块文件必须不存在**（`ImportError`）。教训：只断言"新命令能跑"的合并，
+    半年后会变成两套并行实现。
+
+**33. 删一个模块前先 grep 老 import**（同上，当场踩到）：删完 `evidencepack.py`，
+    `tests/test_v67_evidencepack.py` 顶上还 `from harvester.evidencepack import …`，
+    全量套件立刻 collection error。删模块的正确顺序是：grep 引用 → 改引用方 →
+    删文件 → 跑**那个文件自己的测试**（不是只跑全量）。
+
+**34. 动作参数是白名单：新增一个参数要在两处都加**（2026-10-24 P10 实测，**静默失效**）：
+    `_clean_params` 只认 `ACTIONS[aid]["params"]` 里声明过的键，没声明的**直接丢弃**；
+    而类型分支里没有 `bool` → 声明了也会 `ValueError`（500）。
+    症状：页面点了「导出到服务器」（`save:"1"`），服务端照旧只打印、不落盘，
+    **不报错**。判据：动作新增参数后，用活服务 `POST /api/actions/run` 跑一次，
+    看产物/字面结果，而不是只看前端传了没有。
+
+**35. 零参数的 B 档动作要写理由，不许拆门**（同上）：`test_v38` 原有门是
+    "B 档动作一个参数都不许没有"（防"填了不生效的黑箱"）。`kb_publish` 的两个参数
+    都是服务端路径、页面本来不该传——正确做法是给 `write_actions.json` 加
+    `no_params_reason`（说明为什么零参数）并让门认这个字段，而不是把这条门删掉。
+
+**36. 删掉一个前端函数会连带打掉"数量门"，要跟着改并写清原因**（同上）：
+    `test_v55` 钉住 `catch(e){ offlineBanner(); throw e; }` 出现 **3** 次
+    （api / apiText / actApi）。P10 删了只服务旧导出按钮的 `apiText` → 变 2 次，
+    门红。正确改法是**把断言改成 2 并注明谁被删了、为什么**，而不是把门删了或
+    留一个空壳函数凑数。
+
 **收尾固定动作**（本仓历史证明有效）：① 死代码扫描（`harvester/` 与 `tests/` 两个根都要 0/0/0，行内 `# noqa` 视为有意保留）；
 ② 悬空路径检查（`git ls-files -c core.quotePath=false` 取已提交 `*.md`，逐个 `Test-Path` 其中 `docs/reports/...` 引用）；
 ③ 过期文本扫描（`git grep "TODO|FIXME|后续版本|待实现|暂未"`，逐条判断是「项目欠债」还是「在描述扫描本身」）。
