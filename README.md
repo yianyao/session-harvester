@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1161 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1174 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=1089 failures=0 errors=96 skipped=55
+# ② 无 PyYAML 门禁：期望 GATE ran=1102 failures=0 errors=96 skipped=55
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,11 +61,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1161 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1089 failures=0 errors=96 skipped=55** | **只看 `failures=0`**；`96 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=55` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1174 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1102 failures=0 errors=96 skipped=55** | **只看 `failures=0`**；`96 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=55` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1161 vs 1089）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1174 vs 1102）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
 另有 `skipped=55`（v0.83 起；逐组可对）：
@@ -100,7 +100,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1161，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1174，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
@@ -109,8 +109,11 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 P10 把 `evidence-pack` 并进 `llm-pack`，该文件重写成 11 条、`_NEED_REAL` 从 8 降到 4，
 于是 43 → **39**；v0.82 的 `test_v82_chainbuild` 加了 5 条要真解析 chain 的发布用例，
 39 → **44**；v0.83 的 `test_v83_chaingen` 再加 11 条（客观字段对齐 5 + 生成流水线 6，
-两处都要真解析 chain），44 → **55**（`ran` 同时 1060 → **1089**：这些用例在无 PyYAML 时
-是 skip、仍计入 `ran`，所以 `ran` 涨的正是新增总数 29 条）
+两处都要真解析 chain），44 → **55**（`ran` 同时 1060 → 1089：这些用例在无 PyYAML 时
+是 skip、仍计入 `ran`，所以那一轮 `ran` 涨的正是新增总数 29 条）；
+v0.84 的 `test_v84_growth` 加 13 条（纯逻辑 + 临时库，**不依赖 PyYAML**），
+于是 `skipped` 仍是 **55**、而 `ran` 从 1089 → **1102**（这 13 条在门禁里也真跑），
+全套件同时 1161 → **1174**
 （**删用例同样要回来改这里**，不是只有加才要改）
 ——**新增需要 PyYAML 的用例时，正确做法是 skip（不是让它断言失败）**：
 门禁的唯一硬判据是 `failures=0`，写成断言失败会直接把门禁弄红。
@@ -577,6 +580,7 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `llm-pack` | **LLM 包**（v0.80 第④b步）：把「现在判不了的东西」连证据打成 `schema=llm-pack/1` 交 LLM 复核。每条 = `item_id`/`face`/`subject`/`facts`（错误串锚点或工具名，**可回溯**）/`attrib`（现有候选，`candidate=true`）+ 一个空判定槽；`slot.entries` 与 `items` **一一对应**（对不上号 = 回填会丢，`--validate` 会红）。`ask` 写明纪律：只复核候选、不改事实、拿不准填 `unknown` 并说明缺什么证据。`readback` 给**逐条** `attrib-review` 命令（该命令没有批量导入，不假装有）。`--faces errors,tools`、`--limit`、`--json PATH`、`--rules`、`--validate PATH`。只读（库全程 `mode=ro`，跑完 mtime/size 不变，门钉住）；判定仍走 `attribations` 台账。 |
 | `report-daily [--json PATH]` | **每日数据速览**（v0.81 P5-⑤）：四队列 + tools/errors/chains 五段聚合一次产出，**只读**不写库不改台账。四队列与 view 工作台同源（同模块同函数同参数，快照口径，实时以工作台为准）；台账缺失按空账计（诚实空态）；无 steps 数据工具段诚实留空。`--out` 落盘供 schedule 触发；搭配 `api-serve --reports-dir` 即是 view 工作台「昨日报告」卡的取数口（文件名白名单 daily-YYYY-MM-DD.md） |
 | `noise` | **零散会话登记**（v0.81 P5-⑧）：判「不归任何主题」的会话写进 topics_meta 的 sessions_noise 表，主题候选簇（candidates/keywords）不再收它们。**只写 meta 表、不动会话数据**（可逆：删行即撤销）——与 suppress 删仓内副本是两码事。`add` 幂等（已在表跳过）、默认 dry-run、`--apply` 才写；`list` 列出已登记（何时/为什么）。**候选只列不裁决**：归宿（班规条目/问题清单）由人定 |
+| `report-growth [--json PATH]` | **个人成长总线**（v0.84，P2 #12）：按月把四件事并排——活跃主题 / 新卡 / 错误率（**每会话错误步数，不是百分比**）/ 采纳班规。三条纪律写进返回值：① 每个数字都带 `definitions`（怎么算）与 `sources`（取自哪本字段），页面/CLI 原样透出；② **只把事实并排，`honest` 里明写「趋势不是因果」**——采纳班规前后错误率变化可能来自换了任务类型、换了工具，本命令不判因果；③ 会话数 <5 的月标 `thin`（那个月的比率不可比，读成「看不出来」比读成「变好了」诚实）。三本账全程 `mode=ro`，不写库不落盘。`--months` 缺省 12；机读出口 schema=`growth/1`，人读出口是月表 + 口径表 + 「别把这张表读过头」 |
 | `report-traces` | OTel trace 工具统计（耗时/失败率/取消） |
 | `report-harness [--json PATH]` | **Harness 体检**（v0.81 P1-2）：每个数据源一行画像——会话/消息/步骤/失败率/代表工具/代表 skill/最近活跃。**失败率分母 = result 相步骤数**，无工具遥测的源显示「—（无遥测）」、只落 call 相的显示「—（无结果相）」，两者**都不渲染成 0%**；无遥测源默认折叠并报数。与 API `/api/harness` 共用同一聚合函数（`harnessstats.collect`） |
 | `report-skill [--json PATH]` | Skill 行为画像（G4）：按 skill 聚合调用/行为链 |
@@ -589,14 +593,15 @@ additive 多出 `declared_topic_id` 与 `topics`（`[{id, name}]`），summary �
 | `harvest-eval` | **自进化评估闭环**（v0.46 P1-4）：对每条 adopted 规则，按分界 T（`adopted_at`，或回退 `--since`）取前后各 `--window-days` 天，比较**未解决率**（主判据）与**复发率**（只报告），输出**三值判定**（改善/无变化/变差）＋样本量；样本不足或没有分界日期一律写**「不下结论」**（≠「无变化」）。判定→处置口径固定：无变化→可退休、变差→建议回滚、改善→保持。**工具只评估，绝不自动改 `AGENTS.md`** |
 | `export-analysis` | 统一分析导出器：sessions/tools/errors/skills/triage × md/JSON 同源（view 导出按钮走这条） |
 
-> **机读出口（G2 结构化层）**：九条只读命令支持 `--json PATH`——
+> **机读出口（G2 结构化层）**：十条只读命令支持 `--json PATH`——
 > 五条报告（`report-tools` / `report-errors` / `report-skill` /
 > `report-chains` / `report-harness`）
 > ＋ P9 扩面四条（`report-daily` / `report-skill-join` / `chain-audit` /
-> `cards validate`）。`PATH` 写 `-` 即 stdout（人读文本让位：落 `--out`
+> `cards validate`）＋ v0.84 一条（`report-growth`）。`PATH` 写 `-` 即 stdout（人读文本让位：落 `--out`
 > 或改走 stderr，保证 stdout 是**纯 JSON**、可整体 `json.loads`）；不给
 > `--json` 时输出**与旧版逐字相同**。schema 分别是
-> `report-daily/1` / `report-skill-join/1` / `chain-audit/1` / `cards-validate/1`，
+> `report-daily/1` / `report-skill-join/1` / `chain-audit/1` /
+> `cards-validate/1` / `growth/1`，
 > 与上面四条同形：`schema` / `generated_at` / `db_fingerprint` / `data`，
 > `data` 由**文本路径同一个聚合函数**产出（不解析渲染文本、不二次聚合）。，载荷固定为 `schema` / `db_fingerprint` / `data` 三段（`data` 与文本报告**同源聚合**；`-` = stdout），供程序消费；**人读仍默认**——不给 `--json` 时输出与旧版一致。
 

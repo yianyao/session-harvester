@@ -871,6 +871,33 @@ def cmd_report_daily(args) -> int:
     return 0
 
 
+def cmd_report_growth(args) -> int:
+    """个人成长总线（P2 #12，2026-10-26）：按月看"人的变化"。
+
+    四列：活跃主题 / 新卡 / 错误率（每会话错误数）/ 采纳的班规。
+    **只读聚合**：不写库、不改库；`--out` 之外不落盘。
+    口径与"别读过头"的说明由 `harvester.growth` 一并给（`render_md` 里带着），
+    本函数只做参数落位——数字真源只有一处。
+    """
+    from . import growth as G
+    dbp = Path(args.db)
+    if not dbp.is_file():
+        print(f"错误: 索引库不存在: {dbp}（先运行 harvester index）",
+              file=sys.stderr)
+        return 2
+    g = G.build(
+        dbp,
+        topics_meta=Path(args.topics_meta) if args.topics_meta else None,
+        cards_root=Path(args.cards_root) if args.cards_root else None,
+        suggestions_meta=(Path(args.suggestions_meta)
+                          if args.suggestions_meta else None),
+        months=args.months)
+    _emit_report(G.render_md(g), args)
+    if getattr(args, "json", None):
+        _emit_json(args.json, G.SCHEMA, g, dbp=dbp)
+    return 0
+
+
 def cmd_report_skill_join(args) -> int:
     """T4 skill 进化 join：chain 时间线锚点 × skill 调用锚点交叉表。"""
     from .skilljoin import build_cross, render_cross
@@ -2917,6 +2944,25 @@ def build_parser() -> argparse.ArgumentParser:
                      help="机读出口（report-daily/1）：schema + db_fingerprint"
                           " + data（与文本同一个聚合）；'-'=stdout")
     prd.set_defaults(func=cmd_report_daily)
+
+    pgw = sub.add_parser(
+        "report-growth",
+        help="个人成长总线（P2 #12）：按月看 活跃主题 / 新卡 / 错误率 / 采纳的"
+             "班规。只读聚合；只把四件事并排，趋势不是因果")
+    pgw.add_argument("--db", default="harvester.db", help="索引库路径")
+    pgw.add_argument("--topics-meta", default="topics_meta.db",
+                     help="主题库（活跃主题口径；不存在则该列为 0，不报错）")
+    pgw.add_argument("--cards-root",
+                     help="知识卡片目录（新卡口径；不给则该列为 0）")
+    pgw.add_argument("--suggestions-meta", default="suggestions_meta.db",
+                     help="建议台账（采纳班规口径；不存在则该项为 0）")
+    pgw.add_argument("--months", type=int, default=12,
+                     help="看最近几个月（默认 12；0 或负数按 12 处理）")
+    pgw.add_argument("--out", help="报告输出路径（缺省打印到 stdout）")
+    pgw.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（growth/1）：schema + db_fingerprint + data"
+                          "（与文本同一个聚合函数）；'-'=stdout，缺省仍出文本")
+    pgw.set_defaults(func=cmd_report_growth)
 
     psj = sub.add_parser("report-skill-join",
                          help="把某主题长文（chain）的时间线与 skill 调用记录对上号："
