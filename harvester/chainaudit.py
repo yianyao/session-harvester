@@ -78,6 +78,18 @@ def _ascii_quotes(body: str) -> list[str]:
 _RELATIONAL = ("重发", "复问", "重贴", "同日", "同稿", "跨端", "同句",
                "第三处", "第二处", "另一次", "再次提交", "同标题")
 
+# 英文词命中的判据（2026-10-26）：note 抄英文原词时汉字判据全落空。
+# ≥4 字符 + 停用词表——"the/for/with" 这类词在几乎任何原文里都有，放进来
+# 等于门失效（任何 note 都"命中"）。
+_ASCII_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{3,}")
+_ASCII_STOP = frozenset({
+    "this", "that", "with", "from", "have", "will", "your", "yours",
+    "they", "them", "then", "than", "there", "here", "what", "when",
+    "which", "would", "could", "should", "about", "into", "over", "also",
+    "please", "make", "made", "like", "just", "only", "some", "more",
+    "file", "files", "code", "line", "lines", "text", "data",
+})
+
 
 def _norm(s: str) -> str:
     s = (s or "").replace("\u3000", "").replace("\xa0", "")
@@ -247,6 +259,13 @@ def audit_anchors(path: Path, con: sqlite3.Connection, preview: int = 90) -> dic
     节奏把控佳""动词精准度润色视角"这类**标题级**依据是允许的（规范 §3
     要求标题级证据显式标注），只比 raw 会把它们全判成错配（真库 5 条告警里
     3 条属这一类），告警一多就没人看了。
+
+    **判据覆盖不到的情况显式认账**（2026-10-26）：原文整段没有汉字时
+    （英文 prompt、英文工具输出、CLI 会话——"本机工具环境与 Windows 坑"
+    这类主题大量如此），中文 note 的汉字 2-gram 必然零命中，那不是证据假，
+    是**这套机械判据对纯英文原文没有判断能力**。所以 `hay_cjk` 为假时不判
+    错配，并在行里标 `unjudgeable=True` 让报告能说出来（不吭声地当"通过"
+    等于把盲区藏起来）。
     """
     fm = _load(path)["fm"]
     rows, suspicious = [], []
@@ -271,14 +290,25 @@ def audit_anchors(path: Path, con: sqlite3.Connection, preview: int = 90) -> dic
             # "丁樾""回气"在——用整段判会把正确节点全判成错配（首版即如此）。
             note_cjk = "".join(_CJK_RUN.findall(note))
             grams = {note_cjk[i:i + 2] for i in range(len(note_cjk) - 1)}
+            note_words = {w for w in _ASCII_WORD.findall(note.lower())
+                          if w not in _ASCII_STOP}
             hay = body + "\u0000" + title
+            hay_low = hay.lower()
             hit = sorted(g for g in grams if g in hay)
+            # 英文原话（CLI 输出 / 英文 prompt / 库名版本号）也认：note 抄
+            # "CUDA、Torch versions" 时汉字 2-gram 全落空，但英文词逐字在原文
+            # 里——那不是错配。≥4 字符 + 停用词表，避免 "the/for" 这类常见词
+            # 把任何 note 都判成合格（那等于门失效）。
+            hit_ascii = sorted(w for w in note_words if w in hay_low)
+            judgeable = bool(_CJK_RUN.search(hay)) or bool(_ASCII_WORD.search(hay))
             row = {"stage": st.get("stage"), "sid": sid, "turn": turn,
                    "note": note, "raw": flat[:preview], "title": title[:40],
-                   "overlap": hit,
+                   "overlap": hit, "overlap_ascii": hit_ascii,
+                   "unjudgeable": not judgeable,
                    "relational": any(w in note for w in _RELATIONAL)}
             rows.append(row)
-            if grams and not hit and not row["relational"]:
+            if ((grams or note_words) and not (hit or hit_ascii)
+                    and judgeable and not row["relational"]):
                 suspicious.append(row)
     return {"nodes": rows, "suspicious": suspicious,
             "ok": not suspicious}

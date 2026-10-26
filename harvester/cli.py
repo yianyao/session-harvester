@@ -2379,6 +2379,83 @@ def cmd_chain_publish(args) -> int:
     return 0
 
 
+def cmd_chain_generate(args) -> int:
+    """链自动生成（v0.83）：模型代笔 + 两道门把关 + 不过回喂重试。
+
+    用户 2026-10-26：「主题链的生成，应该在主题 tab 提供命令按钮，执行即可。
+    不能老是在 WorkBuddy 中耗费 token 干这活」——所以这一条**不需要 Agent**：
+    出包 → 模型按包写 → chain-validate + chain-audit 全过才落草稿位。
+
+    缺省写到 `exports/chains/<id>.md`（与页面「导出草稿」同一落点），
+    之后用 `chain-publish --apply` 进知识正本。**它不是确定性的**：同库同参数
+    跑两次文本会不同（temperature=0 也不保证），所以 frontmatter 记 model。
+    """
+    from .chaingen import generate, GenError
+    out = (Path(args.out) if getattr(args, "out", None)
+           else Path("exports") / "chains" / ("%s.md" % args.id_))
+    try:
+        r = generate(Path(args.db), Path(args.meta), args.id_, out=out,
+                     max_chars=args.max_chars,
+                     max_attempts=args.max_attempts, model=args.model,
+                     write=not args.no_write)
+    except (ValueError, RuntimeError, GenError) as exc:
+        print(f"[chain-generate] 失败: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"[chain-generate] 模型：{r['model'] or '（未知）'}")
+    for a in r["attempts"]:
+        verdict = "通过" if a["ok"] else (
+            f"撞门（结构错 {a['validate_errors']}｜引文未命中 "
+            f"{a['quotes_missed']}｜疑似错配 {a['anchors_suspicious']}）")
+        print(f"  第 {a['n']} 次：{a['chars']} 字 → {verdict}")
+    if r.get("patched"):
+        print("[chain-generate] 已对齐客观字段：" + "；".join(r["patched"]))
+    dm = r.get("demoted") or {}
+    if dm.get("count"):
+        print(f"[chain-generate] 标点修正：{dm['count']} 处非逐字的「」改判为『』"
+              "（原文里没有逐字对应 → 它们本来就是概括式引述，不是引文；"
+              "文字一个字没改）")
+    v, au = r["validate"], r["audit"]
+    st = v.get("stats") or {}
+    q = au.get("quotes") or {}
+    print(f"[chain-generate] 结构门 {'通过' if v['ok'] else '未通过'}"
+          f"（members {st.get('members', 0)}｜stages {st.get('stages', 0)}"
+          f"｜nodes {st.get('nodes', 0)}）"
+          f"｜引文门 {'通过' if au['ok'] else '未通过'}"
+          f"（逐字命中 {q.get('exact', 0)}/{q.get('total', 0)}"
+          f"｜未命中 {len(au.get('misses') or [])}"
+          f"｜疑似错配 {au.get('suspicious', 0)}）")
+    u = r["usage"]
+    print(f"[chain-generate] token：prompt {u.get('prompt_tokens', 0)}"
+          f" + completion {u.get('completion_tokens', 0)}"
+          f" = {u.get('total_tokens', 0)}")
+    if r["blockers"]:
+        for b in r["blockers"]:
+            print(f"  BLOCK: {b}")
+        for m in (au.get("misses") or [])[:5]:
+            print(f"  · 引文未命中：「{str(m)[:60]}」")
+        if r.get("pending"):
+            print(f"[chain-generate] 最后一版留在 {r['pending']}"
+                  "（.pending = 未过门，chain-publish 不认它；"
+                  "看一眼差在哪，别再等一次 3 分钟）", file=sys.stderr)
+        print("[chain-generate] 未落草稿位（上面的 BLOCK 全清掉再来；"
+              "可加 --max-attempts 调大重试次数）", file=sys.stderr)
+        return 1
+    if r["written"]:
+        print(f"[chain-generate] 草稿已写: {r['path']}（{len(r['doc'])} 字）")
+        print("[chain-generate] 下一步：chain-publish --id %s --apply"
+              "（进知识正本）" % args.id_, file=sys.stderr)
+    else:
+        print("[chain-generate] 两道门通过（--no-write：没落盘）")
+    if getattr(args, "print_doc", False):
+        print(r["doc"])
+    if getattr(args, "json", None):
+        _emit_json(args.json, "chain-generate/1",
+                   {k: v for k, v in r.items() if k != "doc"},
+                   dbp=Path(args.db))
+    return 0
+
+
 def cmd_artifacts(args) -> int:
     """产物提取（T0-②，v0.22）：独立 meta 库 artifacts_meta.db。
 
@@ -3411,6 +3488,34 @@ def build_parser() -> argparse.ArgumentParser:
                      help="允许 chain-audit 未过仍发布（只降级为警告；"
                           "引文逐字门不合格时慎用）")
     pcp.set_defaults(func=cmd_chain_publish)
+
+    pcg = sub.add_parser(
+        "chain-generate",
+        help="链自动生成（v0.83）：本机模型按创作包代笔，chain-validate + "
+             "chain-audit 全过才落草稿位；不过自动回喂重试。不需要 Agent")
+    pcg.add_argument("--id", dest="id_", required=True, help="主题 id")
+    pcg.add_argument("--meta", default="topics_meta.db",
+                     help="主题 meta 库路径（默认 topics_meta.db）")
+    pcg.add_argument("--db", default="harvester.db",
+                     help="索引库路径（只读，出包与锚点回溯）")
+    pcg.add_argument("--out", default=None,
+                     help="草稿输出路径（缺省 exports/chains/<id>.md——"
+                          "与 chain-publish 的草稿位一致）")
+    pcg.add_argument("--max-chars", dest="max_chars", type=int, default=None,
+                     help="创作包字符预算（默认生成器默认值）")
+    pcg.add_argument("--max-attempts", dest="max_attempts", type=int, default=1,
+                     help="最多调用模型几次（每次约 1–3 分钟。默认 1：实测第 2 次"
+                          "重试反而更差——模型会顺手重写全文并引入新错；"
+                          "确实想再试一次再传 2）")
+    pcg.add_argument("--model", default=None,
+                     help="覆盖优先级最高后端的模型名（兜底后端不变）")
+    pcg.add_argument("--no-write", dest="no_write", action="store_true",
+                     help="只生成不落盘（配合 --print / --json 看结果）")
+    pcg.add_argument("--print", dest="print_doc", action="store_true",
+                     help="把生成的全文打到 stdout")
+    pcg.add_argument("--json", metavar="PATH", default=None,
+                     help="机读出口（chain-generate/1，不含全文）")
+    pcg.set_defaults(func=cmd_chain_generate)
 
     par = sub.add_parser(
         "artifacts",

@@ -18,8 +18,8 @@
   中的 `python` 指代"你的解释器"。
 - **`topic chain` / `chain-validate` 需要 PyYAML**（T3，唯一硬依赖）。设计上
   **不提供降级解析**：块结构静默误读比直接报错危险。缺它时这两条命令与
-  **88 条模块级报错**（依赖它的测试模块每模块计 1 条 error，数由门禁
-  `errors=88` 实测钉住）会明确报错——**这是预期行为，不是安装坏了**。
+  **96 条模块级报错**（依赖它的测试模块每模块计 1 条 error，数由门禁
+  `errors=96` 实测钉住）会明确报错——**这是预期行为，不是安装坏了**。
   （`cards validate` 不同：它有降级解析器，无 PyYAML 也可用。）
   ⚠️ **`attrib` 同样需要 PyYAML**（规则表是 YAML，同为 fail-loud 不降级），
   但它是**归因层叠加**，不是 `report-errors` 的前置——缺 PyYAML 只影响 `attrib`。
@@ -49,10 +49,10 @@ $venv = "C:\Users\*\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 # 沙箱会话还要这一行（见下「沙箱环境适配」）；普通机器上不需要
 $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
-# ① 权威基线：全套件。期望 Ran 1132 tests ... OK
+# ① 权威基线：全套件。期望 Ran 1161 tests ... OK
 & $venv -X utf8 -W ignore::ResourceWarning -m unittest discover -s tests
 
-# ② 无 PyYAML 门禁：期望 GATE ran=1060 failures=0 errors=96 skipped=44
+# ② 无 PyYAML 门禁：期望 GATE ran=1089 failures=0 errors=96 skipped=55
 & $venv -X utf8 scripts\gate_no_yaml.py
 
 # ③ 死代码扫描两根：期望 harvester/ 与 tests/ 均 0/0/0（exit=0）
@@ -61,14 +61,14 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 
 | 门 | 期望 | 判据（什么时候算失败） |
 |---|---|---|
-| ① 全套件（venv 有 PyYAML） | **Ran 1132 tests / OK** | 出现任何 `FAILED` 即失败 |
-| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1060 failures=0 errors=96 skipped=44** | **只看 `failures=0`**；`96 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=44` 见下 |
+| ① 全套件（venv 有 PyYAML） | **Ran 1161 tests / OK** | 出现任何 `FAILED` 即失败 |
+| ② 无 PyYAML 门禁（门禁 = 不装 PyYAML 也必须能跑的一套测试，当最低及格线用） | **ran=1089 failures=0 errors=96 skipped=55** | **只看 `failures=0`**；`96 errors` 是 H9 的**设计行为**（依赖 PyYAML 的模块在导入期或 setUpClass 显式失败，不降级、不静默跳过），`skipped=55` 见下 |
 | ③ 死代码扫描 | **0 未用 import / 0 未被引用函数 / 0 未被引用常量**（两个根都要） | 任一根出现发现即失败（并发编辑期读到半写状态时 CLI 回 **3=不可信、请重跑**，见 `unstable_findings`） |
 
-**为什么 `ran` 会不一样（1132 vs 1060）**：无 PyYAML 时，依赖它的模块**在导入期整体
+**为什么 `ran` 会不一样（1161 vs 1089）**：无 PyYAML 时，依赖它的模块**在导入期整体
 失败**，该模块里的所有用例都不计入 `ran`、只计 1 条 error——这是有意的，好让
 "环境缺依赖"永远长成 error 而**永远不长成 failure**（写在断言里就没人分得清）。
-另有 `skipped=44`（v0.82 起；逐组可对）：
+另有 `skipped=55`（v0.83 起；逐组可对）：
 - `skipped=2` 是 `test_v48_test_baseline.py` 的**两条实测用例**（递归回自己，
   子进程里用 `HARVESTER_BASELINE_NESTED` 转 skip；`scripts/gate_no_yaml.py`
   自己设这一位，所以门禁绝不会跑门禁）；
@@ -89,6 +89,10 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
   与**发布两道门**里，凡是要真解析 chain 的（`chain-validate` 的结构门、
   `chain-audit` 的引文门）都不降级（H9），无 PyYAML 时按不适用跳过；
   同一文件里出包、预算报数、逐字节复制等 7 条照常真跑；
+- `skipped=11` 是 v0.83 新增的 `test_v83_chaingen`：自动写链的**客观字段对齐**
+  与**整条生成流水线**都要真解析 chain（结构门、引文逐字门），H9 不降级，
+  无 PyYAML 时整组跳过；同一文件里剥代码围栏、可引用原句库、标点改判、
+  失败回喂、后端选择等 18 条纯逻辑用例照常真跑；
 - 其余 10 条是 v0.78–v0.79 之后各文件的 `_NEED_REAL` 组（未逐一点名，判据同 H9）。
 **`skipped` 不等于通过**：被跳过的这几组正是"实测↔README 对账"与"面↔判据对账"，
 它们只在**顶层**那一次运行（有 PyYAML + 有真库）里真正执行。
@@ -96,7 +100,7 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 **这些数字由测试钉住**：`tests/test_v48_test_baseline.py` 会**真跑**上面 ①② 并
 逐数字与本节比对（改了测试却忘了改这里 → 它红）。所以"基线是多少"**只有本节算数**，
 `--help` 或脚本 docstring 里的旧数字都不算。
-**注意自指**：该文件自己也会被计入 ① 的 1132，所以它断言的是"含我自己的总数"
+**注意自指**：该文件自己也会被计入 ① 的 1161，所以它断言的是"含我自己的总数"
 ——加测试时先跑一次 ① 拿到新数，再改本节（这正是一条正常的回归钉子）。
 **同理 `skipped` 也会漂**：v0.79 给 `attrib` 加了 `_HAS_YAML` 探针并让
 「API 归因 ok 态」用例 `skipUnless`，于是门禁 `skipped` 从 5 变 6；P6-6 的
@@ -104,7 +108,10 @@ $env:PYTHONPATH = "<repo>\scripts\sandbox"
 6 → 14；P6-7 的 `test_v68_reviewable` 再加 7 条，14 → **21**；
 P10 把 `evidence-pack` 并进 `llm-pack`，该文件重写成 11 条、`_NEED_REAL` 从 8 降到 4，
 于是 43 → **39**；v0.82 的 `test_v82_chainbuild` 加了 5 条要真解析 chain 的发布用例，
-39 → **44**（**删用例同样要回来改这里**，不是只有加才要改）
+39 → **44**；v0.83 的 `test_v83_chaingen` 再加 11 条（客观字段对齐 5 + 生成流水线 6，
+两处都要真解析 chain），44 → **55**（`ran` 同时 1060 → **1089**：这些用例在无 PyYAML 时
+是 skip、仍计入 `ran`，所以 `ran` 涨的正是新增总数 29 条）
+（**删用例同样要回来改这里**，不是只有加才要改）
 ——**新增需要 PyYAML 的用例时，正确做法是 skip（不是让它断言失败）**：
 门禁的唯一硬判据是 `failures=0`，写成断言失败会直接把门禁弄红。
 
@@ -327,6 +334,8 @@ python -m harvester chain-audit "C:/.../chain-长文.md" --db harvester.db --quo
 python -m harvester chain-build --id <tp-id> --out exports/chains/<tp-id>.md   # 出「链创作包」（素材+格式契约，给 Agent 写链用；不代笔、不落正本）
 python -m harvester chain-publish --id <tp-id>                # 预演：草稿位 exports/chains/<tp-id>.md 过两道门，报会落到哪
 python -m harvester chain-publish --id <tp-id> --apply        # 真发布：校验全过才搬进 knowledge/topics/（逐字节，不二次加工）
+python -m harvester chain-generate --id <tp-id>               # 自动写链（v0.83）：本机模型按包代笔，两道门全过才落草稿位（不用 Agent）
+python -m harvester chain-generate --id <tp-id> --no-write --print   # 只看不进盘：打全文到 stdout，不写草稿位
 ```
 
 ### 4.0 链创作包与链发布（v0.82，2026-10-24 用户裁决）
@@ -352,7 +361,51 @@ python -m harvester chain-publish --id <tp-id> --apply  # 过了才写 knowledge
 落盘是**逐字节复制**草稿，不做二次加工。VIEW 侧对应 A 档动作 `chain_build`
 （一键出包，返回文本不落盘）与 B 档动作 `chain_publish`（两段提交 + 台账）。
 
-### 4.1 chain 内容审计（写完 chain 必跑）
+### 4.1 自动写链（v0.83，2026-10-26 用户裁决）
+
+v0.82 把链的写作交给 Agent：每条链都要读 1.9 万字包、写 5 千字、来回核对引文。
+16 个主题就是 16 次这样的开销。用户 2026-10-26 的原话是「主题链的生成，应该在
+主题 tab 提供命令按钮，执行即可。不能老是在 WorkBuddy 中耗费 token 干这活」。
+
+所以加了一条**不需要 Agent** 的命令：
+
+```
+python -m harvester chain-generate --id <tp-id>                      # 写草稿位 exports/chains/<tp-id>.md
+python -m harvester chain-generate --id <tp-id> --no-write --print   # 只出文本不落盘
+python -m harvester chain-publish --id <tp-id> --apply               # 过了两道门再进知识正本
+```
+
+流程：`chain-build` 出包 → 本机模型（OpenAI 兼容接口）按包写 → 同样过
+`chain-validate` + `chain-audit` → 全过才写草稿位；不过就把门禁报错**回喂重试**
+（`--max-attempts`，默认 1——实测第 2 次重试反而更差，模型会顺手重写全文并引入新错）。
+
+三条设计纪律：
+
+- **事实必须来自包**：`members` 逐字等于包里的清单，锚点 sid/turn 只能从包里挑，
+  正文 `「」` 只能逐字复制提示词里给的「可引用原句库」。首版让模型自己从 1.9 万字里
+  找原句，两次都栽在引文门（它把 `「」` 当强调符号，写「把评审做成数据」这种自己的
+  概括）；给了现成清单 + 「找不到就一处都别引」之后一次通过（28/28 逐字命中）。
+- **门不放松**：不管谁写（人 / Agent / 模型），进的都是同一道门。不过门就不写草稿位，
+  最后一版留在 `<草稿位>.pending.md`（文件名即「未过门」），`chain-publish` 不认它。
+- **不可复现要明示**：同库同参数跑两次文本不同（temperature=0 也不保证），所以
+  frontmatter 记 `model`，与手写链区分得开；`chain-build` 的确定性契约**不适用于**
+  这条命令。
+
+模型接入：默认两级 failover——硅基流动（`KNOWATLAS_LLM_API_KEY_SF1`）→ DeepSeek
+官方（`KNOWATLAS_LLM_API_KEY`），书写顺序即优先级。换供应商设 `HARVESTER_LLM_BACKENDS`
+（JSON 数组，字段 `base_url` / `model` / `api_key_env`），不改代码；新机只要这三样
+就能跑。key 只从环境变量读，永不入参、入日志、入库；错误信息只带 key 指纹。
+
+**费用**：走使用者自己的 key，不经 WorkBuddy。一次生成约 1.5–3 万 token
+（实测：39 成员主题 prompt 15k + 输出 14k、约 3 分钟；43 成员主题 8k + 10k、约 2 分钟）。
+
+顺带修了锚点语义门的一处判据缺陷：note 抄**英文**原词（CLI 输出、库名版本号）时，
+汉字 2-gram 判据全落空，原来会把这类节点全判成「疑似错配」。现在补英文词命中
+（≥4 字符 + 停用词表，避免 the/for 这类常见词让门失效），并用 `unjudgeable` 标出
+「原文既无汉字也无英文词」的极端情况——**判不了要认账，不能装成通过**。
+实测某主题 3 条错配全是此因，修后归零，既有 20 例锚点门测试全过。
+
+### 4.2 chain 内容审计（写完 chain 必跑）
 
 `chain-validate` 只管**结构**（sid 在成员内、turn 是否越界），**管不了引文真伪，
 也管不了"这个 turn 是否真说了这句 note"，更不管"有多少成员根本没被引到"**。
