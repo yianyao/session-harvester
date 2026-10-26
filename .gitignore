@@ -60,3 +60,11 @@ uv.lock
 # 代理记忆的本地覆盖层（本机专属，不入库；仓库级 AGENTS.md 要提交）
 AGENTS.local.md
 CLAUDE.local.md
+
+# 待审卡片工作区（草稿；cards validate 过、人终审后才进 knowledge/cards/）
+# 2026-10-26 用户令：它一直挂在 git status 里，容易误提交
+cards_pending/
+
+# 覆盖前自动备份（`<原文件>.bak-<时间戳>`，可再生，不入库）
+*.bak-*
+
